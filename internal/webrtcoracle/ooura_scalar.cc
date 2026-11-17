@@ -1,3 +1,5 @@
+//go:build webrtc_oracle
+
 // Scalar (non-NEON) reference build of ooura_fft.cc, renamed to avoid
 // clashing with the NEON build linked from libwebrtc.a.
 #pragma clang fp contract(off)

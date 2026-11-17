@@ -42,10 +42,14 @@ write changelog narrative.
   contraction off and NEON `vmlaq_f32` is unfused, so wrap every product that
   feeds an add/sub in `float32(...)`: `float32(a*b) + float32(c*d)`. Use a real
   FMA only where the C++ calls `vfmaq_f32`/`_mm256_fmadd_ps`.
-- Transcendentals (`expf`, `logf`, `powf`, `log10f`, `sqrtf`): `sqrtf` is
-  exact via `float32(math.Sqrt(float64(x)))`. For the others call the helpers
-  in `internal/aec3/cmath.go`, which reproduce Apple libm float results; add
-  coverage there rather than calling `math.Exp` ad hoc.
+- Transcendentals: `sqrtf` is exact via `float32(math.Sqrt(float64(x)))`.
+  AEC3's signal path only reaches libm through `exp2f` (from
+  `std::pow(2.0f, x)`) and `__exp10f` (from `powf(10.f, x)`); use
+  `Exp2f`/`Exp10f` in `internal/aec3/cmath.go`. The oracle binary interposes
+  those same Go functions for the libm symbols, because host libm float
+  results are not correctly rounded and differ between Apple libm and glibc.
+  Any new libm call needs the same treatment: add a helper there and an
+  interposer in `internal/webrtcoracle/libm.go`.
 
 ## Naming
 
