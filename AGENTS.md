@@ -29,7 +29,31 @@ write changelog narrative.
 - Default build: reproduces the SIMD path libwebrtc selects on that
   architecture (NEON on arm64, SSE2/AVX2 on amd64). SIMD variants in WebRTC
   reorder reductions, so the Go code for each lane follows that lane's
-  operation order exactly; Go assembly implements the hot kernels.
+  operation order exactly.
+
+## SIMD: GOEXPERIMENT=simd
+
+- Toolchain: Go 1.27.4 (latest 1.27.x). Kernels are written in Go with
+  `simd/archsimd`, which exists only when building with `GOEXPERIMENT=simd`
+  and covers both arm64 (NEON) and amd64 (SSE/AVX/AVX2/AVX-512) in Go 1.27.
+- Kernel file pattern:
+  - `foo_simd.go`: `//go:build goexperiment.simd && (arm64 || amd64) && !purego`
+    (split into `foo_simd_arm64.go` / `foo_simd_amd64.go` when the lane order
+    differs per arch, which it does for NEON vs SSE2/AVX2 kernels).
+  - `foo_nosimd.go`: `//go:build !goexperiment.simd || purego || !(arm64 || amd64)`
+    — routes to the pure-Go lane references.
+- Every lane also has a pure-Go reference (`fooNeonRef`, `fooSse2Ref`, ...).
+  It is the spec, the fallback when the experiment is off, and the oracle that
+  the archsimd kernel is tested against bit-exactly. A build without
+  `GOEXPERIMENT=simd` is still bit-exact; only slower.
+- archsimd semantics: `a.Mul(b).Add(c)` compiles to separate multiply and add
+  (unfused, like `vmlaq_f32`/`_mm_mul_ps`+`_mm_add_ps`); `a.MulAdd(b, c)` is a
+  real FMA (like `vfmaq_f32`/`_mm256_fmadd_ps`). Use each exactly where the C++
+  does.
+- Hand-written Go assembly is the exception: only for a kernel that archsimd
+  cannot express (missing shuffle, etc.), with a comment naming the missing
+  operation. Gate x86 paths with `archsimd.X86.AVX2()` etc.
+
 - C++ classes that take an `Aec3Optimization` argument keep it in Go so tests
   can drive both lanes against the oracle in one binary.
 
@@ -69,10 +93,14 @@ Steady-state processing is allocation-free. Lock new hot paths with a
 
 ## Build and test
 
-- `go test ./...` — pure Go tests (default lane).
+- Use Go 1.27.4 (`$HOME/sdk/go1.27.4/bin/go`, or `go1.27.4`).
+- `GOEXPERIMENT=simd go test ./...` — default lane with archsimd kernels.
+- `go test ./...` — default lane, pure-Go lane references (no experiment).
 - `go test -tags purego ./...` — scalar lane.
-- `go test -tags webrtc_oracle ./internal/webrtcoracle/` — parity against
-  libwebrtc (darwin/arm64 only; needs `tmp_check/`).
+- `GOARCH=amd64 GOEXPERIMENT=simd go test ./...` — amd64 lane (Rosetta;
+  AVX2 available).
+- `GOEXPERIMENT=simd go test -tags webrtc_oracle ./internal/webrtcoracle/` —
+  parity against libwebrtc (darwin/arm64 only; needs `tmp_check/`).
 
 ## Layout
 

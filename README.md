@@ -3,8 +3,9 @@
 Pure-Go acoustic echo canceller: a port of WebRTC's AEC3, aiming for bit-exact
 output against the pinned libwebrtc m141, with no cgo.
 
-goaec3 is a plain-Go AEC3. Its hot paths use SIMD assembly (NEON on arm64,
-SSE2/AVX2 on amd64) and run without allocating once warmed up. Each lane
+goaec3 is a plain-Go AEC3. Its hot paths use Go's `simd/archsimd`
+(`GOEXPERIMENT=simd`: NEON on arm64, SSE2/AVX2 on amd64) and run without
+allocating once warmed up. Each lane
 reproduces the floating-point operation order of the libwebrtc code path it
 mirrors, and a live C++ oracle proves the match (see
 [Parity & testing](#parity--testing)).
@@ -19,7 +20,8 @@ mirrors, and a live C++ oracle proves the match (see
 go get github.com/GetStream/goaec3
 ```
 
-Requires Go 1.25 or newer.
+Requires Go 1.27.4 or newer. Build with `GOEXPERIMENT=simd` to enable the SIMD
+kernels; without it goaec3 runs the same lanes in pure Go, bit-exact but slower.
 
 ## Quick start
 
@@ -39,7 +41,7 @@ func (e *EchoCanceller) ProcessCapture(capture [][]float32) error
 | Sample rates | 16, 32, 48 kHz (band splitting included) |
 | Channels | Multichannel render and capture |
 | Configuration | Full `EchoCanceller3Config`, defaults and `Validate` matching C++ |
-| SIMD | arm64 NEON, amd64 SSE2/AVX2; `purego` scalar fallback |
+| SIMD | `simd/archsimd` (`GOEXPERIMENT=simd`): arm64 NEON, amd64 SSE2/AVX2; `purego` scalar fallback |
 | Allocation | Zero allocations in steady-state processing |
 
 ## Public API
@@ -70,9 +72,9 @@ libwebrtc through cgo.
   algorithm rather than the host libm.
 
 ```sh
-go test ./...                                              # default (SIMD) lane
+GOEXPERIMENT=simd go test ./...                            # default lane, SIMD kernels
 go test -tags purego ./...                                 # scalar lane
-go test -tags webrtc_oracle ./internal/webrtcoracle/       # C++ parity (darwin/arm64)
+GOEXPERIMENT=simd go test -tags webrtc_oracle ./internal/webrtcoracle/   # C++ parity (darwin/arm64)
 go test -tags 'webrtc_oracle purego' ./internal/webrtcoracle/
 ```
 
