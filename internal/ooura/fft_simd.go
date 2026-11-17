@@ -90,37 +90,38 @@ func inverseFftSimd(a *[128]float32) {
 	cftbsubTailSimd(a)
 }
 
-// bitrv2Swaps lists the complex-pair swaps of bitrv2_128 (indices in units
-// of two floats).
-var bitrv2Swaps = func() (s [28][2]uint8) {
-	n := 0
-	add := func(j1, k1 int) { s[n] = [2]uint8{uint8(j1 / 2), uint8(k1 / 2)}; n++ }
-	for k := 0; k < 4; k++ {
-		for j := 0; j < k; j++ {
-			j1 := 2*j + bitrvIP[k]
-			k1 := 2*k + bitrvIP[j]
-			add(j1, k1)
-			j1 += 8
-			k1 += 16
-			add(j1, k1)
-			j1 += 8
-			k1 -= 8
-			add(j1, k1)
-			j1 += 8
-			k1 += 16
-			add(j1, k1)
-		}
-		j1 := 2*k + 8 + bitrvIP[k]
-		add(j1, j1+8)
-	}
-	return
-}()
-
+// bitrv2Simd is bitrv2_128 unrolled: the same 28 swaps of complex pairs,
+// moved as 64-bit words (indices in units of two floats).
 func bitrv2Simd(a *[128]float32) {
 	u := (*[64]uint64)(unsafe.Pointer(a))
-	for _, s := range &bitrv2Swaps {
-		u[s[0]], u[s[1]] = u[s[1]], u[s[0]]
-	}
+	u[4], u[8] = u[8], u[4]
+	u[32], u[1] = u[1], u[32]
+	u[36], u[9] = u[9], u[36]
+	u[40], u[5] = u[5], u[40]
+	u[44], u[13] = u[13], u[44]
+	u[37], u[41] = u[41], u[37]
+	u[16], u[2] = u[2], u[16]
+	u[20], u[10] = u[10], u[20]
+	u[24], u[6] = u[6], u[24]
+	u[28], u[14] = u[14], u[28]
+	u[17], u[34] = u[34], u[17]
+	u[21], u[42] = u[42], u[21]
+	u[25], u[38] = u[38], u[25]
+	u[29], u[46] = u[46], u[29]
+	u[22], u[26] = u[26], u[22]
+	u[48], u[3] = u[3], u[48]
+	u[52], u[11] = u[11], u[52]
+	u[56], u[7] = u[7], u[56]
+	u[60], u[15] = u[15], u[60]
+	u[49], u[35] = u[35], u[49]
+	u[53], u[43] = u[43], u[53]
+	u[57], u[39] = u[39], u[57]
+	u[61], u[47] = u[47], u[61]
+	u[50], u[19] = u[19], u[50]
+	u[54], u[27] = u[27], u[54]
+	u[58], u[23] = u[23], u[58]
+	u[62], u[31] = u[31], u[62]
+	u[55], u[59] = u[59], u[55]
 }
 
 func cft1stSimd(a *[128]float32) {
