@@ -19,9 +19,11 @@ func (f *FftData) Clear() {
 	f.Im = [FftLengthBy2Plus1]float32{}
 }
 
-// Spectrum computes re^2+im^2 per bin. The SSE2/AVX2 variants compute the
-// same per-lane products and sums, so every lane is bit-identical; the
-// optimization argument only picks the kernel.
+// Spectrum computes re^2+im^2 per bin. The scalar, SSE2 and NEON lanes round
+// each product separately and agree bitwise; the AVX2 lane
+// (FftData::SpectrumAVX2) fuses im*im+re^2 with _mm256_fmadd_ps and differs.
+// libwebrtc compiles the AVX2 case only on x86, so OptAvx2 is honored on amd64
+// only.
 func (f *FftData) Spectrum(opt Aec3Optimization, powerSpectrum []float32) {
 	_ = powerSpectrum[FftLengthBy2]
 	fftDataSpectrum(opt, &f.Re, &f.Im, (*[FftLengthBy2Plus1]float32)(powerSpectrum))

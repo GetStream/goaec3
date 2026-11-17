@@ -1,7 +1,5 @@
 package aec3
 
-import "math"
-
 // VectorMath mirrors aec3::VectorMath. Every lane (scalar, SSE2, AVX2, NEON
 // on arm64) computes the same correctly rounded per-element results, so the
 // optimization value only selects the kernel.
@@ -12,11 +10,7 @@ type VectorMath struct {
 func NewVectorMath(opt Aec3Optimization) VectorMath { return VectorMath{optimization: opt} }
 
 // Sqrt replaces each element with its square root.
-func (v VectorMath) Sqrt(x []float32) {
-	for i, a := range x {
-		x[i] = float32(math.Sqrt(float64(a)))
-	}
-}
+func (v VectorMath) Sqrt(x []float32) { kernVectorSqrt(x) }
 
 // Multiply sets z = x*y element-wise.
 func (v VectorMath) Multiply(x, y, z []float32) {

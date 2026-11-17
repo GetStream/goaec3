@@ -101,6 +101,11 @@ Steady-state processing is allocation-free. Lock new hot paths with a
   AVX2 available).
 - `GOEXPERIMENT=simd go test -tags webrtc_oracle ./internal/webrtcoracle/` —
   parity against libwebrtc (darwin/arm64 only; needs `tmp_check/`).
+- x86 SSE2/AVX2 lanes: `CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch x86_64"
+  CXX="clang++ -arch x86_64" GOEXPERIMENT=simd go test -tags ooura_sse2_oracle
+  ./internal/webrtcoracle/` builds the x86 C++ kernels from source and runs
+  under Rosetta (AVX2 yes, FMA no; `GOAEC3_FORCE_FMA=1` forces the FMA kernel
+  tests).
 
 ## Layout
 
