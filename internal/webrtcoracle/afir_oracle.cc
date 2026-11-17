@@ -1,8 +1,5 @@
 //go:build webrtc_oracle
 
-#ifndef WEBRTC_APM_DEBUG_DUMP
-#define WEBRTC_APM_DEBUG_DUMP 0
-#endif
 #include "afir_oracle.h"
 
 #include <optional>

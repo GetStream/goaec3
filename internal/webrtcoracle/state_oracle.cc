@@ -2,7 +2,6 @@
 
 #pragma clang fp contract(off)
 #pragma clang diagnostic ignored "-Wnullability-completeness"
-#define WEBRTC_APM_DEBUG_DUMP 0
 
 #include "state_oracle.h"
 

@@ -7,9 +7,6 @@
 // variants (WEBRTC_HAS_NEON stays defined). Symbols are renamed so they do
 // not clash with libwebrtc.a.
 #pragma clang fp contract(off)
-#ifndef WEBRTC_APM_DEBUG_DUMP
-#define WEBRTC_APM_DEBUG_DUMP 0
-#endif
 
 #include <algorithm>
 #include <array>

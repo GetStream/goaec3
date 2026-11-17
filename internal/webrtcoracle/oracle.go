@@ -5,7 +5,7 @@
 package webrtcoracle
 
 /*
-#cgo CXXFLAGS: -std=c++20 -DWEBRTC_POSIX -DWEBRTC_MAC -DWEBRTC_HAS_NEON -I${SRCDIR}/../../tmp_check/libwebrtc/include -I${SRCDIR}/../../tmp_check/libwebrtc/include/third_party/abseil-cpp
+#cgo CXXFLAGS: -std=c++20 -DWEBRTC_APM_DEBUG_DUMP=0 -DWEBRTC_POSIX -DWEBRTC_MAC -DWEBRTC_HAS_NEON -I${SRCDIR}/../../tmp_check/libwebrtc/include -I${SRCDIR}/../../tmp_check/libwebrtc/include/third_party/abseil-cpp
 // libwebrtc's GN build defines WEBRTC_ARCH_ARM64 (rtc_base/system/arch.h does
 // not); without it NEON header code such as VectorMath::Sqrt compiles a
 // different path than libwebrtc.a.
