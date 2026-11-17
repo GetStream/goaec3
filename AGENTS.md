@@ -50,9 +50,11 @@ write changelog narrative.
   (unfused, like `vmlaq_f32`/`_mm_mul_ps`+`_mm_add_ps`); `a.MulAdd(b, c)` is a
   real FMA (like `vfmaq_f32`/`_mm256_fmadd_ps`). Use each exactly where the C++
   does.
-- Hand-written Go assembly is the exception: only for a kernel that archsimd
-  cannot express (missing shuffle, etc.), with a comment naming the missing
-  operation. Gate x86 paths with `archsimd.X86.AVX2()` etc.
+- No hand-written assembly. Kernels are archsimd; a kernel archsimd cannot
+  express stays pure Go. Gate x86 kernels with `archsimd.X86.AVX2()` etc.
+- CPU detection (`DetectOptimization`): `archsimd.X86` under
+  `GOEXPERIMENT=simd`, `golang.org/x/sys/cpu` without it (the lane order still
+  depends on AVX2 even when the lane runs as pure Go). arm64 is always NEON.
 
 - C++ classes that take an `Aec3Optimization` argument keep it in Go so tests
   can drive both lanes against the oracle in one binary.
@@ -111,6 +113,5 @@ Steady-state processing is allocation-free. Lock new hot paths with a
 
 - `internal/aec3` — the AEC3 core (one package, like the C++ directory).
 - `internal/ooura` — 128-point Ooura real FFT (scalar + NEON/SSE2 lanes).
-- `internal/cpufeat` — CPU feature detection (copied from gopus).
 - `internal/webrtcoracle` — cgo oracle harness (tag `webrtc_oracle`).
 - root package `goaec3` — public API.

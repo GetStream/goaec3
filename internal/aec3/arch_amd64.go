@@ -2,4 +2,7 @@
 
 package aec3
 
-const isAMD64 = true
+const (
+	isAMD64 = true
+	isARM64 = false
+)

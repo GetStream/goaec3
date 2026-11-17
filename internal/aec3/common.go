@@ -12,7 +12,6 @@ package aec3
 import (
 	"math"
 
-	"github.com/GetStream/goaec3/internal/cpufeat"
 )
 
 // Aec3Optimization selects the kernel family, as in aec3_common.h.
@@ -64,19 +63,18 @@ func GetRenderDelayBufferSize(downSamplingFactor, numMatchedFilters, filterLengt
 		filterLengthBlocks + 1
 }
 
-// DetectOptimization mirrors aec3_common.cc. The purego build always reports
-// OptNone (the scalar C reference lane).
+// DetectOptimization mirrors aec3_common.cc: AVX2, else SSE2 on amd64; NEON
+// on arm64 (libwebrtc's arm64 build always has NEON); OptNone elsewhere. The
+// purego build always reports OptNone (the scalar C reference lane).
 func DetectOptimization() Aec3Optimization {
-	if purego {
+	switch {
+	case purego:
 		return OptNone
-	}
-	if cpufeat.AMD64.HasAVX2 {
+	case isAMD64 && hasAVX2():
 		return OptAvx2
-	}
-	if isAMD64 {
+	case isAMD64:
 		return OptSse2
-	}
-	if cpufeat.ARM64.HasASIMD {
+	case isARM64:
 		return OptNeon
 	}
 	return OptNone
