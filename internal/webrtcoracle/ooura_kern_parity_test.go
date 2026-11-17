@@ -54,7 +54,7 @@ func TestOouraKernSpectrumBitExact(t *testing.T) {
 		for _, opt := range oouraKernOpts() {
 			var got, want [65]float32
 			d.Spectrum(opt, got[:])
-			KernSpectrum(int(opt), &d.Re, &d.Im, &want)
+			OouraKernSpectrum(int(opt), &d.Re, &d.Im, &want)
 			oouraKernSame(t, "Spectrum", opt, got[:], want[:])
 		}
 	}
@@ -69,13 +69,13 @@ func TestOouraKernVectorMathBitExact(t *testing.T) {
 				vm := aec3.NewVectorMath(opt)
 				got, want := make([]float32, n), make([]float32, n)
 				vm.Multiply(x, y, got)
-				KernMultiply(int(opt), x, y, want)
+				OouraKernMultiply(int(opt), x, y, want)
 				oouraKernSame(t, "Multiply", opt, got, want)
 
 				copy(got, z)
 				copy(want, z)
 				vm.Accumulate(x, got)
-				KernAccumulate(int(opt), x, want)
+				OouraKernAccumulate(int(opt), x, want)
 				oouraKernSame(t, "Accumulate", opt, got, want)
 
 				for i := range got {
@@ -83,7 +83,7 @@ func TestOouraKernVectorMathBitExact(t *testing.T) {
 				}
 				copy(want, got)
 				vm.Sqrt(got)
-				KernSqrt(int(opt), want)
+				OouraKernSqrt(int(opt), want)
 				oouraKernSame(t, "Sqrt", opt, got, want)
 			}
 		}
