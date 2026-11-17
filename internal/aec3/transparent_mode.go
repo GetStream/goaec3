@@ -66,8 +66,8 @@ func (t *TransparentModeHmm) Update(_ int, _, _, anyCoarseFilterConverged, _, ac
 	if anyCoarseFilterConverged {
 		out = 1
 	}
-	probJointNormal := probTransitionNormal * stHmmB[0][out]
-	probJointTransparent := probTransitionTransparent * stHmmB[1][out]
+	probJointNormal := float32(probTransitionNormal * stHmmB[0][out])
+	probJointTransparent := float32(probTransitionTransparent * stHmmB[1][out])
 	t.probTransparentState = probJointTransparent / (probJointNormal + probJointTransparent)
 	if t.probTransparentState > 0.95 {
 		t.transparencyActivated = true

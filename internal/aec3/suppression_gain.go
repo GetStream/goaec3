@@ -46,8 +46,8 @@ func sgLimitHighFrequencyGains(conservativeHfSuppression bool, gain *[FftLengthB
 func sgWeigh(threshold, normalizer float32, begin, end int, echo, weightedEcho *[FftLengthBy2Plus1]float32) {
 	for k := begin; k < end; k++ {
 		if echo[k] < threshold {
-			tmp := (threshold - echo[k]) * normalizer
-			weightedEcho[k] = echo[k] * max(0, 1-float32(tmp*tmp))
+			tmp := float32((threshold - echo[k]) * normalizer)
+			weightedEcho[k] = float32(echo[k] * max(0, 1-float32(tmp*tmp)))
 		} else {
 			weightedEcho[k] = echo[k]
 		}
@@ -58,15 +58,15 @@ func sgWeigh(threshold, normalizer float32, begin, end int, echo, weightedEcho *
 // at the other end.
 func sgWeightEchoForAudibility(config *EchoCanceller3Config, echo, weightedEcho *[FftLengthBy2Plus1]float32) {
 	ea := &config.EchoAudibility
-	threshold := ea.FloorPower * ea.AudibilityThresholdLf
+	threshold := float32(ea.FloorPower * ea.AudibilityThresholdLf)
 	normalizer := 1 / (threshold - ea.FloorPower)
 	sgWeigh(threshold, normalizer, 0, 3, echo, weightedEcho)
 
-	threshold = ea.FloorPower * ea.AudibilityThresholdMf
+	threshold = float32(ea.FloorPower * ea.AudibilityThresholdMf)
 	normalizer = 1 / (threshold - ea.FloorPower)
 	sgWeigh(threshold, normalizer, 3, 7, echo, weightedEcho)
 
-	threshold = ea.FloorPower * ea.AudibilityThresholdHf
+	threshold = float32(ea.FloorPower * ea.AudibilityThresholdHf)
 	normalizer = 1 / (threshold - ea.FloorPower)
 	sgWeigh(threshold, normalizer, 7, FftLengthBy2Plus1, echo, weightedEcho)
 }

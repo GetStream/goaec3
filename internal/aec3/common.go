@@ -82,8 +82,8 @@ func DetectOptimization() Aec3Optimization {
 // FastApproxLog2f reinterprets the float bits as an integer and rescales.
 func FastApproxLog2f(in float32) float32 {
 	out := float32(math.Float32bits(in))
-	out *= 1.1920929e-7 // 1/2^23
-	out -= 126.942695   // Remove bias.
+	out = float32(out * 1.1920929e-7) // 1/2^23
+	out -= 126.942695                 // Remove bias.
 	return out
 }
 

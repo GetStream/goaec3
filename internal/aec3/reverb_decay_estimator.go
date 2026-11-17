@@ -115,7 +115,7 @@ func (e *earlyReverbLengthEstimator) Accumulate(value, smoothing float32) {
 	firstSectionIndex := max(e.blockCounter-stBlocksPerSection+1, 0)
 	lastSectionIndex := min(e.blockCounter, len(e.numerators)-1)
 	xValue := float32(e.coefficientsCounter) + stEarlyReverbFirstPointAtLinearRegressors
-	valueToInc := FftLengthBy2 * value
+	valueToInc := float32(FftLengthBy2 * value)
 	valueToAdd := float32(xValue*value) + float32(float32(e.blockCounter-lastSectionIndex)*valueToInc)
 	for section := lastSectionIndex; section >= firstSectionIndex; section, valueToAdd = section-1, valueToAdd+valueToInc {
 		e.numerators[section] += valueToAdd
@@ -268,8 +268,8 @@ func (r *ReverbDecayEstimator) estimateDecay(h []float32, peakBlock int) {
 	hSizeBlocks := len(h) >> FftLengthBy2Log2
 	r.tailGain = stBlockEnergyAverage(h, hSizeBlocks-1)
 	peakEnergy := stBlockEnergyPeak(h, peakBlock)
-	sufficientReverbDecay := firstReverbGain > 4*r.tailGain
-	validFilter := firstReverbGain > 2*r.tailGain && peakEnergy < 100
+	sufficientReverbDecay := firstReverbGain > float32(4*r.tailGain)
+	validFilter := firstReverbGain > float32(2*r.tailGain) && peakEnergy < 100
 	sizeEarlyReverb := r.earlyReverbEstimator.Estimate()
 	sizeLateReverb := max(r.estimationRegionCandidateSize-sizeEarlyReverb, 0)
 	if sizeLateReverb >= 5 {

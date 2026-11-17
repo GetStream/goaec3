@@ -64,15 +64,16 @@ write changelog narrative.
 - All signal-domain storage and arithmetic is `float32` (C `float`). Use
   `float64` only where the C++ uses `double` (e.g. literals like
   `3.0102999566398121 * x` promote through double).
-- Go may fuse `x*y + z` into an FMA on arm64. libwebrtc is built with
-  contraction off and NEON `vmlaq_f32` is unfused, so wrap every product that
-  feeds an add/sub in `float32(...)`: `float32(a*b) + float32(c*d)`. Use a real
+- Go may fuse `x*y + z` into an FMA on arm64, also across statements. libwebrtc
+  is built with contraction off and NEON `vmlaq_f32` is unfused, so wrap every
+  product that feeds an add/sub in `float32(...)`: `float32(a*b) + float32(c*d)`,
+  including products stored in locals (`a := float32(x * y)` before `1 - a`). Use a real
   FMA only where the C++ calls `vfmaq_f32`/`_mm256_fmadd_ps`.
 - Transcendentals: `sqrtf` is exact via `float32(math.Sqrt(float64(x)))`.
-  AEC3's signal path only reaches libm through `exp2f` (from
-  `std::pow(2.0f, x)`) and `__exp10f` (from `powf(10.f, x)`); use
-  `Exp2f`/`Exp10f` in `internal/aec3/cmath.go`. The oracle binary interposes
-  those same Go functions for the libm symbols, because host libm float
+  AEC3 only reaches libm through `exp2f` (from `std::pow(2.0f, x)`),
+  `__exp10f` (from `powf(10.f, x)`) and `log10f` (metrics); use
+  `Exp2f`/`Exp10f`/`Log10f` in `internal/aec3/cmath.go`. The oracle binary
+  interposes those same Go functions for the libm symbols, because host libm float
   results are not correctly rounded and differ between Apple libm and glibc.
   Any new libm call needs the same treatment: add a helper there and an
   interposer in `internal/webrtcoracle/libm.go`.
