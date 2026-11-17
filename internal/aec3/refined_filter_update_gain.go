@@ -1,0 +1,136 @@
+package aec3
+
+// Port of refined_filter_update_gain.{h,cc}.
+
+const (
+	afirHErrorInitial                float32 = 10000
+	afirPoorExcitationCounterInitial         = 1000
+)
+
+// RefinedFilterUpdateGain computes the NLMS-style gain for the refined filter.
+type RefinedFilterUpdateGain struct {
+	configChangeDurationBlocks      int
+	oneByConfigChangeDurationBlocks float32
+	currentConfig                   RefinedConfiguration
+	targetConfig                    RefinedConfiguration
+	oldTargetConfig                 RefinedConfiguration
+	hError                          [FftLengthBy2Plus1]float32
+	poorExcitationCounter           int
+	callCounter                     int
+	configChangeCounter             int
+}
+
+func NewRefinedFilterUpdateGain(config RefinedConfiguration, configChangeDurationBlocks int) *RefinedFilterUpdateGain {
+	g := &RefinedFilterUpdateGain{
+		configChangeDurationBlocks: configChangeDurationBlocks,
+		poorExcitationCounter:      afirPoorExcitationCounterInitial,
+	}
+	g.SetConfig(config, true)
+	for k := range g.hError {
+		g.hError[k] = afirHErrorInitial
+	}
+	g.oneByConfigChangeDurationBlocks = 1 / float32(g.configChangeDurationBlocks)
+	return g
+}
+
+// HandleEchoPathChange reacts to a known echo path change.
+func (g *RefinedFilterUpdateGain) HandleEchoPathChange(echoPathVariability EchoPathVariability) {
+	if echoPathVariability.DelayChange != DelayAdjustmentNone {
+		for k := range g.hError {
+			g.hError[k] = afirHErrorInitial
+		}
+	}
+	if !echoPathVariability.GainChange {
+		g.poorExcitationCounter = afirPoorExcitationCounterInitial
+		g.callCounter = 0
+	}
+}
+
+// SetConfig sets a new config, immediately or gradually.
+func (g *RefinedFilterUpdateGain) SetConfig(config RefinedConfiguration, immediateEffect bool) {
+	if immediateEffect {
+		g.oldTargetConfig, g.currentConfig, g.targetConfig = config, config, config
+		g.configChangeCounter = 0
+	} else {
+		g.oldTargetConfig = g.currentConfig
+		g.targetConfig = config
+		g.configChangeCounter = g.configChangeDurationBlocks
+	}
+}
+
+// Compute computes the gain gainFft. erl must hold FftLengthBy2Plus1 values.
+func (g *RefinedFilterUpdateGain) Compute(renderPower *[FftLengthBy2Plus1]float32, renderSignalAnalyzer *RenderSignalAnalyzer, subtractorOutput *SubtractorOutput, erl []float32, sizePartitions int, saturatedCaptureSignal, disallowLeakageDiverged bool, gainFft *FftData) {
+	ERefined := &subtractorOutput.ERefinedFft
+	E2Refined := &subtractorOutput.E2Refined
+	E2Coarse := &subtractorOutput.E2Coarse
+	G := gainFft
+	X2 := renderPower
+	erl = erl[:FftLengthBy2Plus1]
+
+	g.callCounter++
+	g.updateCurrentConfig()
+
+	if renderSignalAnalyzer.PoorSignalExcitation() {
+		g.poorExcitationCounter = 0
+	}
+
+	// Do not update the filter if the render is not sufficiently excited.
+	g.poorExcitationCounter++
+	if g.poorExcitationCounter < sizePartitions || saturatedCaptureSignal || g.callCounter <= sizePartitions {
+		G.Re = [FftLengthBy2Plus1]float32{}
+		G.Im = [FftLengthBy2Plus1]float32{}
+	} else {
+		// mu = H_error / (0.5* H_error* X2 + n * E2).
+		var mu [FftLengthBy2Plus1]float32
+		sp := float32(sizePartitions)
+		for k := range mu {
+			if X2[k] >= g.currentConfig.NoiseGate {
+				h := g.hError[k]
+				mu[k] = h / (float32(float32(0.5*h)*X2[k]) + float32(sp*E2Refined[k]))
+			}
+		}
+
+		// Avoid updating the filter close to narrow bands in the render signals.
+		renderSignalAnalyzer.MaskRegionsAroundNarrowBands(&mu)
+
+		// H_error = H_error - 0.5 * mu * X2 * H_error.
+		for k := range g.hError {
+			g.hError[k] -= float32(float32(float32(0.5*mu[k])*X2[k]) * g.hError[k])
+		}
+
+		// G = mu * E.
+		for k := range mu {
+			G.Re[k] = mu[k] * ERefined.Re[k]
+			G.Im[k] = mu[k] * ERefined.Im[k]
+		}
+	}
+
+	// H_error = H_error + factor * erl.
+	for k := range g.hError {
+		if E2Refined[k] <= E2Coarse[k] || disallowLeakageDiverged {
+			g.hError[k] += float32(g.currentConfig.LeakageConverged * erl[k])
+		} else {
+			g.hError[k] += float32(g.currentConfig.LeakageDiverged * erl[k])
+		}
+		g.hError[k] = max(g.hError[k], g.currentConfig.ErrorFloor)
+		g.hError[k] = min(g.hError[k], g.currentConfig.ErrorCeil)
+	}
+}
+
+func (g *RefinedFilterUpdateGain) updateCurrentConfig() {
+	if g.configChangeCounter > 0 {
+		g.configChangeCounter--
+		if g.configChangeCounter > 0 {
+			changeFactor := float32(float32(g.configChangeCounter) * g.oneByConfigChangeDurationBlocks)
+			c, o, t := &g.currentConfig, &g.oldTargetConfig, &g.targetConfig
+			c.LeakageConverged = afirAverage(o.LeakageConverged, t.LeakageConverged, changeFactor)
+			c.LeakageDiverged = afirAverage(o.LeakageDiverged, t.LeakageDiverged, changeFactor)
+			c.ErrorFloor = afirAverage(o.ErrorFloor, t.ErrorFloor, changeFactor)
+			c.ErrorCeil = afirAverage(o.ErrorCeil, t.ErrorCeil, changeFactor)
+			c.NoiseGate = afirAverage(o.NoiseGate, t.NoiseGate, changeFactor)
+		} else {
+			g.currentConfig = g.targetConfig
+			g.oldTargetConfig = g.targetConfig
+		}
+	}
+}

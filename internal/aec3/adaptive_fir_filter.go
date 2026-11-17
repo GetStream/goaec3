@@ -1,0 +1,478 @@
+package aec3
+
+// Port of adaptive_fir_filter.{h,cc}.
+//
+// The aec3:: kernels exist in one scalar and three SIMD lanes. With
+// -ffp-contract=off the NEON (vmlaq/vmlsq = separate multiply and add),
+// SSE2 and AVX2 ApplyFilter/AdaptPartitions variants compute every bin with
+// the same rounded products and the same accumulation order across
+// partitions and channels as the scalar code; they only differ in how the
+// partition loop is split around the ring-buffer wrap and in processing bin
+// kFftLengthBy2 in a second pass. The lane functions below keep that
+// structure; the per-block 64-bin work goes through afirApplyBlock /
+// afirAdaptBlock / afirFreqRespBlock, which the per-arch files back with
+// assembly. ComputeFrequencyResponse_Avx2 is the one lane that differs
+// numerically (it uses _mm256_fmadd_ps).
+
+// ComputeFrequencyResponse is aec3::ComputeFrequencyResponse (scalar).
+func ComputeFrequencyResponse(numPartitions int, H [][]FftData, H2 [][FftLengthBy2Plus1]float32) {
+	for i := range H2 {
+		H2[i] = [FftLengthBy2Plus1]float32{}
+	}
+	numRenderChannels := len(H[0])
+	for p := 0; p < numPartitions; p++ {
+		h2 := &H2[p]
+		for ch := 0; ch < numRenderChannels; ch++ {
+			afirFreqRespBinsGo(&H[p][ch], h2, 0, FftLengthBy2Plus1)
+		}
+	}
+}
+
+// ComputeFrequencyResponseNeon is aec3::ComputeFrequencyResponse_Neon.
+func ComputeFrequencyResponseNeon(numPartitions int, H [][]FftData, H2 [][FftLengthBy2Plus1]float32) {
+	afirComputeFrequencyResponseSimd(OptNeon, numPartitions, H, H2)
+}
+
+// ComputeFrequencyResponseSse2 is aec3::ComputeFrequencyResponse_Sse2.
+func ComputeFrequencyResponseSse2(numPartitions int, H [][]FftData, H2 [][FftLengthBy2Plus1]float32) {
+	afirComputeFrequencyResponseSimd(OptSse2, numPartitions, H, H2)
+}
+
+func afirComputeFrequencyResponseSimd(opt Aec3Optimization, numPartitions int, H [][]FftData, H2 [][FftLengthBy2Plus1]float32) {
+	for i := range H2 {
+		H2[i] = [FftLengthBy2Plus1]float32{}
+	}
+	numRenderChannels := len(H[0])
+	for p := 0; p < numPartitions; p++ {
+		h2 := &H2[p]
+		for ch := 0; ch < numRenderChannels; ch++ {
+			hp := &H[p][ch]
+			afirFreqRespBlock(opt, hp, h2)
+			afirFreqRespBinsGo(hp, h2, FftLengthBy2, FftLengthBy2Plus1)
+		}
+	}
+}
+
+// afirFreqRespBinsGo is the scalar max-accumulation of |H|^2 over [from, to).
+func afirFreqRespBinsGo(h *FftData, h2 *[FftLengthBy2Plus1]float32, from, to int) {
+	for j := from; j < to; j++ {
+		tmp := float32(h.Re[j]*h.Re[j]) + float32(h.Im[j]*h.Im[j])
+		if h2[j] < tmp {
+			h2[j] = tmp
+		}
+	}
+}
+
+// AdaptPartitions is aec3::AdaptPartitions (scalar): H(t+1)=H(t)+G(t)*conj(X(t)).
+func AdaptPartitions(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
+	data := renderBuffer.GetFftBuffer()
+	index := renderBuffer.Position()
+	numRenderChannels := len(data[index])
+	for p := 0; p < numPartitions; p++ {
+		for ch := 0; ch < numRenderChannels; ch++ {
+			afirAdaptBinsGo(&data[index][ch], G, &H[p][ch], 0, FftLengthBy2Plus1)
+		}
+		if index < len(data)-1 {
+			index++
+		} else {
+			index = 0
+		}
+	}
+}
+
+// AdaptPartitionsNeon is aec3::AdaptPartitions_Neon.
+func AdaptPartitionsNeon(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
+	afirAdaptPartitionsSimd(OptNeon, renderBuffer, G, numPartitions, H)
+}
+
+// AdaptPartitionsSse2 is aec3::AdaptPartitions_Sse2.
+func AdaptPartitionsSse2(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
+	afirAdaptPartitionsSimd(OptSse2, renderBuffer, G, numPartitions, H)
+}
+
+func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
+	data := renderBuffer.GetFftBuffer()
+	numRenderChannels := len(data[0])
+	lim1 := min(len(data)-renderBuffer.Position(), numPartitions)
+	lim2 := numPartitions
+
+	xPartition := renderBuffer.Position()
+	limit := lim1
+	p := 0
+	for {
+		for ; p < limit; p, xPartition = p+1, xPartition+1 {
+			for ch := 0; ch < numRenderChannels; ch++ {
+				afirAdaptBlock(opt, &data[xPartition][ch], G, &H[p][ch])
+			}
+		}
+		xPartition = 0
+		limit = lim2
+		if p >= lim2 {
+			break
+		}
+	}
+
+	xPartition = renderBuffer.Position()
+	limit = lim1
+	p = 0
+	for {
+		for ; p < limit; p, xPartition = p+1, xPartition+1 {
+			for ch := 0; ch < numRenderChannels; ch++ {
+				afirAdaptBinsGo(&data[xPartition][ch], G, &H[p][ch], FftLengthBy2, FftLengthBy2Plus1)
+			}
+		}
+		xPartition = 0
+		limit = lim2
+		if p >= lim2 {
+			break
+		}
+	}
+}
+
+// afirAdaptBinsGo is the scalar H += conj(X)*G over bins [from, to).
+func afirAdaptBinsGo(x, g, h *FftData, from, to int) {
+	for k := from; k < to; k++ {
+		h.Re[k] += float32(x.Re[k]*g.Re[k]) + float32(x.Im[k]*g.Im[k])
+		h.Im[k] += float32(x.Re[k]*g.Im[k]) - float32(x.Im[k]*g.Re[k])
+	}
+}
+
+// ApplyFilter is aec3::ApplyFilter (scalar).
+func ApplyFilter(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
+	S.Re = [FftLengthBy2Plus1]float32{}
+	S.Im = [FftLengthBy2Plus1]float32{}
+	data := renderBuffer.GetFftBuffer()
+	index := renderBuffer.Position()
+	numRenderChannels := len(data[index])
+	for p := 0; p < numPartitions; p++ {
+		for ch := 0; ch < numRenderChannels; ch++ {
+			afirApplyBinsGo(&data[index][ch], &H[p][ch], S, 0, FftLengthBy2Plus1)
+		}
+		if index < len(data)-1 {
+			index++
+		} else {
+			index = 0
+		}
+	}
+}
+
+// ApplyFilterNeon is aec3::ApplyFilter_Neon.
+func ApplyFilterNeon(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
+	afirApplyFilterSimd(OptNeon, renderBuffer, numPartitions, H, S)
+}
+
+// ApplyFilterSse2 is aec3::ApplyFilter_Sse2.
+func ApplyFilterSse2(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
+	afirApplyFilterSimd(OptSse2, renderBuffer, numPartitions, H, S)
+}
+
+func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
+	S.Clear()
+	data := renderBuffer.GetFftBuffer()
+	numRenderChannels := len(data[0])
+	lim1 := min(len(data)-renderBuffer.Position(), numPartitions)
+	lim2 := numPartitions
+
+	xPartition := renderBuffer.Position()
+	p := 0
+	limit := lim1
+	for {
+		for ; p < limit; p, xPartition = p+1, xPartition+1 {
+			for ch := 0; ch < numRenderChannels; ch++ {
+				afirApplyBlock(opt, &data[xPartition][ch], &H[p][ch], S)
+			}
+		}
+		limit = lim2
+		xPartition = 0
+		if p >= lim2 {
+			break
+		}
+	}
+
+	xPartition = renderBuffer.Position()
+	p = 0
+	limit = lim1
+	for {
+		for ; p < limit; p, xPartition = p+1, xPartition+1 {
+			for ch := 0; ch < numRenderChannels; ch++ {
+				afirApplyBinsGo(&data[xPartition][ch], &H[p][ch], S, FftLengthBy2, FftLengthBy2Plus1)
+			}
+		}
+		limit = lim2
+		xPartition = 0
+		if p >= lim2 {
+			break
+		}
+	}
+}
+
+// afirApplyBinsGo is the scalar S += X*H over bins [from, to).
+func afirApplyBinsGo(x, h, s *FftData, from, to int) {
+	for k := from; k < to; k++ {
+		s.Re[k] += float32(x.Re[k]*h.Re[k]) - float32(x.Im[k]*h.Im[k])
+		s.Im[k] += float32(x.Re[k]*h.Im[k]) + float32(x.Im[k]*h.Re[k])
+	}
+}
+
+// afirZeroFilter clears the partitions [oldSize, newSize).
+func afirZeroFilter(oldSize, newSize int, H [][]FftData) {
+	for p := oldSize; p < newSize; p++ {
+		for ch := range H[0] {
+			H[p][ch].Clear()
+		}
+	}
+}
+
+// afirMinSizeMinus1 returns std::min(a, n - 1) with size_t semantics
+// (n - 1 wraps to SIZE_MAX for n == 0).
+func afirMinSizeMinus1(a, n int) int {
+	if n == 0 {
+		return a
+	}
+	return min(a, n-1)
+}
+
+// afirNextPartition returns a < n-1 ? a+1 : 0 with size_t semantics.
+func afirNextPartition(a, n int) int {
+	if uint(a) < uint(n)-1 {
+		return a + 1
+	}
+	return 0
+}
+
+// AdaptiveFirFilter is a frequency-domain partitioned adaptive filter.
+type AdaptiveFirFilter struct {
+	fft                           Aec3Fft
+	optimization                  Aec3Optimization
+	numRenderChannels             int
+	maxSizePartitions             int
+	sizeChangeDurationBlocks      int
+	oneBySizeChangeDurationBlocks float32
+	currentSizePartitions         int
+	targetSizePartitions          int
+	oldTargetSizePartitions       int
+	sizeChangeCounter             int
+	H                             [][]FftData
+	partitionToConstrain          int
+}
+
+func NewAdaptiveFirFilter(maxSizePartitions, initialSizePartitions, sizeChangeDurationBlocks, numRenderChannels int, optimization Aec3Optimization) *AdaptiveFirFilter {
+	f := &AdaptiveFirFilter{
+		optimization:             optimization,
+		numRenderChannels:        numRenderChannels,
+		maxSizePartitions:        maxSizePartitions,
+		sizeChangeDurationBlocks: sizeChangeDurationBlocks,
+		currentSizePartitions:    initialSizePartitions,
+		targetSizePartitions:     initialSizePartitions,
+		oldTargetSizePartitions:  initialSizePartitions,
+		H:                        make([][]FftData, maxSizePartitions),
+	}
+	for p := range f.H {
+		f.H[p] = make([]FftData, numRenderChannels)
+	}
+	f.oneBySizeChangeDurationBlocks = 1 / float32(f.sizeChangeDurationBlocks)
+	afirZeroFilter(0, f.maxSizePartitions, f.H)
+	f.SetSizePartitions(f.currentSizePartitions, true)
+	return f
+}
+
+// HandleEchoPathChange clears the partitions beyond the current size.
+func (f *AdaptiveFirFilter) HandleEchoPathChange() {
+	afirZeroFilter(f.currentSizePartitions, f.maxSizePartitions, f.H)
+}
+
+// SizePartitions returns the current filter size.
+func (f *AdaptiveFirFilter) SizePartitions() int { return f.currentSizePartitions }
+
+// MaxFilterSizePartitions returns the maximum filter size.
+func (f *AdaptiveFirFilter) MaxFilterSizePartitions() int { return f.maxSizePartitions }
+
+// GetFilter returns the filter coefficients ([partition][channel]).
+func (f *AdaptiveFirFilter) GetFilter() [][]FftData { return f.H }
+
+// SetSizePartitions sets the target filter size, immediately or gradually.
+func (f *AdaptiveFirFilter) SetSizePartitions(size int, immediateEffect bool) {
+	f.targetSizePartitions = min(f.maxSizePartitions, size)
+	if immediateEffect {
+		oldSizePartitions := f.currentSizePartitions
+		f.currentSizePartitions = f.targetSizePartitions
+		f.oldTargetSizePartitions = f.targetSizePartitions
+		afirZeroFilter(oldSizePartitions, f.currentSizePartitions, f.H)
+		f.partitionToConstrain = afirMinSizeMinus1(f.partitionToConstrain, f.currentSizePartitions)
+		f.sizeChangeCounter = 0
+	} else {
+		f.sizeChangeCounter = f.sizeChangeDurationBlocks
+	}
+}
+
+func afirAverage(from, to, fromWeight float32) float32 {
+	return float32(from*fromWeight) + float32(to*(1-fromWeight))
+}
+
+func (f *AdaptiveFirFilter) updateSize() {
+	oldSizePartitions := f.currentSizePartitions
+	if f.sizeChangeCounter > 0 {
+		f.sizeChangeCounter--
+		changeFactor := float32(float32(f.sizeChangeCounter) * f.oneBySizeChangeDurationBlocks)
+		f.currentSizePartitions = int(afirAverage(float32(f.oldTargetSizePartitions), float32(f.targetSizePartitions), changeFactor))
+		f.partitionToConstrain = afirMinSizeMinus1(f.partitionToConstrain, f.currentSizePartitions)
+	} else {
+		f.currentSizePartitions = f.targetSizePartitions
+		f.oldTargetSizePartitions = f.targetSizePartitions
+	}
+	afirZeroFilter(oldSizePartitions, f.currentSizePartitions, f.H)
+}
+
+// Filter produces the filter output S.
+func (f *AdaptiveFirFilter) Filter(renderBuffer *RenderBuffer, S *FftData) {
+	switch f.optimization {
+	case OptSse2:
+		ApplyFilterSse2(renderBuffer, f.currentSizePartitions, f.H, S)
+	case OptAvx2:
+		ApplyFilterAvx2(renderBuffer, f.currentSizePartitions, f.H, S)
+	case OptNeon:
+		ApplyFilterNeon(renderBuffer, f.currentSizePartitions, f.H, S)
+	default:
+		ApplyFilter(renderBuffer, f.currentSizePartitions, f.H, S)
+	}
+}
+
+// Adapt adapts the filter (C++ Adapt(render_buffer, G)).
+func (f *AdaptiveFirFilter) Adapt(renderBuffer *RenderBuffer, G *FftData) {
+	f.adaptAndUpdateSize(renderBuffer, G)
+	f.constrain()
+}
+
+// AdaptWithImpulseResponse adapts the filter and updates the externally
+// stored impulse response estimate (C++ Adapt(render_buffer, G,
+// impulse_response)). *impulseResponse must have capacity
+// GetTimeDomainLength(MaxFilterSizePartitions()); it is resized like the
+// std::vector (new elements are zero).
+func (f *AdaptiveFirFilter) AdaptWithImpulseResponse(renderBuffer *RenderBuffer, G *FftData, impulseResponse *[]float32) {
+	f.adaptAndUpdateSize(renderBuffer, G)
+	f.constrainAndUpdateImpulseResponse(impulseResponse)
+}
+
+// ComputeFrequencyResponse resizes *H2 to SizePartitions() entries (cap must
+// be at least MaxFilterSizePartitions()) and fills it.
+func (f *AdaptiveFirFilter) ComputeFrequencyResponse(H2 *[][FftLengthBy2Plus1]float32) {
+	afirResize(H2, f.currentSizePartitions)
+	switch f.optimization {
+	case OptSse2:
+		ComputeFrequencyResponseSse2(f.currentSizePartitions, f.H, *H2)
+	case OptAvx2:
+		ComputeFrequencyResponseAvx2(f.currentSizePartitions, f.H, *H2)
+	case OptNeon:
+		ComputeFrequencyResponseNeon(f.currentSizePartitions, f.H, *H2)
+	default:
+		ComputeFrequencyResponse(f.currentSizePartitions, f.H, *H2)
+	}
+}
+
+// afirResize mirrors std::vector::resize: grown elements are zero.
+func afirResize[T any](v *[]T, n int) {
+	old := len(*v)
+	if n > cap(*v) {
+		nv := make([]T, n)
+		copy(nv, *v)
+		*v = nv
+		return
+	}
+	*v = (*v)[:n]
+	if n > old {
+		clear((*v)[old:n])
+	}
+}
+
+func (f *AdaptiveFirFilter) adaptAndUpdateSize(renderBuffer *RenderBuffer, G *FftData) {
+	f.updateSize()
+	switch f.optimization {
+	case OptSse2:
+		AdaptPartitionsSse2(renderBuffer, G, f.currentSizePartitions, f.H)
+	case OptAvx2:
+		AdaptPartitionsAvx2(renderBuffer, G, f.currentSizePartitions, f.H)
+	case OptNeon:
+		AdaptPartitionsNeon(renderBuffer, G, f.currentSizePartitions, f.H)
+	default:
+		AdaptPartitions(renderBuffer, G, f.currentSizePartitions, f.H)
+	}
+}
+
+func (f *AdaptiveFirFilter) constrainAndUpdateImpulseResponse(impulseResponse *[]float32) {
+	afirResize(impulseResponse, GetTimeDomainLength(f.currentSizePartitions))
+	ir := *impulseResponse
+	var h [FftLength]float32
+	base := f.partitionToConstrain * FftLengthBy2
+	clear(ir[base : base+FftLengthBy2])
+
+	for ch := 0; ch < f.numRenderChannels; ch++ {
+		hp := &f.H[f.partitionToConstrain][ch]
+		f.fft.Ifft(hp, &h)
+		const scale = 1.0 / FftLengthBy2
+		for i := 0; i < FftLengthBy2; i++ {
+			h[i] *= scale
+		}
+		clear(h[FftLengthBy2:])
+
+		if ch == 0 {
+			copy(ir[base:base+FftLengthBy2], h[:FftLengthBy2])
+		} else {
+			for k, j := 0, base; k < FftLengthBy2; k, j = k+1, j+1 {
+				if afirAbs(ir[j]) < afirAbs(h[k]) {
+					ir[j] = h[k]
+				}
+			}
+		}
+		f.fft.Fft(&h, hp)
+	}
+	f.partitionToConstrain = afirNextPartition(f.partitionToConstrain, f.currentSizePartitions)
+}
+
+func afirAbs(x float32) float32 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func (f *AdaptiveFirFilter) constrain() {
+	var h [FftLength]float32
+	for ch := 0; ch < f.numRenderChannels; ch++ {
+		hp := &f.H[f.partitionToConstrain][ch]
+		f.fft.Ifft(hp, &h)
+		const scale = 1.0 / FftLengthBy2
+		for i := 0; i < FftLengthBy2; i++ {
+			h[i] *= scale
+		}
+		clear(h[FftLengthBy2:])
+		f.fft.Fft(&h, hp)
+	}
+	f.partitionToConstrain = afirNextPartition(f.partitionToConstrain, f.currentSizePartitions)
+}
+
+// ScaleFilter scales all filter coefficients by factor.
+func (f *AdaptiveFirFilter) ScaleFilter(factor float32) {
+	for p := range f.H {
+		for ch := range f.H[p] {
+			hp := &f.H[p][ch]
+			for i := range hp.Re {
+				hp.Re[i] *= factor
+			}
+			for i := range hp.Im {
+				hp.Im[i] *= factor
+			}
+		}
+	}
+}
+
+// SetFilter copies the first min(SizePartitions(), numPartitions) partitions
+// of H into the filter.
+func (f *AdaptiveFirFilter) SetFilter(numPartitions int, H [][]FftData) {
+	n := min(f.currentSizePartitions, numPartitions)
+	for p := 0; p < n; p++ {
+		for ch := 0; ch < f.numRenderChannels; ch++ {
+			f.H[p][ch].Re = H[p][ch].Re
+			f.H[p][ch].Im = H[p][ch].Im
+		}
+	}
+}
