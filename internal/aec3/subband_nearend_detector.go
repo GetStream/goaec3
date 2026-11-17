@@ -10,52 +10,12 @@ type SubbandNearendDetectionConfig struct {
 	SnrThreshold         float32
 }
 
-// supMovingAverage mirrors aec3::MovingAverage (moving_average.cc).
-type supMovingAverage struct {
-	numElem  int
-	memLen   int
-	scaling  float32
-	memory   []float32
-	memIndex int
-}
-
-func newSupMovingAverage(numElem, memLen int) supMovingAverage {
-	return supMovingAverage{
-		numElem: numElem,
-		memLen:  memLen - 1,
-		scaling: 1 / float32(memLen),
-		memory:  make([]float32, numElem*(memLen-1)),
-	}
-}
-
-func (m *supMovingAverage) Average(input, output []float32) {
-	input = input[:m.numElem]
-	output = output[:m.numElem]
-	// Sum all contributions.
-	copy(output, input)
-	for i := 0; i < len(m.memory); i += m.numElem {
-		mem := m.memory[i : i+m.numElem]
-		for k, v := range mem {
-			output[k] += v
-		}
-	}
-	// Divide by mem_len_.
-	for k := range output {
-		output[k] *= m.scaling
-	}
-	// Update memory.
-	if m.memLen > 0 {
-		copy(m.memory[m.memIndex*m.numElem:], input)
-		m.memIndex = (m.memIndex + 1) % m.memLen
-	}
-}
-
 // SubbandNearendDetector detects nearend activity from the power in two
 // subbands.
 type SubbandNearendDetector struct {
 	config                SubbandNearendDetectionConfig
 	numCaptureChannels    int
-	nearendSmoothers      []supMovingAverage
+	nearendSmoothers      []*MovingAverage
 	oneOverSubbandLength1 float32
 	oneOverSubbandLength2 float32
 	nearendState          bool
@@ -67,12 +27,12 @@ func NewSubbandNearendDetector(config *SubbandNearendDetectionConfig, numCapture
 	d := &SubbandNearendDetector{
 		config:                *config,
 		numCaptureChannels:    numCaptureChannels,
-		nearendSmoothers:      make([]supMovingAverage, numCaptureChannels),
+		nearendSmoothers:      make([]*MovingAverage, numCaptureChannels),
 		oneOverSubbandLength1: 1 / float32(config.Subband1.High-config.Subband1.Low+1),
 		oneOverSubbandLength2: 1 / float32(config.Subband2.High-config.Subband2.Low+1),
 	}
 	for ch := range d.nearendSmoothers {
-		d.nearendSmoothers[ch] = newSupMovingAverage(FftLengthBy2Plus1, config.NearendAverageBlocks)
+		d.nearendSmoothers[ch] = NewMovingAverage(FftLengthBy2Plus1, config.NearendAverageBlocks)
 	}
 	return d
 }
