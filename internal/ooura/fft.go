@@ -8,7 +8,19 @@ package ooura
 
 // Fft computes the forward real FFT of a in place. The output packs
 // a[0]=Re(X0), a[1]=Re(X64), then interleaved Re/Im for bins 1..63.
-func Fft(a *[128]float32) {
+//
+// The lane follows the build like libwebrtc's OouraFft: arm64 runs the NEON
+// butterflies (ooura_fft_neon.cc), amd64 the SSE2 butterflies
+// (ooura_fft_sse2.cc), and purego or any other architecture the scalar C
+// path. Each lane is bit-exact with the matching C++ build.
+func Fft(a *[128]float32) { fft(a) }
+
+// InverseFft computes the unscaled inverse real FFT of a in place, in the
+// same lane as Fft.
+func InverseFft(a *[128]float32) { inverseFft(a) }
+
+// fftScalar is the scalar C path of OouraFft::Fft.
+func fftScalar(a *[128]float32) {
 	bitrv2(a)
 	cftfsub(a)
 	rftfsub(a)
@@ -17,8 +29,8 @@ func Fft(a *[128]float32) {
 	a[1] = xi
 }
 
-// InverseFft computes the unscaled inverse real FFT of a in place.
-func InverseFft(a *[128]float32) {
+// inverseFftScalar is the scalar C path of OouraFft::InverseFft.
+func inverseFftScalar(a *[128]float32) {
 	a[1] = float32(0.5 * (a[0] - a[1]))
 	a[0] -= a[1]
 	rftbsub(a)
@@ -29,6 +41,12 @@ func InverseFft(a *[128]float32) {
 func cftfsub(a *[128]float32) {
 	cft1st(a)
 	cftmdl(a)
+	cftfsubTail(a)
+}
+
+// cftfsubTail is the final radix-4 pass of cftfsub_128, scalar C in every
+// lane.
+func cftfsubTail(a *[128]float32) {
 	const l = 32
 	for j := 0; j < l; j += 2 {
 		j1 := j + l
@@ -56,6 +74,12 @@ func cftfsub(a *[128]float32) {
 func cftbsub(a *[128]float32) {
 	cft1st(a)
 	cftmdl(a)
+	cftbsubTail(a)
+}
+
+// cftbsubTail is the final radix-4 pass of cftbsub_128, scalar C in every
+// lane.
+func cftbsubTail(a *[128]float32) {
 	const l = 32
 	for j := 0; j < l; j += 2 {
 		j1 := j + l
