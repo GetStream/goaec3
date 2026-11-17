@@ -23,7 +23,9 @@ func OouraKernSpectrum(opt int, re, im, out *[65]float32) {
 }
 
 // OouraKernSqrt runs VectorMath(opt).Sqrt in place.
-func OouraKernSqrt(opt int, x []float32) { C.oracle_kern_sqrt(C.int(opt), oouraCFloats(x), C.int(len(x))) }
+func OouraKernSqrt(opt int, x []float32) {
+	C.oracle_kern_sqrt(C.int(opt), oouraCFloats(x), C.int(len(x)))
+}
 
 // OouraKernMultiply runs VectorMath(opt).Multiply(x, y, z).
 func OouraKernMultiply(opt int, x, y, z []float32) {
