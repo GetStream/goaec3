@@ -5,18 +5,22 @@ package ooura
 // the add/sub (they are unfused), so every product is wrapped in float32().
 // This is the specification the arm64 assembly is tested against.
 
-type f32x4 [4]float32
+// f32x4 is a struct rather than an array so the compiler keeps the lanes
+// in registers.
+type f32x4 struct{ e0, e1, e2, e3 float32 }
+
+func arr4(a *[4]float32) f32x4 { return f32x4{a[0], a[1], a[2], a[3]} }
 
 func ld4(a []float32) f32x4 { return f32x4{a[0], a[1], a[2], a[3]} }
 
-func st4(a []float32, v f32x4) { a[0], a[1], a[2], a[3] = v[0], v[1], v[2], v[3] }
+func st4(a []float32, v f32x4) { a[0], a[1], a[2], a[3] = v.e0, v.e1, v.e2, v.e3 }
 
-func vadd(a, b f32x4) f32x4 { return f32x4{a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]} }
+func vadd(a, b f32x4) f32x4 { return f32x4{a.e0 + b.e0, a.e1 + b.e1, a.e2 + b.e2, a.e3 + b.e3} }
 
-func vsub(a, b f32x4) f32x4 { return f32x4{a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]} }
+func vsub(a, b f32x4) f32x4 { return f32x4{a.e0 - b.e0, a.e1 - b.e1, a.e2 - b.e2, a.e3 - b.e3} }
 
 func vmul(a, b f32x4) f32x4 {
-	return f32x4{float32(a[0] * b[0]), float32(a[1] * b[1]), float32(a[2] * b[2]), float32(a[3] * b[3])}
+	return f32x4{float32(a.e0 * b.e0), float32(a.e1 * b.e1), float32(a.e2 * b.e2), float32(a.e3 * b.e3)}
 }
 
 // vmla is vmlaq_f32(a, b, c) = a + b*c with the product rounded first.
@@ -26,23 +30,23 @@ func vmla(a, b, c f32x4) f32x4 { return vadd(a, vmul(b, c)) }
 func vmls(a, b, c f32x4) f32x4 { return vsub(a, vmul(b, c)) }
 
 // vrev64 swaps the two lanes inside each 64-bit half.
-func vrev64(a f32x4) f32x4 { return f32x4{a[1], a[0], a[3], a[2]} }
+func vrev64(a f32x4) f32x4 { return f32x4{a.e1, a.e0, a.e3, a.e2} }
 
 // vcombineLo is vcombine_f32(vget_low_f32(a), vget_low_f32(b)).
-func vcombineLo(a, b f32x4) f32x4 { return f32x4{a[0], a[1], b[0], b[1]} }
+func vcombineLo(a, b f32x4) f32x4 { return f32x4{a.e0, a.e1, b.e0, b.e1} }
 
 // vcombineHi is vcombine_f32(vget_high_f32(a), vget_high_f32(b)).
-func vcombineHi(a, b f32x4) f32x4 { return f32x4{a[2], a[3], b[2], b[3]} }
+func vcombineHi(a, b f32x4) f32x4 { return f32x4{a.e2, a.e3, b.e2, b.e3} }
 
 // ld2x2 is vcombine_f32(vld1_f32(p), vld1_f32(q)).
 func ld2x2(a []float32, p, q int) f32x4 { return f32x4{a[p], a[p+1], a[q], a[q+1]} }
 
-func stLo(a []float32, p int, v f32x4) { a[p], a[p+1] = v[0], v[1] }
+func stLo(a []float32, p int, v f32x4) { a[p], a[p+1] = v.e0, v.e1 }
 
-func stHi(a []float32, p int, v f32x4) { a[p], a[p+1] = v[2], v[3] }
+func stHi(a []float32, p int, v f32x4) { a[p], a[p+1] = v.e2, v.e3 }
 
 // reverseOrder is reverse_order_f32x4: A B C D -> D C B A.
-func reverseOrder(a f32x4) f32x4 { return f32x4{a[3], a[2], a[1], a[0]} }
+func reverseOrder(a f32x4) f32x4 { return f32x4{a.e3, a.e2, a.e1, a.e0} }
 
 // vld2 deinterleaves eight floats into even and odd lanes.
 func vld2(a []float32) (f32x4, f32x4) {
@@ -51,14 +55,13 @@ func vld2(a []float32) (f32x4, f32x4) {
 
 // vst2 interleaves two vectors into eight floats.
 func vst2(a []float32, v0, v1 f32x4) {
-	for i := 0; i < 4; i++ {
-		a[2*i], a[2*i+1] = v0[i], v1[i]
-	}
+	a[0], a[1], a[2], a[3] = v0.e0, v1.e0, v0.e1, v1.e1
+	a[4], a[5], a[6], a[7] = v0.e2, v1.e2, v0.e3, v1.e3
 }
 
 // vzip is vzipq_f32: interleave the low halves, then the high halves.
 func vzip(a, b f32x4) (f32x4, f32x4) {
-	return f32x4{a[0], b[0], a[1], b[1]}, f32x4{a[2], b[2], a[3], b[3]}
+	return f32x4{a.e0, b.e0, a.e1, b.e1}, f32x4{a.e2, b.e2, a.e3, b.e3}
 }
 
 func dup4(x float32) f32x4 { return f32x4{x, x, x, x} }
@@ -85,7 +88,7 @@ func inverseFftNeonRef(a *[128]float32) {
 }
 
 func cft1stNeonRef(a *[128]float32) {
-	vecSwapSign := f32x4(swapSign)
+	vecSwapSign := arr4(&swapSign)
 	for j, k2 := 0, 0; j < 128; j, k2 = j+16, k2+4 {
 		a00v := ld4(a[j+0:])
 		a04v := ld4(a[j+4:])
@@ -128,8 +131,8 @@ func cft1stNeonRef(a *[128]float32) {
 
 func cftmdlNeonRef(a *[128]float32) {
 	const l = 8
-	vecSwapSign := f32x4(swapSign)
-	wk1rv := f32x4(cftmdlWk1r)
+	vecSwapSign := arr4(&swapSign)
+	wk1rv := arr4(&cftmdlWk1r)
 	for j := 0; j < l; j += 2 {
 		a0032 := ld2x2(a[:], j+0, j+32)
 		a0840 := ld2x2(a[:], j+8, j+40)
@@ -144,8 +147,8 @@ func cftmdlNeonRef(a *[128]float32) {
 		x3rev := vrev64(x3)
 		x1x3Add := vmla(x1, vecSwapSign, x3rev)
 		x1x3Sub := vmls(x1, vecSwapSign, x3rev)
-		yy0as := f32x4{x1x3Add[2], x1x3Add[2], x1x3Sub[2], x1x3Sub[2]}
-		yy1as := f32x4{x1x3Add[3], x1x3Add[3], x1x3Sub[3], x1x3Sub[3]}
+		yy0as := f32x4{x1x3Add.e2, x1x3Add.e2, x1x3Sub.e2, x1x3Sub.e2}
+		yy1as := f32x4{x1x3Add.e3, x1x3Add.e3, x1x3Sub.e3, x1x3Sub.e3}
 		yy0 := vmla(yy0as, vecSwapSign, yy1as)
 		yy4 := vmul(wk1rv, yy0)
 		xx1Rev := vrev64(xx1)
