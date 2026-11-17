@@ -121,16 +121,14 @@ type MatchedFilterLagAggregator struct {
 	preEchoLagAggregator      *dlyPreEchoLagAggregator
 }
 
-// NewMatchedFilterLagAggregator mirrors the C++ constructor; it reads
-// config.Delay (the C++ takes EchoCanceller3Config::Delay).
-func NewMatchedFilterLagAggregator(maxFilterLag int, config *EchoCanceller3Config) *MatchedFilterLagAggregator {
+// NewMatchedFilterLagAggregator mirrors the C++ constructor.
+func NewMatchedFilterLagAggregator(maxFilterLag int, config *DelayConfig) *MatchedFilterLagAggregator {
 	a := &MatchedFilterLagAggregator{}
 	a.init(maxFilterLag, config)
 	return a
 }
 
-func (a *MatchedFilterLagAggregator) init(maxFilterLag int, config *EchoCanceller3Config) {
-	d := &config.Delay
+func (a *MatchedFilterLagAggregator) init(maxFilterLag int, d *DelayConfig) {
 	*a = MatchedFilterLagAggregator{
 		thresholdsInitial:   d.DelaySelectionThresholds.Initial,
 		thresholdsConverged: d.DelaySelectionThresholds.Converged,

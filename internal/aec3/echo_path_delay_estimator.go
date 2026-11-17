@@ -41,7 +41,7 @@ func (e *EchoPathDelayEstimator) init(config *EchoCanceller3Config, numCaptureCh
 		config.Delay.NumFilters, MatchedFilterAlignmentShiftSizeSubBlocks, excitationLimit,
 		config.Delay.DelayEstimateSmoothing, config.Delay.DelayEstimateSmoothingDelayFound,
 		config.Delay.DelayCandidateDetectionThreshold, config.Delay.DetectPreEcho)
-	e.matchedFilterLagAggregator.init(e.matchedFilter.GetMaxFilterLag(), config)
+	e.matchedFilterLagAggregator.init(e.matchedFilter.GetMaxFilterLag(), &config.Delay)
 }
 
 // Reset resets the estimation. If the delay confidence is reset, the reset

@@ -9,23 +9,7 @@ type EchoCanceller3Config struct {
 		ExcessRenderDetectionIntervalBlocks int
 		MaxAllowedExcessRenderBlocks        int
 	}
-	Delay struct {
-		DefaultDelay                     int
-		DownSamplingFactor               int
-		NumFilters                       int
-		DelayHeadroomSamples             int
-		HysteresisLimitBlocks            int
-		FixedCaptureDelaySamples         int
-		DelayEstimateSmoothing           float32
-		DelayEstimateSmoothingDelayFound float32
-		DelayCandidateDetectionThreshold float32
-		DelaySelectionThresholds         struct{ Initial, Converged int }
-		UseExternalDelayEstimator        bool
-		LogWarningOnDelayChanges         bool
-		RenderAlignmentMixing            AlignmentMixing
-		CaptureAlignmentMixing           AlignmentMixing
-		DetectPreEcho                    bool
-	}
+	Delay  DelayConfig
 	Filter struct {
 		Refined                       RefinedConfiguration
 		Coarse                        CoarseConfiguration
@@ -118,6 +102,25 @@ type EchoCanceller3Config struct {
 		StereoDetectionTimeoutThresholdSeconds int
 		StereoDetectionHysteresisSeconds       float32
 	}
+}
+
+// DelayConfig mirrors EchoCanceller3Config::Delay.
+type DelayConfig struct {
+	DefaultDelay                     int
+	DownSamplingFactor               int
+	NumFilters                       int
+	DelayHeadroomSamples             int
+	HysteresisLimitBlocks            int
+	FixedCaptureDelaySamples         int
+	DelayEstimateSmoothing           float32
+	DelayEstimateSmoothingDelayFound float32
+	DelayCandidateDetectionThreshold float32
+	DelaySelectionThresholds         struct{ Initial, Converged int }
+	UseExternalDelayEstimator        bool
+	LogWarningOnDelayChanges         bool
+	RenderAlignmentMixing            AlignmentMixing
+	CaptureAlignmentMixing           AlignmentMixing
+	DetectPreEcho                    bool
 }
 
 type AlignmentMixing struct {
