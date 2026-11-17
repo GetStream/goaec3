@@ -12,3 +12,6 @@ func goaec3Exp2f(x C.float) C.float { return C.float(aec3.Exp2f(float32(x))) }
 
 //export goaec3Exp10f
 func goaec3Exp10f(x C.float) C.float { return C.float(aec3.Exp10f(float32(x))) }
+
+//export goaec3Log10f
+func goaec3Log10f(x C.float) C.float { return C.float(aec3.Log10f(float32(x))) }

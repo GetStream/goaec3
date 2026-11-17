@@ -4,5 +4,7 @@
 // oracle uses exactly the Go implementations in internal/aec3/cmath.go.
 float goaec3Exp2f(float);
 float goaec3Exp10f(float);
+float goaec3Log10f(float);
 float exp2f(float x) { return goaec3Exp2f(x); }
 float __exp10f(float x) { return goaec3Exp10f(x); }
+float log10f(float x) { return goaec3Log10f(x); }

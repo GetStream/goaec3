@@ -103,7 +103,7 @@ func NewEchoRemoverWithOptimization(config *EchoCanceller3Config, sampleRateHz, 
 func (e *EchoRemover) GetMetrics() EchoControlMetrics {
 	// Echo return loss (ERL) is inverted to go from gain to attenuation.
 	return EchoControlMetrics{
-		EchoReturnLoss:            -10.0 * float64(erLog10f(e.aecState.ErlTimeDomain())),
+		EchoReturnLoss:            -10.0 * float64(Log10f(e.aecState.ErlTimeDomain())),
 		EchoReturnLossEnhancement: float64(Log2TodB(e.aecState.FullBandErleLog2())),
 	}
 }

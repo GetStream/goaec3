@@ -8,7 +8,6 @@ package webrtcoracle
 import "C"
 
 import (
-	"math"
 	"unsafe"
 
 	"github.com/GetStream/goaec3/internal/aec3"
@@ -280,9 +279,3 @@ func EremTransformDbMetricForReporting(negate bool, minV, maxV, offset, scaling,
 	return int(C.erem_transform_db_metric(eremBool(negate), C.float(minV), C.float(maxV), C.float(offset),
 		C.float(scaling), C.float(value)))
 }
-
-// goaec3EremLog10f backs the log10f interposer in erem_libm.c. It is the
-// formula of aec3's erLog10f: the double log10 rounded to float.
-//
-//export goaec3EremLog10f
-func goaec3EremLog10f(x C.float) C.float { return C.float(math.Log10(float64(x))) }

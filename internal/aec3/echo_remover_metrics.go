@@ -1,7 +1,5 @@
 package aec3
 
-import "math"
-
 // Port of echo_remover_metrics.{h,cc}. Histogram reporting is not ported; the
 // collection and reset schedule is.
 
@@ -82,19 +80,16 @@ func UpdateDbMetric(value *[FftLengthBy2Plus1]float32, statistic *[2]DbMetric) {
 		for _, v := range value[bandWidth*k : bandWidth*(k+1)] {
 			acc += v
 		}
-		statistic[k].Update(acc * oneByBandWidth)
+		statistic[k].Update(float32(acc * oneByBandWidth))
 	}
 }
 
 // TransformDbMetricForReporting transforms a DbMetric value from the linear
 // domain into the logarithmic domain.
 func TransformDbMetricForReporting(negate bool, minValue, maxValue, offset, scaling, value float32) int {
-	newValue := float32(10*erLog10f(float32(value*scaling)+1e-10)) + offset
+	newValue := float32(10*Log10f(float32(value*scaling)+1e-10)) + offset
 	if negate {
 		newValue = -newValue
 	}
 	return int(min(max(newValue, minValue), maxValue))
 }
-
-// erLog10f is log10f: the double-precision log10 rounded to float.
-func erLog10f(x float32) float32 { return float32(math.Log10(float64(x))) }

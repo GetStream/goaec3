@@ -65,9 +65,9 @@ libwebrtc through cgo.
 - **Floating point.** libwebrtc is built with `-ffp-contract=off`, so goaec3
   never fuses a multiply-add except where the C++ uses an explicit FMA
   intrinsic.
-- **libm.** Only `exp2f` and `exp10f` reach libm on the signal path. Platform
+- **libm.** Only `exp2f`, `exp10f` and `log10f` reach libm. Platform
   libm float results are not correctly rounded and differ between Apple libm
-  and glibc, so goaec3 pins both to the correctly rounded value. The oracle
+  and glibc, so goaec3 pins them to the correctly rounded value. The oracle
   binary interposes the same functions so that the comparison covers the
   algorithm rather than the host libm.
 
