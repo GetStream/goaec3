@@ -25,13 +25,33 @@ kernels; without it goaec3 runs the same lanes in pure Go, bit-exact but slower.
 
 ## Quick start
 
-_TODO: the public API lands with the `EchoCanceller3` port._ The planned hot
-path takes caller-owned 10 ms frames and allocates nothing:
-
 ```go
-func (e *EchoCanceller) AnalyzeRender(render [][]float32) error
-func (e *EchoCanceller) ProcessCapture(capture [][]float32) error
+import "github.com/GetStream/goaec3"
+
+ec, err := goaec3.New(goaec3.DefaultConfig(), 48000, 1, 1) // rate, render ch, capture ch
+if err != nil {
+	log.Fatal(err)
+}
+
+// 10 ms frames, frame[channel][sample], samples in [-1, 1].
+render := [][]float32{make([]float32, ec.FrameSize())}
+capture := [][]float32{make([]float32, ec.FrameSize())}
+
+for {
+	// ... fill render with the frame sent to the loudspeaker
+	// ... fill capture with the frame recorded by the microphone
+	if err := ec.AnalyzeRender(render); err != nil {
+		log.Fatal(err)
+	}
+	if err := ec.ProcessCapture(capture); err != nil { // echo removed in place
+		log.Fatal(err)
+	}
+}
 ```
+
+Frames are caller-owned; the hot path copies what it needs and allocates
+nothing once warmed up. `AnalyzeRender` may run on a different goroutine than
+the capture-side calls.
 
 ## Features
 
@@ -46,7 +66,27 @@ func (e *EchoCanceller) ProcessCapture(capture [][]float32) error
 
 ## Public API
 
-_TODO._
+| API | Description |
+| --- | --- |
+| `type Config = aec3.EchoCanceller3Config` | Full AEC3 configuration; field names are the C++ names in CamelCase. `Config.Validate()` clamps it like `EchoCanceller3Config::Validate`. |
+| `DefaultConfig() Config` | The default-constructed `EchoCanceller3Config`. |
+| `MultichannelConfig() Config` | `EchoCanceller3Config::CreateDefaultMultichannelConfig()`. |
+| `New(cfg, sampleRateHz, numRenderChannels, numCaptureChannels)` | Creates an `*EchoCanceller` for 16, 32 or 48 kHz. |
+| `NewWithMultichannelConfig(cfg, mcCfg, ...)` | Like `New`, switching to `mcCfg` while proper multichannel render content is detected. |
+| `(*EchoCanceller).AnalyzeRender(render [][]float32) error` | Buffers one 10 ms far-end frame. |
+| `(*EchoCanceller).ProcessCapture(capture [][]float32) error` | Removes the echo from one 10 ms near-end frame in place. |
+| `(*EchoCanceller).ProcessCaptureWithLinearOutput(capture, linear [][]float32) error` | Also returns the linear filter output (16 kHz, 160 samples per channel); needs `Filter.ExportLinearAecOutput`. |
+| `(*EchoCanceller).SetAudioBufferDelay(ms int)` | External estimate of the audio buffer delay; with `Delay.UseExternalDelayEstimator` it sets the alignment. |
+| `(*EchoCanceller).SetCaptureOutputUsage(used bool)` | Signals whether the output is used (e.g. muted), letting AEC3 reduce processing. |
+| `(*EchoCanceller).NotifyEchoPathGainChange()` | Flags an echo path gain change (e.g. analog mic gain) for the next capture frame. |
+| `(*EchoCanceller).Metrics() Metrics` | ERL, ERLE (dB) and the estimated delay (ms). |
+
+Samples are converted to and from the 16-bit float scale AEC3 works in, and
+32/48 kHz frames are split into 16 kHz bands and merged back, exactly as
+`webrtc::AudioBuffer` does for the float `ProcessStream` interface; the
+output matches libwebrtc driven through `AudioBuffer` bit for bit. Errors
+(`ErrSampleRate`, `ErrNumChannels`, `ErrChannelCount`, `ErrFrameLength`,
+`ErrLinearOutputDisabled`) are sentinel values.
 
 ## Parity & testing
 
