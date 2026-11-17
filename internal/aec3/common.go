@@ -11,7 +11,6 @@ package aec3
 
 import (
 	"math"
-
 )
 
 // Aec3Optimization selects the kernel family, as in aec3_common.h.
