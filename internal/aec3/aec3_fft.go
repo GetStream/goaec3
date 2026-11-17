@@ -1,6 +1,6 @@
 package aec3
 
-import "github.com/thesyncim/goaec3/internal/ooura"
+import "github.com/GetStream/goaec3/internal/ooura"
 
 // Window selects the analysis window applied by Aec3Fft.
 type Window int

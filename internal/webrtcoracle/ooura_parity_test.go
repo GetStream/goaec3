@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/thesyncim/goaec3/internal/ooura"
+	"github.com/GetStream/goaec3/internal/ooura"
 )
 
 // TestOouraFftBitExact compares the Go FFT with the lane the build selects:

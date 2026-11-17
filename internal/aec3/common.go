@@ -12,7 +12,7 @@ package aec3
 import (
 	"math"
 
-	"github.com/thesyncim/goaec3/internal/cpufeat"
+	"github.com/GetStream/goaec3/internal/cpufeat"
 )
 
 // Aec3Optimization selects the kernel family, as in aec3_common.h.
