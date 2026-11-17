@@ -6,6 +6,10 @@ package webrtcoracle
 
 /*
 #cgo CXXFLAGS: -std=c++20 -DWEBRTC_POSIX -DWEBRTC_MAC -DWEBRTC_HAS_NEON -I${SRCDIR}/../../tmp_check/libwebrtc/include -I${SRCDIR}/../../tmp_check/libwebrtc/include/third_party/abseil-cpp
+// libwebrtc's GN build defines WEBRTC_ARCH_ARM64 (rtc_base/system/arch.h does
+// not); without it NEON header code such as VectorMath::Sqrt compiles a
+// different path than libwebrtc.a.
+#cgo arm64 CXXFLAGS: -DWEBRTC_ARCH_ARM64
 #cgo LDFLAGS: ${SRCDIR}/../../tmp_check/libwebrtc/lib/libwebrtc.a -lc++ -framework Foundation -framework CoreAudio -framework AudioToolbox -framework CoreMedia -framework CoreVideo -framework AVFoundation -framework AppKit -framework IOSurface -framework Metal -framework VideoToolbox -framework ApplicationServices
 #include "oracle.h"
 */

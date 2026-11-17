@@ -4,11 +4,6 @@
 // scalar Ooura FFT (OouraFftScalarRef, defined in ooura_scalar.cc), under
 // renamed symbols. This is the scalar reference for the purego lane.
 #pragma clang fp contract(off)
-// libwebrtc's GN build defines WEBRTC_ARCH_ARM64 on arm64 (it selects
-// vsqrtq_f32 in VectorMath::Sqrt); the oracle cgo flags do not.
-#if defined(__aarch64__) && !defined(WEBRTC_ARCH_ARM64)
-#define WEBRTC_ARCH_ARM64
-#endif
 #define OouraFft OouraFftScalarRef
 #define Aec3Fft Aec3FftSupScalar
 #define SuppressionFilter SuppressionFilterSupScalar

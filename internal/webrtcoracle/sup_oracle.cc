@@ -1,10 +1,5 @@
 //go:build webrtc_oracle
 
-// libwebrtc's GN build defines WEBRTC_ARCH_ARM64 on arm64 (it selects
-// vsqrtq_f32 in VectorMath::Sqrt); the oracle cgo flags do not.
-#if defined(__aarch64__) && !defined(WEBRTC_ARCH_ARM64)
-#define WEBRTC_ARCH_ARM64
-#endif
 #include "sup_oracle.h"
 
 #include <algorithm>

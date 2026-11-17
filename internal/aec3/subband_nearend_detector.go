@@ -1,8 +1,8 @@
 package aec3
 
-// SubbandNearendDetectionConfig is the type of
-// EchoCanceller3Config.Suppressor.SubbandNearendDetection.
-type SubbandNearendDetectionConfig = struct {
+// SubbandNearendDetectionConfig mirrors
+// EchoCanceller3Config::Suppressor::SubbandNearendDetection.
+type SubbandNearendDetectionConfig struct {
 	NearendAverageBlocks int
 	Subband1             SubbandRegion
 	Subband2             SubbandRegion

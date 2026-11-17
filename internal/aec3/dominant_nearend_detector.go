@@ -1,8 +1,8 @@
 package aec3
 
-// DominantNearendDetectionConfig is the type of
-// EchoCanceller3Config.Suppressor.DominantNearendDetection.
-type DominantNearendDetectionConfig = struct {
+// DominantNearendDetectionConfig mirrors
+// EchoCanceller3Config::Suppressor::DominantNearendDetection.
+type DominantNearendDetectionConfig struct {
 	EnrThreshold             float32
 	EnrExitThreshold         float32
 	SnrThreshold             float32

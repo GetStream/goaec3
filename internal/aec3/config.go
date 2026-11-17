@@ -100,24 +100,10 @@ type EchoCanceller3Config struct {
 		LastLfSmoothingBand           int
 		LastLfBand                    int
 		FirstHfBand                   int
-		DominantNearendDetection      struct {
-			EnrThreshold             float32
-			EnrExitThreshold         float32
-			SnrThreshold             float32
-			HoldDuration             int
-			TriggerThreshold         int
-			UseDuringInitialPhase    bool
-			UseUnboundedEchoSpectrum bool
-		}
-		SubbandNearendDetection struct {
-			NearendAverageBlocks int
-			Subband1             SubbandRegion
-			Subband2             SubbandRegion
-			NearendThreshold     float32
-			SnrThreshold         float32
-		}
-		UseSubbandNearendDetection bool
-		HighBandsSuppression       struct {
+		DominantNearendDetection      DominantNearendDetectionConfig
+		SubbandNearendDetection       SubbandNearendDetectionConfig
+		UseSubbandNearendDetection    bool
+		HighBandsSuppression          struct {
 			EnrThreshold                   float32
 			MaxGainDuringEcho              float32
 			AntiHowlingActivationThreshold float32
