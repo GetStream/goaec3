@@ -6,6 +6,12 @@ import "simd/archsimd"
 
 // archsimd kernels for the kern_bins.go helpers: 256-bit code with AVX2,
 // 128-bit (VEX) code with AVX, the references otherwise.
+//
+// Every 256-bit section ends with archsimd.ClearAVXUpperBits (VZEROUPPER).
+// Go's scalar float code is legacy-SSE encoded, and on Intel cores legacy
+// SSE instructions issued while the upper halves of the YMM registers are
+// dirty run with a large penalty (false dependencies and state
+// transitions), which slows every scalar float operation that follows.
 
 func kernScale(x []float32, a float32, z []float32) {
 	z = z[:len(x)]
@@ -15,6 +21,7 @@ func kernScale(x []float32, a float32, z []float32) {
 		for ; j+8 <= len(x); j += 8 {
 			archsimd.LoadFloat32x8(x[j:]).Mul(av).Store(z[j:])
 		}
+		archsimd.ClearAVXUpperBits()
 	}
 	if kernHasAVX {
 		av := archsimd.BroadcastFloat32x4(a)
@@ -35,6 +42,7 @@ func kernAdd(x, y, z []float32) {
 		for ; j+8 <= len(x); j += 8 {
 			archsimd.LoadFloat32x8(x[j:]).Add(archsimd.LoadFloat32x8(y[j:])).Store(z[j:])
 		}
+		archsimd.ClearAVXUpperBits()
 	}
 	if kernHasAVX {
 		for ; j+4 <= len(x); j += 4 {
@@ -54,6 +62,7 @@ func kernSub(x, y, z []float32) {
 		for ; j+8 <= len(x); j += 8 {
 			archsimd.LoadFloat32x8(x[j:]).Sub(archsimd.LoadFloat32x8(y[j:])).Store(z[j:])
 		}
+		archsimd.ClearAVXUpperBits()
 	}
 	if kernHasAVX {
 		for ; j+4 <= len(x); j += 4 {
@@ -83,6 +92,7 @@ func kernSumRows(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]flo
 		a0.StoreArray((*[8]float32)(p[0:8]))
 		a1.StoreArray((*[8]float32)(p[8:16]))
 	}
+	archsimd.ClearAVXUpperBits()
 	var last float32
 	for _, r := range rows {
 		last += r[FftLengthBy2]
@@ -144,6 +154,7 @@ func kernClamp(x []float32, lo, hi float32) {
 			v = lv.IfElse(v.Less(lv), v)
 			hv.IfElse(hv.Less(v), v).Store(x[j:])
 		}
+		archsimd.ClearAVXUpperBits()
 	}
 	if kernHasAVX {
 		lv, hv := archsimd.BroadcastFloat32x4(lo), archsimd.BroadcastFloat32x4(hi)

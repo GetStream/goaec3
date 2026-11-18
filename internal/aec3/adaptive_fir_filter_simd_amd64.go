@@ -81,6 +81,7 @@ func afirApplyBlockAVX2(x, h, s *FftData) {
 		sRe.Add(e).StoreArray((*[8]float32)(s.Re[k : k+8]))
 		sIm.Add(f).StoreArray((*[8]float32)(s.Im[k : k+8]))
 	}
+	archsimd.ClearAVXUpperBits()
 }
 
 func afirAdaptBlockAVX2(x, g, h *FftData) {
@@ -96,6 +97,7 @@ func afirAdaptBlockAVX2(x, g, h *FftData) {
 		hRe.Add(e).StoreArray((*[8]float32)(h.Re[k : k+8]))
 		hIm.Add(f).StoreArray((*[8]float32)(h.Im[k : k+8]))
 	}
+	archsimd.ClearAVXUpperBits()
 }
 
 // afirFreqRespBlockAVX2: re2 = re*re; re2 = _mm256_fmadd_ps(im, im, re2).
@@ -108,6 +110,7 @@ func afirFreqRespBlockAVX2(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 		a := archsimd.LoadFloat32x8Array(p)
 		a.IfElse(a.Greater(n), n).StoreArray(p) // _mm256_max_ps(a, n) = a > n ? a : n
 	}
+	archsimd.ClearAVXUpperBits()
 }
 
 func afirErlBlockAVX2(h2, erl *[FftLengthBy2Plus1]float32) {
@@ -115,6 +118,7 @@ func afirErlBlockAVX2(h2, erl *[FftLengthBy2Plus1]float32) {
 		p := (*[8]float32)(erl[k : k+8])
 		archsimd.LoadFloat32x8Array(p).Add(archsimd.LoadFloat32x8Array((*[8]float32)(h2[k : k+8]))).StoreArray(p)
 	}
+	archsimd.ClearAVXUpperBits()
 }
 
 func afirApplyBlock(opt Aec3Optimization, x, h, s *FftData) {
@@ -190,6 +194,7 @@ func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 			im0.StoreArray((*[8]float32)(s.Im[k : k+8]))
 			im1.StoreArray((*[8]float32)(s.Im[k+8 : k+16]))
 		}
+		archsimd.ClearAVXUpperBits()
 	} else {
 		for k := 0; k < FftLengthBy2; k += 8 {
 			var re0, re1, im0, im1 archsimd.Float32x4
@@ -242,6 +247,7 @@ func afirAdaptTerms(xs, hs []*FftData, g *FftData) {
 				archsimd.LoadFloat32x8Array(hi).Add(xr.Mul(gi).Sub(xi.Mul(gr))).StoreArray(hi)
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 	} else {
 		for k := 0; k < FftLengthBy2; k += 4 {
 			gr := archsimd.LoadFloat32x4Array((*[4]float32)(g.Re[k : k+4]))

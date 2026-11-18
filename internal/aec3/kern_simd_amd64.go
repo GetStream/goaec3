@@ -35,6 +35,7 @@ func kernSpectrumAvx2(re, im, out *[FftLengthBy2Plus1]float32) {
 		i := archsimd.LoadFloat32x8Array((*[8]float32)(im[k : k+8]))
 		r.MulAdd(r, i.Mul(i)).StoreArray((*[8]float32)(out[k : k+8]))
 	}
+	archsimd.ClearAVXUpperBits()
 	const n = FftLengthBy2
 	out[n] = float32(re[n]*re[n]) + float32(im[n]*im[n])
 }
@@ -46,6 +47,7 @@ func kernSpectrumSse2(re, im, out *[FftLengthBy2Plus1]float32) {
 		i := archsimd.LoadFloat32x8Array((*[8]float32)(im[k : k+8]))
 		r.Mul(r).Add(i.Mul(i)).StoreArray((*[8]float32)(out[k : k+8]))
 	}
+	archsimd.ClearAVXUpperBits()
 	const n = FftLengthBy2
 	out[n] = float32(re[n]*re[n]) + float32(im[n]*im[n])
 }
@@ -58,6 +60,7 @@ func vectorMultiply(x, y, z []float32) {
 		for ; j+8 <= len(x); j += 8 {
 			archsimd.LoadFloat32x8(x[j:]).Mul(archsimd.LoadFloat32x8(y[j:])).Store(z[j:])
 		}
+		archsimd.ClearAVXUpperBits()
 	}
 	if kernHasAVX {
 		for ; j+4 <= len(x); j += 4 {
@@ -76,6 +79,7 @@ func vectorAccumulate(x, z []float32) {
 		for ; j+8 <= len(x); j += 8 {
 			archsimd.LoadFloat32x8(z[j:]).Add(archsimd.LoadFloat32x8(x[j:])).Store(z[j:])
 		}
+		archsimd.ClearAVXUpperBits()
 	}
 	if kernHasAVX {
 		for ; j+4 <= len(x); j += 4 {
@@ -94,6 +98,7 @@ func kernVectorSqrt(x []float32) {
 		for ; j+8 <= len(x); j += 8 {
 			archsimd.LoadFloat32x8(x[j:]).Sqrt().Store(x[j:])
 		}
+		archsimd.ClearAVXUpperBits()
 	}
 	if kernHasAVX {
 		for ; j+4 <= len(x); j += 4 {
