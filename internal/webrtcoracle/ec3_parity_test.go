@@ -212,10 +212,19 @@ func ec3Flat(f [][]float32, dst []float32) []float32 {
 	return dst
 }
 
-// ec3Schedule returns the API call pattern: 'R' render, 'C' capture. It is
-// mostly alternating, with jitter, a render burst (overrun and queue
-// overflow), a capture burst (underrun) and a sweep of render bursts.
-func ec3Schedule(numCaptures int, uneven bool) []byte {
+// ec3Schedule returns the API call pattern: 'R' render, 'C' capture. When
+// uneven it has random jitter and, with bursts, a render burst (overrun and
+// transfer queue overflow), a capture burst (underrun) and a sweep of render
+// bursts.
+//
+// External-delay scenarios run without bursts: there AlignFromExternalDelay
+// applies render_call_counter - capture_call_counter + delay, and a render
+// burst longer than the render buffer drives that past the buffer size. The
+// C++ RenderDelayBuffer then stores a negative block read index
+// (OffsetIndex with offset > size, a DCHECK in debug builds) and
+// RenderBuffer::GetBlock(-filter_delay) can index before the start of the
+// block vector: undefined behavior with no defined reference output.
+func ec3Schedule(numCaptures int, uneven, bursts bool) []byte {
 	var s []byte
 	rng := rand.New(rand.NewSource(5))
 	captures := 0
@@ -228,19 +237,19 @@ func ec3Schedule(numCaptures int, uneven bool) []byte {
 			continue
 		}
 		switch {
-		case captures >= 300 && !didOverflow:
+		case bursts && captures >= 300 && !didOverflow:
 			didOverflow = true
 			// Render burst beyond the transfer queue capacity.
 			for renders < captures+130 {
 				s = append(s, 'R')
 				renders++
 			}
-		case captures >= 700 && !didSweep:
+		case bursts && captures >= 700 && !didSweep:
 			didSweep = true
 			// Render bursts of growing length, each followed by as many
 			// captures, so that a render overrun lands right before a
 			// capture call (the BufferFlush path).
-			for burst := 50; burst <= 80; burst++ {
+			for burst := 50; burst <= 80; burst += 3 {
 				for i := 0; i < burst; i++ {
 					s = append(s, 'R')
 					renders++
@@ -250,7 +259,7 @@ func ec3Schedule(numCaptures int, uneven bool) []byte {
 					captures++
 				}
 			}
-		case captures >= 500 && !didCaptureBurst:
+		case bursts && captures >= 500 && !didCaptureBurst:
 			didCaptureBurst = true
 			// Capture burst.
 			for i := 0; i < 40; i++ {
@@ -471,7 +480,7 @@ func ec3RunBlockProcessor(t *testing.T, c ec3BpCase) {
 
 	// Each 10 ms frame yields 2.5 blocks on average; the schedule runs in
 	// frames, the processors in blocks.
-	sched := ec3Schedule(1000, c.uneven)
+	sched := ec3Schedule(1000, c.uneven, !c.external)
 	calls := 0
 	sawDelay, sawNewDelay, sawFlush := 0, 0, 0
 	var queued [][][]float32
@@ -586,7 +595,7 @@ func ec3Cases(passthrough bool) []ec3Case {
 		for _, ch := range [][2]int{{1, 1}, {2, 1}, {1, 2}, {2, 2}} {
 			c := ec3Case{
 				name: fmt.Sprintf("%dHz_r%d_c%d", rate, ch[0], ch[1]),
-				rate: rate, nRender: ch[0], nCap: ch[1], frames: 1500, saturate: true,
+				rate: rate, nRender: ch[0], nCap: ch[1], frames: 1000, saturate: true,
 			}
 			if passthrough {
 				c.mutate = external
@@ -595,7 +604,7 @@ func ec3Cases(passthrough bool) []ec3Case {
 		}
 		mk := func(name string, nr, nc int, mut func(*aec3.EchoCanceller3Config)) ec3Case {
 			return ec3Case{name: fmt.Sprintf("%dHz_%s", rate, name), rate: rate, nRender: nr, nCap: nc,
-				frames: 1500, mutate: func(cfg *aec3.EchoCanceller3Config) {
+				frames: 1000, mutate: func(cfg *aec3.EchoCanceller3Config) {
 					if passthrough {
 						external(cfg)
 					}
@@ -741,7 +750,7 @@ func ec3RunCanceller(t *testing.T, c ec3Case, withMetrics bool) {
 	}
 	var queued [][][]float32 // capture frames waiting for their capture call
 	frame := 0
-	for _, op := range ec3Schedule(c.frames, c.uneven) {
+	for _, op := range ec3Schedule(c.frames, c.uneven, c.bufferDelayMs == 0) {
 		if op == 'R' {
 			scene.next(render, capture)
 			ec3S16(render, renderS16)

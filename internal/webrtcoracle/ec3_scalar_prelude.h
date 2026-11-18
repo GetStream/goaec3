@@ -15,6 +15,14 @@
 #ifndef GOAEC3_EC3_SCALAR_PRELUDE_H
 #define GOAEC3_EC3_SCALAR_PRELUDE_H
 
+// libwebrtc.a is a release build: RTC_DCHECKs are off. Some reachable states
+// (e.g. an external audio buffer delay larger than the render buffer, which
+// the ring index arithmetic wraps) trip a DCHECK, so the source build turns
+// them off too.
+#ifndef NDEBUG
+#define NDEBUG
+#endif
+
 #pragma clang fp contract(off)
 #pragma clang diagnostic ignored "-Wnullability-completeness"
 
