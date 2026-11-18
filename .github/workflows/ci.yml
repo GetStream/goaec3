@@ -12,9 +12,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its running checks; runs on main,
+# nightly and manual runs always complete.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   GO_VERSION: "1.27.4"
@@ -57,6 +59,7 @@ jobs:
           GOEXPERIMENT=simd GOARCH=arm64 go vet ./...
           CC=clang CXX=clang++ go vet -tags webrtc_src_oracle ./...
           CC=clang CXX=clang++ GOEXPERIMENT=simd go vet -tags 'webrtc_src_oracle purego' ./...
+          CC=clang CXX=clang++ GOEXPERIMENT=simd go vet -tags 'webrtc_src_oracle webrtc_oracle_stock' ./...
       - name: Generated source-oracle files are current
         run: bash scripts/gen-src-oracle.sh -check
       - name: actionlint
@@ -67,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
         lane: [default, simd, purego]
     runs-on: ${{ matrix.os }}
     steps:
@@ -83,10 +86,36 @@ jobs:
             purego) go test -count=1 -tags purego ./... ;;
           esac
 
-  # End-to-end (BlockProcessor, EchoCanceller3, public API) and per-kernel
-  # (matched filter, adaptive filter) parity against the C++ reference built
-  # from the pinned WebRTC sources. GOAEC3_EXPECT_LANE makes each job fail if
-  # Go or C++ runs another lane than the one named.
+  # The race detector over the short test suite, with the pure-Go lane
+  # references and with the archsimd kernels.
+  race:
+    name: race (${{ matrix.lane }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { lane: default }
+          - { lane: simd, experiment: simd }
+    runs-on: ubuntu-latest
+    env:
+      GOEXPERIMENT: ${{ matrix.experiment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go test -race -short
+        run: go test -count=1 -race -short ./...
+
+  # End-to-end (BlockProcessor, EchoCanceller3, public API, the random-config
+  # and fuzz-seed differential tests) and per-kernel (matched filter,
+  # adaptive filter) parity against the C++ reference built from the pinned
+  # WebRTC sources. GOAEC3_EXPECT_LANE makes each job fail if Go or C++ runs
+  # another lane than the one named. The avx2-simd job also runs the x86
+  # Ooura FFT, spectrum and vector-math kernels against their C++ sources.
+  # The jobs marked stock measure goaec3 against the C++ on glibc's libm:
+  # reported, not gated, since glibc's exp2f, exp10f and log10f need not be
+  # the correctly rounded values goaec3 and the gated oracle use.
   oracle-src:
     name: oracle-src (${{ matrix.os }}, ${{ matrix.name }})
     strategy:
@@ -94,16 +123,14 @@ jobs:
       matrix:
         include:
           # x86_64 runners have AVX2 and FMA.
-          - { os: ubuntu-latest, name: avx2-simd, lane: avx2, experiment: simd }
+          - { os: ubuntu-latest, name: avx2-simd, lane: avx2, experiment: simd, stock: true }
           - { os: ubuntu-latest, name: avx2, lane: avx2 }
           - { os: ubuntu-latest, name: sse2-simd, lane: sse2, experiment: simd, godebug: cpu.avx2=off }
           - { os: ubuntu-latest, name: sse2, lane: sse2, godebug: cpu.avx2=off }
           - { os: ubuntu-latest, name: scalar, lane: none, tags: purego }
-          - { os: ubuntu-24.04-arm, name: neon-simd, lane: neon, experiment: simd }
+          - { os: ubuntu-24.04-arm, name: neon-simd, lane: neon, experiment: simd, stock: true }
           - { os: ubuntu-24.04-arm, name: neon, lane: neon }
           - { os: ubuntu-24.04-arm, name: scalar, lane: none, tags: purego }
-          - { os: macos-latest, name: neon-simd, lane: neon, experiment: simd }
-          - { os: macos-latest, name: scalar, lane: none, tags: purego }
     runs-on: ${{ matrix.os }}
     env:
       CC: clang
@@ -129,4 +156,46 @@ jobs:
           clang --version
       - name: Parity against the source-built WebRTC
         run: go test -count=1 -timeout 40m -v -tags "webrtc_src_oracle ${{ matrix.tags }}" ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
+        shell: bash -o pipefail {0}
+      - name: x86 kernels against their C++ sources
+        if: matrix.name == 'avx2-simd'
+        run: go test -count=1 -tags ooura_sse2_oracle ./internal/webrtcoracle/
+      - name: Divergence on glibc's libm (reported, not gated)
+        if: matrix.stock
+        run: go test -count=1 -timeout 40m -v -tags "webrtc_src_oracle webrtc_oracle_stock" -run '^TestEc3StockLibmDivergence$' ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
+        shell: bash -o pipefail {0}
+
+  # darwin/arm64 in one job: macOS runners are scarce (with five macOS jobs
+  # per run, they queued for over an hour), so the tests, the NEON and scalar
+  # source-oracle lanes and the Apple libm gate share one runner.
+  macos:
+    runs-on: macos-15
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Cache WebRTC sources
+        uses: actions/cache@v4
+        with:
+          path: tmp_check/webrtc-m141
+          key: webrtc-m141-${{ hashFiles('scripts/fetch-webrtc.sh') }}
+      - name: Fetch WebRTC sources
+        run: bash scripts/fetch-webrtc.sh
+      - name: go test (default, simd, purego)
+        run: |
+          go test -count=1 ./...
+          GOEXPERIMENT=simd go test -count=1 ./...
+          go test -count=1 -tags purego ./...
+      - name: Parity against the source-built WebRTC (neon-simd)
+        run: GOEXPERIMENT=simd GOAEC3_EXPECT_LANE=neon go test -count=1 -timeout 40m -v -tags webrtc_src_oracle ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
+        shell: bash -o pipefail {0}
+      - name: Parity against the source-built WebRTC (scalar)
+        run: GOAEC3_EXPECT_LANE=none go test -count=1 -timeout 40m -v -tags "webrtc_src_oracle purego" ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
+        shell: bash -o pipefail {0}
+      - name: Bit-exact against the source-built WebRTC on Apple libm
+        run: GOEXPERIMENT=simd go test -count=1 -timeout 40m -v -tags "webrtc_src_oracle webrtc_oracle_stock" -run '^TestEc3StockLibmDivergence$' ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
         shell: bash -o pipefail {0}

@@ -39,6 +39,10 @@ func srcCheckLane() error {
 	return nil
 }
 
+// srcStockLibm is set in the webrtc_oracle_stock build, which links the C++
+// against the host libm instead of src_libm_interpose.c.
+var srcStockLibm bool
+
 // srcLibmImports lists the libm functions the test binary imports that the
 // oracle interposes (src_libm_interpose.c): any of them would mean a C++
 // call reaches the host libm instead of the Go helpers.
@@ -83,12 +87,45 @@ func srcLibmImports() ([]string, error) {
 	return bad, nil
 }
 
+// srcForceLane applies GOAEC3_FORCE_LANE=none|sse2|avx2|neon: Go and the
+// C++ build run that lane instead of the detected one (for example the AVX2
+// lane under Rosetta 2, which hides AVX and BMI2 from CPUID). The variable
+// is read here, in test code only; the library never reads the environment.
+func srcForceLane() error {
+	name := os.Getenv("GOAEC3_FORCE_LANE")
+	if name == "" {
+		return nil
+	}
+	for opt, n := range srcLaneNames {
+		if n == name {
+			if !aec3.SetForcedLaneForTesting(opt) {
+				return fmt.Errorf("GOAEC3_FORCE_LANE=%s: %s cannot run that lane", name, runtime.GOARCH)
+			}
+			SrcSyncLane()
+			return nil
+		}
+	}
+	return fmt.Errorf("GOAEC3_FORCE_LANE=%s: want none, sse2, avx2 or neon", name)
+}
+
 func TestMain(m *testing.M) {
+	if err := srcForceLane(); err != nil {
+		fmt.Fprintln(os.Stderr, "webrtc_src_oracle:", err)
+		os.Exit(1)
+	}
 	if err := srcCheckLane(); err != nil {
 		fmt.Fprintln(os.Stderr, "webrtc_src_oracle:", err)
 		os.Exit(1)
 	}
-	if bad, err := srcLibmImports(); err != nil || len(bad) > 0 {
+	bad, err := srcLibmImports()
+	switch {
+	case srcStockLibm && (err != nil || len(bad) == 0):
+		// The stock build must reach the host libm, or it measures nothing.
+		fmt.Fprintln(os.Stderr, "webrtc_src_oracle: the webrtc_oracle_stock build imports no libm function", err)
+		os.Exit(1)
+	case srcStockLibm:
+		fmt.Fprintln(os.Stderr, "webrtc_src_oracle: host libm imports", bad)
+	case err != nil || len(bad) > 0:
 		fmt.Fprintln(os.Stderr, "webrtc_src_oracle: libm imports", bad, err)
 		os.Exit(1)
 	}
@@ -105,6 +142,9 @@ func TestMain(m *testing.M) {
 func TestSrcLaneMatchesCPUInfo(t *testing.T) {
 	if strings.Contains(os.Getenv("GODEBUG"), "cpu.") {
 		t.Skip("GODEBUG overrides the CPU features")
+	}
+	if os.Getenv("GOAEC3_FORCE_LANE") != "" {
+		t.Skip("GOAEC3_FORCE_LANE overrides the lane")
 	}
 	if srcRosetta() {
 		t.Skip("Rosetta 2: CPUID hides the AVX2 Go detects")

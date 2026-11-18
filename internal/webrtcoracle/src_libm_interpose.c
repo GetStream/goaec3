@@ -1,4 +1,4 @@
-//go:build webrtc_src_oracle && !webrtc_oracle
+//go:build webrtc_src_oracle && !webrtc_oracle && !webrtc_oracle_stock
 
 // Interpose the libm entry points the AEC3 sources reach so the source build
 // uses exactly the Go implementations in internal/aec3/cmath.go (host libm
@@ -7,7 +7,9 @@
 // libm: exp2f everywhere, __exp10f on Darwin, exp10f or powf on glibc. Every
 // spelling is covered; powf with another base aborts, since no Go helper
 // mirrors it. src_main_test.go checks that the test binary imports none of
-// these from libm.
+// these from libm. The webrtc_oracle_stock tag leaves them out, to measure
+// goaec3 against the source build on the host libm
+// (TestEc3StockLibmDivergence).
 #include <stdio.h>
 #include <stdlib.h>
 

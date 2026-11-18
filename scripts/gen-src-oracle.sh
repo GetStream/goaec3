@@ -160,6 +160,8 @@ go_copies=(
 	ec3_oracle.go
 	ec3_parity_test.go
 	ec3_bench_test.go
+	fuzz_ec3_test.go
+	fuzz_stock_libm_test.go
 	lane_default.go
 	lane_purego.go
 	libm.go

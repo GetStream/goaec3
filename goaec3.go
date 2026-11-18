@@ -214,6 +214,11 @@ func (e *EchoCanceller) FrameSize() int { return e.frameLength }
 // AnalyzeRender buffers one 10 ms frame of the render signal,
 // render[channel][sample] with NumRenderChannels channels of FrameSize
 // samples in [-1, 1]. The frame is copied; the caller keeps ownership.
+//
+// A NaN sample poisons the canceller state permanently, as in libwebrtc:
+// every later output is NaN while the metrics can still look healthy.
+// Out-of-range values and ±Inf are clamped, NaN is not. Replace NaN
+// upstream, or create a new EchoCanceller once one got through.
 func (e *EchoCanceller) AnalyzeRender(render [][]float32) error {
 	if err := ec3CheckFrame(render, e.numRenderChannels, e.frameLength); err != nil {
 		return err
@@ -229,6 +234,11 @@ func (e *EchoCanceller) AnalyzeRender(render [][]float32) error {
 // ProcessCapture removes the echo from one 10 ms capture frame in place,
 // capture[channel][sample] with NumCaptureChannels channels of FrameSize
 // samples in [-1, 1].
+//
+// A NaN sample poisons the canceller state permanently, as in libwebrtc:
+// every later output is NaN while the metrics can still look healthy.
+// Out-of-range values and ±Inf are clamped, NaN is not. Replace NaN
+// upstream, or create a new EchoCanceller once one got through.
 func (e *EchoCanceller) ProcessCapture(capture [][]float32) error {
 	if err := ec3CheckFrame(capture, e.numCaptureChannels, e.frameLength); err != nil {
 		return err

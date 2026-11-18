@@ -11,7 +11,7 @@ package aec3
 
 import (
 	"math"
-	"os"
+	"sync/atomic"
 )
 
 // Aec3Optimization selects the kernel family, as in aec3_common.h.
@@ -65,18 +65,14 @@ func GetRenderDelayBufferSize(downSamplingFactor, numMatchedFilters, filterLengt
 
 // DetectOptimization mirrors aec3_common.cc: AVX2, else SSE2 on amd64; NEON
 // on arm64 (libwebrtc's arm64 build always has NEON); OptNone elsewhere. The
-// purego build always reports OptNone (the scalar C reference lane).
-//
-// GOAEC3_FORCE_LANE=none|sse2|avx2|neon overrides the detected lane for
-// testing (for example the AVX2 lane under Rosetta, which hides AVX/BMI2 from
-// CPUID). A lane the architecture cannot run is ignored. The purego build
-// ignores the override.
+// purego build always reports OptNone (the scalar C reference lane). A lane
+// set with SetForcedLaneForTesting replaces the detected one.
 func DetectOptimization() Aec3Optimization {
 	if purego {
 		return OptNone
 	}
-	if opt, ok := forcedLane(); ok {
-		return opt
+	if v := forcedLane.Load(); v != 0 {
+		return Aec3Optimization(v - 1)
 	}
 	switch {
 	case isAMD64 && hasAVX2():
@@ -89,19 +85,27 @@ func DetectOptimization() Aec3Optimization {
 	return OptNone
 }
 
-func forcedLane() (Aec3Optimization, bool) {
-	switch os.Getenv("GOAEC3_FORCE_LANE") {
-	case "none":
-		return OptNone, true
-	case "sse2":
-		return OptSse2, isAMD64
-	case "avx2":
-		return OptAvx2, isAMD64
-	case "neon":
-		return OptNeon, isARM64
+// forcedLane is the lane SetForcedLaneForTesting set, plus one; zero means
+// none.
+var forcedLane atomic.Int32
+
+// SetForcedLaneForTesting makes DetectOptimization return opt instead of
+// the detected lane, for tests that run a lane the CPU detection does not
+// select (for example the AVX2 lane under Rosetta 2, which hides AVX and
+// BMI2 from CPUID). It reports false and changes nothing when the
+// architecture cannot run opt. The purego build ignores the forced lane.
+// The package is internal, so only this module's tests reach it.
+func SetForcedLaneForTesting(opt Aec3Optimization) bool {
+	switch {
+	case opt == OptNone, opt == OptSse2 && isAMD64, opt == OptAvx2 && isAMD64, opt == OptNeon && isARM64:
+		forcedLane.Store(int32(opt) + 1)
+		return true
 	}
-	return OptNone, false
+	return false
 }
+
+// ClearForcedLaneForTesting restores the detected lane.
+func ClearForcedLaneForTesting() { forcedLane.Store(0) }
 
 // FastApproxLog2f reinterprets the float bits as an integer and rescales.
 func FastApproxLog2f(in float32) float32 {

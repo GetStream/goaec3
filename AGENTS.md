@@ -52,9 +52,14 @@ write changelog narrative.
   does.
 - No hand-written assembly. Kernels are archsimd; a kernel archsimd cannot
   express stays pure Go. Gate x86 kernels with `archsimd.X86.AVX2()` etc.
-- CPU detection (`DetectOptimization`): `archsimd.X86` under
-  `GOEXPERIMENT=simd`, `golang.org/x/sys/cpu` without it (the lane order still
-  depends on AVX2 even when the lane runs as pure Go). arm64 is always NEON.
+- CPU detection (`DetectOptimization`): one routine for builds with and
+  without `GOEXPERIMENT=simd`, `golang.org/x/sys/cpu` with libwebrtc's kAVX2
+  condition (AVX, OSXSAVE/YMM, AVX2, BMI2), so both builds pick the same lane
+  (the lane order still depends on AVX2 when the lane runs as pure Go). arm64
+  is always NEON; purego is always scalar. The library never reads the
+  environment: tests force a lane with `aec3.SetForcedLaneForTesting`
+  (internal, unreachable by library users); the source oracle's TestMain
+  applies `GOAEC3_FORCE_LANE` through it.
 
 - C++ classes that take an `Aec3Optimization` argument keep it in Go so tests
   can drive both lanes against the oracle in one binary.
@@ -97,8 +102,15 @@ Steady-state processing is allocation-free. Lock new hot paths with a
 ## Build and test
 
 - Use Go 1.27.4 (`$HOME/sdk/go1.27.4/bin/go`, or `go1.27.4`). The `Makefile`
-  wraps every command below; CI (`.github/workflows/ci.yml`) runs them on
-  linux/amd64 (AVX2+FMA), linux/arm64 and darwin/arm64.
+  wraps every command below. CI (`.github/workflows/ci.yml`): `lint`;
+  `test` (default, simd, purego on linux/amd64 and linux/arm64); `race`
+  (`go test -race -short ./...` without and with simd); `oracle-src` (the
+  source oracle in the AVX2, SSE2, NEON and scalar lanes, with and without
+  simd; the avx2-simd job also runs the x86 kernel oracle, and the avx2-simd
+  and neon-simd jobs log the glibc stock-libm divergence); `macos` (one
+  macos-15 job: the tests in all three builds, the NEON and scalar source
+  oracle and the Apple libm stock gate). Runs on main, nightly and manual
+  runs are never cancelled; a new push to a pull request cancels its run.
 - `GOEXPERIMENT=simd go test ./...` — default lane with archsimd kernels
   (`make test-simd`).
 - `go test ./...` — default lane, pure-Go lane references (no experiment)
@@ -106,17 +118,29 @@ Steady-state processing is allocation-free. Lock new hot paths with a
 - `go test -tags purego ./...` — scalar lane (`make test-purego`).
 - `GOARCH=amd64 GOEXPERIMENT=simd go test ./...` — amd64 lane (Rosetta;
   AVX2 available) (`make test-amd64`).
+- `go test -race -short ./...`, with and without `GOEXPERIMENT=simd`
+  (`make test-race`). `-short` scales the slow robustness tests down so the
+  race run stays within the default timeout; the full run is unchanged.
 - `make lint` — gofmt, `go vet` in every build configuration, and the
   generated source-oracle files are current.
 - `GOEXPERIMENT=simd go test -tags webrtc_oracle ./internal/webrtcoracle/` —
   parity against the prebuilt libwebrtc (darwin/arm64 only; needs
   `tmp_check/libwebrtc`) (`make oracle`).
+- `make oracle-stock` — `TestEc3StockLibmDivergence` against the prebuilt
+  libwebrtc linked against Apple libm, without the libm interposer (tag
+  `webrtc_oracle_stock`): every output, linear output and metrics frame must
+  be bit-exact. `make oracle-src-stock` does the same against the source
+  build on the host libm; it is gated on darwin (Apple libm) and only logs
+  the divergence elsewhere (glibc's `log10f` moves the ERL metric by about
+  1e-6 dB; the audio stays bit-exact).
 - `scripts/fetch-webrtc.sh` (`make fetch-webrtc`) — sparse checkout of the
   pinned WebRTC sources and the abseil-cpp they include into
   `tmp_check/webrtc-m141`; idempotent.
 - `CC=clang CXX=clang++ GOEXPERIMENT=simd go test -tags webrtc_src_oracle
   ./internal/webrtcoracle/` (`make oracle-src`) — end-to-end (BlockProcessor,
-  EchoCanceller3, public API) and per-kernel (matched filter, adaptive filter)
+  EchoCanceller3, public API, the random-config differential test, the
+  `FuzzEc3Differential` seeds, NaN-input parity) and per-kernel (matched
+  filter, adaptive filter)
   parity against the C++ reference compiled from `tmp_check/webrtc-m141` on
   any OS/arch, in the machine's lane: NEON on arm64, AVX2 or SSE2 on amd64.
   The C++ lane follows `aec3.DetectOptimization()`; `GODEBUG=cpu.avx2=off`
@@ -130,19 +154,25 @@ Steady-state processing is allocation-free. Lock new hot paths with a
 - x86 lanes on Apple silicon: `make oracle-src-rosetta` runs the source
   build for x86_64 under Rosetta (`CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch
   x86_64" CXX="clang++ -arch x86_64"`): the SSE2 and scalar lanes;
-  `make oracle-src-rosetta-avx2` runs the AVX2 lane with `GOAEC3_FORCE_FMA=1`
-  (Rosetta executes FMA but CPUID does not report it) where Go selects AVX2.
-- `CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch x86_64" CXX="clang++ -arch
-  x86_64" GOEXPERIMENT=simd go test -tags ooura_sse2_oracle
-  ./internal/webrtcoracle/` (`make oracle-x86-kernels`) — the x86 Ooura FFT
-  (scalar and SSE2), FftData::Spectrum and VectorMath (SSE2 and AVX2) kernels
-  only, compiled from source, under Rosetta on darwin (`GOAEC3_FORCE_FMA=1`
+  `make oracle-src-rosetta-avx2` runs the AVX2 lane with
+  `GOAEC3_FORCE_LANE=avx2` (Rosetta hides AVX and BMI2 from CPUID) and
+  `GOAEC3_FORCE_FMA=1` (Rosetta executes FMA but CPUID does not report it).
+- `GOEXPERIMENT=simd go test -tags ooura_sse2_oracle ./internal/webrtcoracle/`
+  (`make oracle-x86-kernels`) — the x86 Ooura FFT (scalar and SSE2),
+  FftData::Spectrum and VectorMath (SSE2 and AVX2) kernels only, compiled
+  from `tmp_check/webrtc-m141`: natively on linux/amd64 (`CC=clang
+  CXX=clang++`), under Rosetta on darwin (`CGO_ENABLED=1 GOARCH=amd64
+  CC="clang -arch x86_64" CXX="clang++ -arch x86_64"`; `GOAEC3_FORCE_FMA=1`
   forces the FMA kernel tests).
 
 ## Layout
 
 - `internal/aec3` — the AEC3 core (one package, like the C++ directory).
+- `internal/bands` — the band splitting around AEC3: the 2-band QMF
+  (32 kHz), the 3-band filter bank (48 kHz) and AudioBuffer's FloatS16
+  conversions.
 - `internal/ooura` — 128-point Ooura real FFT (scalar + NEON/SSE2 lanes).
 - `internal/webrtcoracle` — cgo oracle harness (tags `webrtc_oracle`,
-  `webrtc_src_oracle`, `ooura_sse2_oracle`).
+  `webrtc_src_oracle`, `ooura_sse2_oracle`; `webrtc_oracle_stock` with
+  either oracle tag links the host libm instead of the interposer).
 - root package `goaec3` — public API.

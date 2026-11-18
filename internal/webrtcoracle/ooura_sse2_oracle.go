@@ -2,16 +2,23 @@
 
 package webrtcoracle
 
-// The x86_64 oracle builds on darwin/arm64 under Rosetta:
+// The x86_64 oracle compiles its kernels from the WebRTC sources in
+// tmp_check/webrtc-m141 (scripts/fetch-webrtc.sh) and links nothing from
+// libwebrtc. On linux/amd64:
+//
+//	CC=clang CXX=clang++ GOEXPERIMENT=simd go test -tags ooura_sse2_oracle ./internal/webrtcoracle/
+//
+// On darwin/arm64, under Rosetta 2:
 //
 //	CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch x86_64" CXX="clang++ -arch x86_64" \
 //	  GOEXPERIMENT=simd go test -tags ooura_sse2_oracle ./internal/webrtcoracle/
-//
-// It links nothing from libwebrtc.a (an arm64 archive).
 
 /*
-#cgo CXXFLAGS: -std=c++20 -DWEBRTC_POSIX -DWEBRTC_MAC -DNDEBUG -I${SRCDIR}/../../tmp_check/libwebrtc/include -I${SRCDIR}/../../tmp_check/libwebrtc/include/third_party/abseil-cpp
-#cgo LDFLAGS: -lc++
+#cgo CXXFLAGS: -std=c++20 -DWEBRTC_POSIX -DNDEBUG -I${SRCDIR}/../../tmp_check/webrtc-m141 -I${SRCDIR}/../../tmp_check/webrtc-m141/third_party/abseil-cpp
+#cgo darwin CXXFLAGS: -DWEBRTC_MAC
+#cgo darwin LDFLAGS: -lc++
+#cgo linux CXXFLAGS: -DWEBRTC_LINUX
+#cgo linux LDFLAGS: -lstdc++ -lm
 #include "ooura_kern_oracle.h"
 */
 import "C"

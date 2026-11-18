@@ -41,8 +41,12 @@ import "C"
 
 import "github.com/GetStream/goaec3/internal/aec3"
 
-func init() {
-	// cpu_info::Supports in the C++ build answers from this lane.
+func init() { SrcSyncLane() }
+
+// SrcSyncLane makes cpu_info::Supports in the C++ build answer from the
+// lane aec3.DetectOptimization() returns now; call it again after
+// aec3.SetForcedLaneForTesting.
+func SrcSyncLane() {
 	C.goaec3_src_set_lane(C.int(aec3.DetectOptimization()))
 }
 

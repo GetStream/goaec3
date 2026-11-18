@@ -2,28 +2,35 @@ package aec3
 
 import "testing"
 
-// TestDetectOptimizationForcedLane checks the GOAEC3_FORCE_LANE override and
-// that a lane the architecture cannot run is ignored.
+// TestDetectOptimizationForcedLane checks SetForcedLaneForTesting, that a
+// lane the architecture cannot run is refused, and that clearing it
+// restores the detected lane.
 func TestDetectOptimizationForcedLane(t *testing.T) {
+	t.Cleanup(ClearForcedLaneForTesting)
 	native := DetectOptimization()
 	for _, tc := range []struct {
-		env  string
-		want Aec3Optimization
-		ok   bool
+		opt Aec3Optimization
+		ok  bool
 	}{
-		{"none", OptNone, true},
-		{"sse2", OptSse2, isAMD64},
-		{"avx2", OptAvx2, isAMD64},
-		{"neon", OptNeon, isARM64},
-		{"bogus", native, false},
+		{OptNone, true},
+		{OptSse2, isAMD64},
+		{OptAvx2, isAMD64},
+		{OptNeon, isARM64},
 	} {
-		t.Setenv("GOAEC3_FORCE_LANE", tc.env)
+		ClearForcedLaneForTesting()
+		if got := SetForcedLaneForTesting(tc.opt); got != tc.ok {
+			t.Errorf("SetForcedLaneForTesting(%v) = %v, want %v", tc.opt, got, tc.ok)
+		}
 		want := native
 		if tc.ok && !purego {
-			want = tc.want
+			want = tc.opt
 		}
 		if got := DetectOptimization(); got != want {
-			t.Errorf("GOAEC3_FORCE_LANE=%s: got %v, want %v", tc.env, got, want)
+			t.Errorf("forced %v: DetectOptimization() = %v, want %v", tc.opt, got, want)
 		}
+	}
+	ClearForcedLaneForTesting()
+	if got := DetectOptimization(); got != native {
+		t.Errorf("cleared: DetectOptimization() = %v, want %v", got, native)
 	}
 }

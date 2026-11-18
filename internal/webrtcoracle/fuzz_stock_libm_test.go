@@ -5,19 +5,22 @@ package webrtcoracle
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"testing"
 
 	"github.com/GetStream/goaec3"
 )
 
-// TestEc3StockLibmDivergence measures how far goaec3 is from libwebrtc
-// linked against the host libm, without the interposer that routes exp2f,
-// __exp10f and log10f to the Go implementations (build with
-// -tags 'webrtc_oracle webrtc_oracle_stock' and run this test alone; the
-// bit-exact tests fail by design in that build). It logs, per scenario, the
-// first frame whose output differs, the output SNR of Go against the C++
-// and the largest sample difference, and fails only if the SNR drops below
-// 60 dB.
+// TestEc3StockLibmDivergence runs goaec3 against libwebrtc linked against
+// the host libm, without the interposer that routes exp2f, __exp10f and
+// log10f to the Go implementations (build with -tags 'webrtc_oracle
+// webrtc_oracle_stock', or 'webrtc_src_oracle webrtc_oracle_stock' for the
+// source build, and run this test alone: the bit-exact tests fail by design
+// in that build). It logs, per scenario, the first frame whose capture
+// output, linear output or metrics differ, the output SNR of Go against the
+// C++ and the largest sample difference. With Apple libm (darwin) every
+// frame must be bit-exact; on other libms (glibc) the divergence is
+// reported, not failed.
 func TestEc3StockLibmDivergence(t *testing.T) {
 	const seconds = 60
 	for _, rate := range []int{16000, 32000, 48000} {
@@ -40,8 +43,9 @@ func TestEc3StockLibmDivergence(t *testing.T) {
 					lin := ec3Frame(ch[1], goaec3.LinearOutputFrameSize)
 					cppLin := make([]float32, ch[1]*160)
 					var flat, cppCap []float32
-					firstDiff, firstMetricDiff := -1, -1
-					var sig, noise, maxDiff float64
+					firstDiff, firstLinDiff, firstMetricDiff := -1, -1, -1
+					var sig, noise, maxDiff, maxErlDiff, maxErleDiff float64
+					delayDiffs := 0
 					for frame := 0; frame < seconds*100; frame++ {
 						scene.next(render, capture)
 						flat = ec3Flat(render, flat)
@@ -66,20 +70,33 @@ func TestEc3StockLibmDivergence(t *testing.T) {
 								maxDiff = max(maxDiff, math.Abs(d))
 							}
 						}
+						for c := range lin {
+							for k, v := range lin[c] {
+								if math.Float32bits(v) != math.Float32bits(cppLin[c*160+k]) && firstLinDiff < 0 {
+									firstLinDiff = frame
+								}
+							}
+						}
 						gm, cm := e.Metrics(), cpp.Metrics()
 						if firstMetricDiff < 0 && (gm.EchoReturnLoss != cm.EchoReturnLoss ||
 							gm.EchoReturnLossEnhancement != cm.EchoReturnLossEnhancement || gm.DelayMs != cm.DelayMs) {
 							firstMetricDiff = frame
+						}
+						maxErlDiff = max(maxErlDiff, math.Abs(gm.EchoReturnLoss-cm.EchoReturnLoss))
+						maxErleDiff = max(maxErleDiff, math.Abs(gm.EchoReturnLossEnhancement-cm.EchoReturnLossEnhancement))
+						if gm.DelayMs != cm.DelayMs {
+							delayDiffs++
 						}
 					}
 					snr := math.Inf(1)
 					if noise > 0 {
 						snr = 10 * math.Log10(sig/noise)
 					}
-					t.Logf("first differing output frame %d, first differing metrics frame %d, output SNR %.1f dB, "+
-						"max |diff| %.3g", firstDiff, firstMetricDiff, snr, maxDiff)
-					if snr < 60 {
-						t.Errorf("output SNR %.1f dB", snr)
+					t.Logf("first differing frame: output %d, linear output %d, metrics %d; output SNR %.1f dB, "+
+						"max |diff| %.3g; max |ERL diff| %.3g dB, max |ERLE diff| %.3g dB, %d frames with another delay",
+						firstDiff, firstLinDiff, firstMetricDiff, snr, maxDiff, maxErlDiff, maxErleDiff, delayDiffs)
+					if runtime.GOOS == "darwin" && (firstDiff >= 0 || firstLinDiff >= 0 || firstMetricDiff >= 0) {
+						t.Errorf("not bit-exact against libwebrtc on Apple libm")
 					}
 				})
 			}

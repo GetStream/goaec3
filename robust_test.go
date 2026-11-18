@@ -175,7 +175,11 @@ func TestChannelCounts(t *testing.T) {
 // after convergence; only NaN is excluded from the finiteness check (it
 // propagates into the filter state, as in the C++).
 func TestSpecialSampleValues(t *testing.T) {
-	for _, rate := range []int{16000, 48000} {
+	frames, rates := 400, []int{16000, 48000}
+	if testing.Short() {
+		frames, rates = 200, rates[:1]
+	}
+	for _, rate := range rates {
 		for sig := 0; sig < robustNumSignals; sig++ {
 			if sig == robustSigNaN {
 				continue
@@ -187,9 +191,9 @@ func TestSpecialSampleValues(t *testing.T) {
 			n := e.FrameSize()
 			scene := newRobustScene(5, rate, 40)
 			render, capture := robustFrame(2, n), robustFrame(1, n)
-			for i := range 400 {
+			for i := range frames {
 				rs, cs := robustSigEcho, robustSigEcho
-				if i >= 200 {
+				if i >= frames/2 {
 					// Alternate the special value between the sides.
 					if (i/20)%2 == 0 {
 						rs = sig
@@ -215,6 +219,10 @@ func TestSpecialSampleValues(t *testing.T) {
 // turn NaN (as libwebrtc's does), but nothing may panic, including on amd64
 // where a NaN converted to an int is MinInt64.
 func TestNaNInputDoesNotPanic(t *testing.T) {
+	frames := 400
+	if testing.Short() {
+		frames = 150
+	}
 	for _, rate := range []int{16000, 32000, 48000} {
 		for _, side := range []string{"render", "capture", "both"} {
 			cfg := DefaultConfig()
@@ -227,7 +235,7 @@ func TestNaNInputDoesNotPanic(t *testing.T) {
 			scene := newRobustScene(9, rate, 40)
 			render, capture := robustFrame(1, n), robustFrame(1, n)
 			linear := robustFrame(1, LinearOutputFrameSize)
-			for i := range 400 {
+			for i := range frames {
 				rs, cs := robustSigEcho, robustSigEcho
 				if i >= 100 && i < 110 {
 					if side != "capture" {
@@ -260,7 +268,7 @@ func robustSoakSeconds(def int) int {
 		}
 	}
 	if testing.Short() {
-		return def / 4
+		return def / 8
 	}
 	return def
 }
@@ -271,7 +279,11 @@ func robustSoakSeconds(def int) int {
 // canceller must still converge afterwards.
 func TestOneSidedTraffic(t *testing.T) {
 	seconds := robustSoakSeconds(60)
-	for _, rate := range []int{16000, 48000} {
+	rates := []int{16000, 48000}
+	if testing.Short() {
+		rates = rates[:1]
+	}
+	for _, rate := range rates {
 		for _, first := range []string{"render", "capture"} {
 			for _, external := range []bool{false, true} {
 				cfg := DefaultConfig()
@@ -406,6 +418,10 @@ func TestLongRun(t *testing.T) {
 // TestSteadyStateAllocations locks the steady state of several setups to
 // zero allocations per frame, Metrics included.
 func TestSteadyStateAllocations(t *testing.T) {
+	warmup, runs := 400, 200
+	if testing.Short() {
+		warmup, runs = 100, 20
+	}
 	cases := []struct {
 		name                        string
 		rate, numRender, numCapture int
@@ -447,10 +463,10 @@ func TestSteadyStateAllocations(t *testing.T) {
 			}
 			_ = e.Metrics()
 		}
-		for range 400 {
+		for range warmup {
 			step()
 		}
-		if a := testing.AllocsPerRun(200, step); a != 0 {
+		if a := testing.AllocsPerRun(runs, step); a != 0 {
 			t.Errorf("%s: %v allocations per frame", c.name, a)
 		}
 	}
@@ -466,7 +482,7 @@ func TestSteadyStateAllocations(t *testing.T) {
 func TestBoundaryConfigSweep(t *testing.T) {
 	frames := 40
 	if testing.Short() {
-		frames = 20
+		frames = 6
 	}
 	failures := robustSweepFailures(t, frames, func(path string, cfg *Config) bool {
 		if robustRejected(cfg) {

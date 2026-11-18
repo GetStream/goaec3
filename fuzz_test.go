@@ -37,10 +37,7 @@ func FuzzEchoCanceller(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		p, ok := robustDecode(data)
-		if !ok {
-			t.Skip("open finding")
-		}
+		p := robustDecode(data)
 		robustRun(t, &p)
 	})
 }

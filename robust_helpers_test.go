@@ -344,7 +344,7 @@ const robustMaxFrames = 800
 // robustDecode turns fuzz input into a program: rate, channel counts, a
 // config (mutated, validated and resource-capped), an optional agreeing
 // multichannel config and a call sequence.
-func robustDecode(data []byte) (robustProgram, bool) {
+func robustDecode(data []byte) robustProgram {
 	r := &robustReader{b: data}
 	var p robustProgram
 	p.rate = []int{16000, 32000, 48000}[int(r.u8())%3]
@@ -411,7 +411,7 @@ func robustDecode(data []byte) (robustProgram, bool) {
 		}
 		p.ops = append(p.ops, op)
 	}
-	return p, true
+	return p
 }
 
 // robustAgree copies the settings NewWithMultichannelConfig requires the
