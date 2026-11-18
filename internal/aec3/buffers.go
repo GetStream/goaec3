@@ -21,13 +21,23 @@ func (r *ringIndex) DecIndex(index int) int {
 	return r.Size - 1
 }
 
-func (r *ringIndex) OffsetIndex(index, offset int) int { return (r.Size + index + offset) % r.Size }
-func (r *ringIndex) UpdateWriteIndex(offset int)       { r.Write = r.OffsetIndex(r.Write, offset) }
-func (r *ringIndex) IncWriteIndex()                    { r.Write = r.IncIndex(r.Write) }
-func (r *ringIndex) DecWriteIndex()                    { r.Write = r.DecIndex(r.Write) }
-func (r *ringIndex) UpdateReadIndex(offset int)        { r.Read = r.OffsetIndex(r.Read, offset) }
-func (r *ringIndex) IncReadIndex()                     { r.Read = r.IncIndex(r.Read) }
-func (r *ringIndex) DecReadIndex()                     { r.Read = r.DecIndex(r.Read) }
+// OffsetIndex returns (Size + index + offset) mod Size. The C++ uses int %,
+// which yields a negative position when offset < -(Size + index); indexing
+// with it is undefined behavior there (reachable in external-delay mode with
+// long render bursts). The port wraps it into [0, Size) instead.
+func (r *ringIndex) OffsetIndex(index, offset int) int {
+	p := (r.Size + index + offset) % r.Size
+	if p < 0 {
+		p += r.Size
+	}
+	return p
+}
+func (r *ringIndex) UpdateWriteIndex(offset int) { r.Write = r.OffsetIndex(r.Write, offset) }
+func (r *ringIndex) IncWriteIndex()              { r.Write = r.IncIndex(r.Write) }
+func (r *ringIndex) DecWriteIndex()              { r.Write = r.DecIndex(r.Write) }
+func (r *ringIndex) UpdateReadIndex(offset int)  { r.Read = r.OffsetIndex(r.Read, offset) }
+func (r *ringIndex) IncReadIndex()               { r.Read = r.IncIndex(r.Read) }
+func (r *ringIndex) DecReadIndex()               { r.Read = r.DecIndex(r.Read) }
 
 // BlockBuffer is a ring of Blocks (block_buffer.h).
 type BlockBuffer struct {

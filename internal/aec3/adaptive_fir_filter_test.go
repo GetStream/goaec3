@@ -146,7 +146,7 @@ func TestAfirFmaf32(t *testing.T) {
 	// im = 4097*2^-12: im^2 is exactly a float32 rounding midpoint, so a tiny
 	// addend decides the rounding (double rounding through float64 fails).
 	im := float32(4097.0 / 4096.0)
-	cases := [][3]float32{{im, im, 1e-30}, {im, im, -1e-30}, {im, im, 0}, {1, 1, 0}, {0, 0, 0}, {-0.0, 1, 0}}
+	cases := [][3]float32{{im, im, 1e-30}, {im, im, -1e-30}, {im, im, 0}, {1, 1, 0}, {0, 0, 0}, {float32(math.Copysign(0, -1)), 1, 0}}
 	rng := rand.New(rand.NewSource(3))
 	for i := 0; i < 200000; i++ {
 		a := float32(rng.NormFloat64() * math.Pow(2, float64(rng.Intn(40)-20)))

@@ -10,9 +10,9 @@ reproduces the floating-point operation order of the libwebrtc code path it
 mirrors, and a live C++ oracle proves the match (see
 [Parity & testing](#parity--testing)).
 
-> **Status: work in progress.** The foundation (Ooura FFT, AEC3 core types,
-> config) and the oracle harness are in place; the AEC3 modules are being
-> ported. There is no public API yet.
+> **Status: pre-v1.** The full AEC3 pipeline is ported and bit-exact against
+> libwebrtc m141 end to end on darwin/arm64 (default, SIMD and scalar lanes).
+> The API may still change.
 
 ## Install
 
