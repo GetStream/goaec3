@@ -141,7 +141,6 @@ func MatchedFilterCoreAccumulatedErrorAvx2(xStartIndex int, x2SumThreshold, smoo
 	hSize := len(h)
 	xSize := len(x)
 	clear(accumulatedError)
-	var x2buf [32]float32
 	for i := range y {
 		chunk1 := min(hSize, xSize-xStartIndex)
 		var xp []float32
@@ -153,19 +152,7 @@ func MatchedFilterCoreAccumulatedErrorAvx2(xStartIndex int, x2SumThreshold, smoo
 		} else {
 			xp = x[xStartIndex : xStartIndex+hSize]
 		}
-		dlyZeroAcc(&x2buf)
-		x2v := (*[16]float32)(x2buf[:16])
-		s := dlyAccErrAvx2(h, xp, y[i], accumulatedError, x2v)
-		var a [8]float32
-		for l := range a {
-			a[l] = x2v[l] + x2v[8+l]
-		}
-		var v [4]float32
-		for l := range v {
-			v[l] = a[l] + a[4+l]
-		}
-		var x2Sum float32
-		x2Sum += ((v[0] + v[1]) + v[2]) + v[3]
+		s, x2Sum := dlyAccErrAvx2Sample(h, xp, y[i], accumulatedError)
 		e := y[i] - s
 		*errorSum += float32(e * e)
 		if x2Sum > x2SumThreshold && !dlySaturated(y[i]) {
@@ -179,6 +166,24 @@ func MatchedFilterCoreAccumulatedErrorAvx2(xStartIndex int, x2SumThreshold, smoo
 			xStartIndex = xSize - 1
 		}
 	}
+}
+
+// dlyAccErrAvx2SampleRef runs dlyAccErrAvx2Ref from zero x*x
+// accumulators and returns the filter output and the x*x sum of
+// MatchedFilterCore_AccumulatedError_AVX2 for one capture sample.
+func dlyAccErrAvx2SampleRef(h, x []float32, y float32, accErr []float32) (s, x2Sum float32) {
+	var x2v [16]float32
+	s = dlyAccErrAvx2Ref(h, x, y, accErr, &x2v)
+	var a [8]float32
+	for l := range a {
+		a[l] = x2v[l] + x2v[8+l]
+	}
+	var v [4]float32
+	for l := range v {
+		v[l] = a[l] + a[4+l]
+	}
+	x2Sum += ((v[0] + v[1]) + v[2]) + v[3]
+	return s, x2Sum
 }
 
 // MatchedFilterCoreAvx2 mirrors aec3::MatchedFilterCore_AVX2.

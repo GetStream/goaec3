@@ -91,6 +91,12 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 		sB = dlyAccErrAvx2Ref(h, x, y, accB, &x16b)
 		dlyRequireBits(t, "accErrAvx2", append(accA, append(x16a[:], sA)...), append(accB, append(x16b[:], sB)...))
 
+		accA = dlyRandSlice(rng, n/4, 10)
+		accB = append([]float32(nil), accA...)
+		sA, xA := dlyAccErrAvx2Sample(h, x, y, accA)
+		sB, xB := dlyAccErrAvx2SampleRef(h, x, y, accB)
+		dlyRequireBits(t, "accErrAvx2Sample", append(accA, sA, xA), append(accB, sB, xB))
+
 		{
 			m8, m16 := n&^7, n&^15
 			s1, x1 := dlyDotSse2Sum(h[:m8], x)

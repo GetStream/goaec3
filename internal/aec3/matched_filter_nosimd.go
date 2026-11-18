@@ -69,3 +69,7 @@ func dlyDotAvx2Sum(h, x []float32) (s, x2Sum float32) { return dlyDotAvx2SumRef(
 func dlyAxpyFmaDotAvx2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
 	return dlyAxpyFmaDotAvx2SumRef(h, xa, xb, alpha)
 }
+
+func dlyAccErrAvx2Sample(h, x []float32, y float32, accErr []float32) (s, x2Sum float32) {
+	return dlyAccErrAvx2SampleRef(h, x, y, accErr)
+}

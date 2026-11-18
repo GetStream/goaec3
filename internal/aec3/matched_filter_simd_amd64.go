@@ -289,6 +289,64 @@ func dlyAccErrAvx2(h, x []float32, y float32, accErr []float32, x2 *[16]float32)
 	return out[0]
 }
 
+// dlyAccErrAvx2Sample is dlyAccErrAvx2SampleRef: dlyAccErrAvx2 from x*x
+// accumulators that start in registers at zero (not loaded from memory
+// stored just before) and reduced there.
+func dlyAccErrAvx2Sample(h, x []float32, y float32, accErr []float32) (s, x2Sum float32) {
+	if !dlyUseFma {
+		return dlyAccErrAvx2SampleRef(h, x, y, accErr)
+	}
+	var r [4]float32
+	dlyAccErrAvx2SampleLanes(h, x, y, accErr, &r)
+	return r[0], 0 + r[2]
+}
+
+// dlyAccErrAvx2SampleLanes stores s in r[0] and the reduced x*x sum (before
+// the C++ adds it to 0) in r[2] (see dlyReduceAvx2Lanes).
+//
+//go:noinline
+func dlyAccErrAvx2SampleLanes(h, x []float32, y float32, accErr []float32, r *[4]float32) {
+	groups := len(h) / 16
+	n := 16 * groups
+	h = h[:n:n]
+	x = x[:n:n]
+	accErr = accErr[: 4*groups : 4*groups]
+	yv := archsimd.BroadcastFloat32x4(y)
+	var sv archsimd.Float32x4
+	var x2v, x2v8 archsimd.Float32x8
+	for g, i := 0, 0; g < len(accErr)-3 && i < len(h)-15; g, i = g+4, i+16 {
+		hh := (*[16]float32)(h[i : i+16])
+		xx := (*[16]float32)(x[i : i+16])
+		xk := dlyLd8((*[8]float32)(xx[0:8]))
+		xk8 := dlyLd8((*[8]float32)(xx[8:16]))
+		p := dlyLd8((*[8]float32)(hh[0:8])).Mul(xk)
+		q := dlyLd8((*[8]float32)(hh[8:16])).Mul(xk8)
+		x2v = xk.MulAdd(xk, x2v)
+		x2v8 = xk8.MulAdd(xk8, x2v8)
+		rr := p.ConcatAddPairsGrouped(q)
+		rr = rr.ConcatAddPairsGrouped(rr)
+		lo, hi := rr.GetLo(), rr.GetHi()
+		t0 := sv.Add(lo)
+		t1 := t0.Add(hi)
+		t2 := t1.Add(lo.ConcatPermuteScalars(1, 1, 5, 5, lo))
+		t3 := t2.Add(hi.ConcatPermuteScalars(1, 1, 5, 5, hi))
+		sv = t3
+		ev := t0.ConcatPermuteScalars(0, 0, 4, 4, t1).ConcatPermuteScalars(0, 2, 4, 6,
+			t2.ConcatPermuteScalars(0, 0, 4, 4, t3)).Sub(yv)
+		ap := (*[4]float32)(accErr[g : g+4])
+		ev.MulAdd(ev, dlyLd4(ap)).StoreArray(ap)
+	}
+	// x2: a = x2_sum_256 + x2_sum_256_8, v = low half + high half, then
+	// ((v0 + v1) + v2) + v3 in lane 0.
+	a := x2v.Add(x2v8)
+	v := a.GetLo().Add(a.GetHi())
+	t := v.Add(v.ConcatPermuteScalars(1, 1, 5, 5, v))
+	t = t.Add(v.ConcatPermuteScalars(2, 2, 6, 6, v))
+	t = t.Add(v.ConcatPermuteScalars(3, 3, 7, 7, v))
+	sv.ConcatPermuteScalars(0, 0, 4, 4, t).StoreArray(r)
+	archsimd.ClearAVXUpperBits()
+}
+
 func dlyAxpyFma(h, x []float32, alpha float32) {
 	if !dlyUseFma {
 		dlyAxpyFmaRef(h, x, alpha)

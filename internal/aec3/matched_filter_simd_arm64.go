@@ -257,3 +257,7 @@ func dlyAxpyFmaDotAvx2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32)
 // dlyPeakLanes256 is the 256-bit dlyPeakLanes128 (NEON has no 256-bit
 // registers).
 func dlyPeakLanes256(p []float32, mv *[16]float32, iv *[16]int32) bool { return false }
+
+func dlyAccErrAvx2Sample(h, x []float32, y float32, accErr []float32) (s, x2Sum float32) {
+	return dlyAccErrAvx2SampleRef(h, x, y, accErr)
+}
