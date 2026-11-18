@@ -156,6 +156,18 @@ func dlyAxpy(h, x []float32, alpha float32) {
 	x = x[:n:n]
 	a := archsimd.BroadcastFloat32x4(alpha)
 	i := 0
+	for ; i < n-15; i += 16 {
+		hh := (*[16]float32)(h[i : i+16])
+		xx := (*[16]float32)(x[i : i+16])
+		h0 := dlyLd4((*[4]float32)(hh[0:4])).Add(a.Mul(dlyLd4((*[4]float32)(xx[0:4]))))
+		h1 := dlyLd4((*[4]float32)(hh[4:8])).Add(a.Mul(dlyLd4((*[4]float32)(xx[4:8]))))
+		h2 := dlyLd4((*[4]float32)(hh[8:12])).Add(a.Mul(dlyLd4((*[4]float32)(xx[8:12]))))
+		h3 := dlyLd4((*[4]float32)(hh[12:16])).Add(a.Mul(dlyLd4((*[4]float32)(xx[12:16]))))
+		h0.StoreArray((*[4]float32)(hh[0:4]))
+		h1.StoreArray((*[4]float32)(hh[4:8]))
+		h2.StoreArray((*[4]float32)(hh[8:12]))
+		h3.StoreArray((*[4]float32)(hh[12:16]))
+	}
 	for ; i < n-7; i += 8 {
 		hh := (*[8]float32)(h[i : i+8])
 		xx := (*[8]float32)(x[i : i+8])
@@ -352,18 +364,41 @@ func dlyAxpyFma(h, x []float32, alpha float32) {
 		dlyAxpyFmaRef(h, x, alpha)
 		return
 	}
+	x = x[:len(h)]
+	i := dlyAxpyFma256(h, x, alpha)
+	for ; i < len(h); i++ {
+		h[i] = fmaf(x[i], alpha, h[i])
+	}
+}
+
+// dlyAxpyFma256 runs dlyAxpyFma over the whole groups of 8 and returns
+// their length. It does not inline, so alpha does not cross the
+// VZEROUPPER as a float32 (see dlyReduceAvx2Lanes).
+//
+//go:noinline
+func dlyAxpyFma256(h, x []float32, alpha float32) int {
 	n := len(h)
 	x = x[:n:n]
 	a := archsimd.BroadcastFloat32x8(alpha)
 	i := 0
+	for ; i < n-31; i += 32 {
+		hh := (*[32]float32)(h[i : i+32])
+		xx := (*[32]float32)(x[i : i+32])
+		h0 := dlyLd8((*[8]float32)(xx[0:8])).MulAdd(a, dlyLd8((*[8]float32)(hh[0:8])))
+		h1 := dlyLd8((*[8]float32)(xx[8:16])).MulAdd(a, dlyLd8((*[8]float32)(hh[8:16])))
+		h2 := dlyLd8((*[8]float32)(xx[16:24])).MulAdd(a, dlyLd8((*[8]float32)(hh[16:24])))
+		h3 := dlyLd8((*[8]float32)(xx[24:32])).MulAdd(a, dlyLd8((*[8]float32)(hh[24:32])))
+		h0.StoreArray((*[8]float32)(hh[0:8]))
+		h1.StoreArray((*[8]float32)(hh[8:16]))
+		h2.StoreArray((*[8]float32)(hh[16:24]))
+		h3.StoreArray((*[8]float32)(hh[24:32]))
+	}
 	for ; i < n-7; i += 8 {
 		hp := (*[8]float32)(h[i : i+8])
 		dlyLd8((*[8]float32)(x[i:i+8])).MulAdd(a, dlyLd8(hp)).StoreArray(hp)
 	}
 	archsimd.ClearAVXUpperBits()
-	for ; i < n; i++ {
-		h[i] = fmaf(x[i], alpha, h[i])
-	}
+	return i
 }
 
 var dlyPeakSimd = dlyUseAvx
