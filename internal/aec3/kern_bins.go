@@ -34,9 +34,18 @@ func kernSubGeneric(x, y, z []float32) {
 }
 
 // kernSumRowsGeneric sets dst to the sum of the rows, accumulated per bin in
-// row order starting from +0.
+// row order starting from +0. Four rows are added per pass over the bins;
+// each bin still sees ((((+0 + r0) + r1) + r2) + r3) + ..., one addition per
+// row in row order.
 func kernSumRowsGeneric(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]float32) {
 	*dst = [FftLengthBy2Plus1]float32{}
+	for len(rows) >= 4 {
+		r0, r1, r2, r3 := rows[0], rows[1], rows[2], rows[3]
+		for k := range dst {
+			dst[k] = dst[k] + r0[k] + r1[k] + r2[k] + r3[k]
+		}
+		rows = rows[4:]
+	}
 	for _, r := range rows {
 		for k := range dst {
 			dst[k] += r[k]
@@ -50,9 +59,9 @@ func kernUnpackGeneric(v *[FftLength]float32, re, im *[FftLengthBy2Plus1]float32
 	re[FftLengthBy2] = v[1]
 	im[0] = 0
 	im[FftLengthBy2] = 0
-	for k, j := 1, 2; k < FftLengthBy2; k, j = k+1, j+2 {
-		re[k] = v[j]
-		im[k] = v[j+1]
+	for k := 1; k < FftLengthBy2; k++ {
+		re[k] = v[2*k]
+		im[k] = v[2*k+1]
 	}
 }
 
@@ -60,9 +69,9 @@ func kernUnpackGeneric(v *[FftLength]float32, re, im *[FftLengthBy2Plus1]float32
 func kernPackGeneric(re, im *[FftLengthBy2Plus1]float32, v *[FftLength]float32) {
 	v[0] = re[0]
 	v[1] = re[FftLengthBy2]
-	for k, j := 1, 2; k < FftLengthBy2; k, j = k+1, j+2 {
-		v[j] = re[k]
-		v[j+1] = im[k]
+	for k := 1; k < FftLengthBy2; k++ {
+		v[2*k] = re[k]
+		v[2*k+1] = im[k]
 	}
 }
 
@@ -226,12 +235,22 @@ func kernNoiseInitialUpdateGeneric(n, ini *[FftLengthBy2Plus1]float32) {
 // kernFir3Generic sets out[k] = ((+0 + x[k]*h0) + x[k-1]*h1) + x[k-2]*h2 for
 // k in [from, to] (from >= 2).
 func kernFir3Generic(x []float32, h *[3]float32, out []float32, from, to int) {
-	for k := from; k <= to; k++ {
+	if to < from {
+		return
+	}
+	// x0[i], x1[i] and x2[i] are x[k], x[k-1] and x[k-2] for k = from+i.
+	o := out[from : to+1]
+	x0 := x[from : to+1]
+	x1 := x[from-1 : to]
+	x2 := x[from-2 : to-1]
+	x0, x1, x2 = x0[:len(o)], x1[:len(o)], x2[:len(o)]
+	h0, h1, h2 := h[0], h[1], h[2]
+	for i := range o {
 		var tmp float32
-		for j := range h {
-			tmp += float32(x[k-j] * h[j])
-		}
-		out[k] = tmp
+		tmp += float32(x0[i] * h0)
+		tmp += float32(x1[i] * h1)
+		tmp += float32(x2[i] * h2)
+		o[i] = tmp
 	}
 }
 
