@@ -2,6 +2,7 @@ package goaec3
 
 import (
 	"fmt"
+	"reflect"
 	"runtime"
 	"testing"
 )
@@ -51,6 +52,95 @@ func TestNewFootprint(t *testing.T) {
 		t.Logf("%s: %d B, %d objects per canceller", c.name, bytes, objects)
 		if objects > 250 {
 			t.Errorf("%s: %d heap objects per canceller, want at most 250", c.name, objects)
+		}
+	}
+}
+
+// pointerSlots counts the non-nil pointers (pointers, slices, interfaces,
+// maps, channels and functions) reachable from v: the words the garbage
+// collector follows when it marks the value.
+func pointerSlots(v reflect.Value, seen map[uintptr]bool) int {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return 0
+		}
+		if seen[v.Pointer()] {
+			return 1
+		}
+		seen[v.Pointer()] = true
+		return 1 + pointerSlots(v.Elem(), seen)
+	case reflect.Slice:
+		if v.IsNil() || v.Cap() == 0 {
+			return 0
+		}
+		n := 1
+		if hasPointers(v.Type().Elem()) {
+			for i := 0; i < v.Len(); i++ {
+				n += pointerSlots(v.Index(i), seen)
+			}
+		}
+		return n
+	case reflect.Struct:
+		n := 0
+		for i := 0; i < v.NumField(); i++ {
+			n += pointerSlots(v.Field(i), seen)
+		}
+		return n
+	case reflect.Array:
+		n := 0
+		if hasPointers(v.Type().Elem()) {
+			for i := 0; i < v.Len(); i++ {
+				n += pointerSlots(v.Index(i), seen)
+			}
+		}
+		return n
+	case reflect.Interface:
+		if v.IsNil() {
+			return 0
+		}
+		return 1 + pointerSlots(v.Elem(), seen)
+	case reflect.Map, reflect.Chan, reflect.Func:
+		if v.IsNil() {
+			return 0
+		}
+		return 1
+	}
+	return 0
+}
+
+func hasPointers(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Interface, reflect.Map, reflect.Chan, reflect.Func,
+		reflect.String, reflect.UnsafePointer:
+		return true
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			if hasPointers(t.Field(i).Type) {
+				return true
+			}
+		}
+	case reflect.Array:
+		return hasPointers(t.Elem())
+	}
+	return false
+}
+
+// TestPointerSlots bounds the pointers the garbage collector follows per
+// canceller. The render rings and the adaptive filter coefficients are
+// pointer-free arrays with computed views, so the count does not grow with
+// the buffer sizes.
+func TestPointerSlots(t *testing.T) {
+	limits := []int{200, 240, 280}
+	for i, c := range footprintCases {
+		ec, err := New(DefaultConfig(), c.rate, c.ch, c.ch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := pointerSlots(reflect.ValueOf(ec), map[uintptr]bool{})
+		t.Logf("%s: %d pointer slots per canceller", c.name, n)
+		if n > limits[i] {
+			t.Errorf("%s: %d pointer slots per canceller, want at most %d", c.name, n, limits[i])
 		}
 	}
 }
