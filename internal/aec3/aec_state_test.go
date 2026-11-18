@@ -61,12 +61,12 @@ func newStTestRig(cfg EchoCanceller3Config, numRender, numCapture int) *stTestRi
 func (r *stTestRig) step() {
 	size := r.spec.Size
 	r.write = (r.write - 1 + size) % size
-	for ch := 0; ch < r.blocks.Buffer[0].NumChannels(); ch++ {
-		v := r.blocks.Buffer[r.write].View(0, ch)
+	for ch := 0; ch < r.blocks.At(0).NumChannels(); ch++ {
+		v := r.blocks.At(r.write).View(0, ch)
 		for i := range v {
 			v[i] = float32(1000 * r.rng.NormFloat64())
 		}
-		s := &r.spec.Buffer[r.write][ch]
+		s := &r.spec.At(r.write)[ch]
 		for k := range s {
 			s[k] = float32(1.28e8 * r.rng.ExpFloat64())
 		}

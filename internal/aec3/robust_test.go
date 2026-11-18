@@ -112,7 +112,7 @@ func TestSetAudioBufferDelayIntRange(t *testing.T) {
 		}
 		b.AlignFromExternalDelay()
 		b.Reset()
-		if d := b.Delay(); d < -len(b.blocks.Buffer) || d > len(b.blocks.Buffer) {
+		if d := b.Delay(); d < -b.blocks.Size || d > b.blocks.Size {
 			t.Errorf("SetAudioBufferDelay(%d): delay %d after Reset", ms, d)
 		}
 	}

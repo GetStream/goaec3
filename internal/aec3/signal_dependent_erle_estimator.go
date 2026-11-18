@@ -247,7 +247,7 @@ func (s *SignalDependentErleEstimator) updateCorrectionFactors(X2 *[FftLengthBy2
 func (s *SignalDependentErleEstimator) computeEchoEstimatePerFilterSection(renderBuffer *RenderBuffer,
 	filterFrequencyResponses [][][FftLengthBy2Plus1]float32) {
 	spectrumRenderBuffer := renderBuffer.GetSpectrumBuffer()
-	numRenderChannels := len(spectrumRenderBuffer.Buffer[0])
+	numRenderChannels := len(spectrumRenderBuffer.At(0))
 	oneByNumRenderChannels := 1 / float32(numRenderChannels)
 	for captureCh := range s.S2SectionAccum {
 		idxRender := renderBuffer.Position()
@@ -256,8 +256,8 @@ func (s *SignalDependentErleEstimator) computeEchoEstimatePerFilterSection(rende
 			var X2Section, H2Section [FftLengthBy2Plus1]float32
 			blockLimit := min(s.sectionBoundariesBlocks[section+1], len(filterFrequencyResponses[captureCh]))
 			for block := s.sectionBoundariesBlocks[section]; block < blockLimit; block++ {
-				for renderCh := range spectrumRenderBuffer.Buffer[idxRender] {
-					x := &spectrumRenderBuffer.Buffer[idxRender][renderCh]
+				for renderCh := range spectrumRenderBuffer.At(idxRender) {
+					x := &spectrumRenderBuffer.At(idxRender)[renderCh]
 					for k := range X2Section {
 						X2Section[k] += float32(x[k] * oneByNumRenderChannels)
 					}

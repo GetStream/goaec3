@@ -99,7 +99,7 @@ func (e *subtEnv) step(sim *SubtSim) bool {
 	for ch := 0; ch < e.sc.numRender; ch++ {
 		hs := e.hist[ch]
 		copy(hs, hs[aec3.BlockSize:])
-		x := e.bb.Buffer[pos].View(0, ch)
+		x := e.bb.At(pos).View(0, ch)
 		for i := range x {
 			n := e.t*aec3.BlockSize + i
 			mod := 0.6 + 0.4*math.Sin(2*math.Pi*float64(n)/(3000+500*float64(ch)))
@@ -111,11 +111,11 @@ func (e *subtEnv) step(sim *SubtSim) bool {
 			x[i] = float32(v)
 			hs[len(hs)-aec3.BlockSize+i] = float64(x[i])
 		}
-		X := &e.fb.Buffer[pos][ch]
+		X := &e.fb.At(pos)[ch]
 		e.fft.PaddedFft(x, e.old[ch], aec3.WindowRectangular, X)
 		copy(e.old[ch], x)
-		X.Spectrum(aec3.OptNone, e.sb.Buffer[pos][ch][:])
-		sim.SetRender(pos, ch, x, X, &e.sb.Buffer[pos][ch])
+		X.Spectrum(aec3.OptNone, e.sb.At(pos)[ch][:])
+		sim.SetRender(pos, ch, x, X, &e.sb.At(pos)[ch])
 	}
 	read := (pos + subtReadLag) % subtRenderSize
 	e.fb.Write, e.sb.Write, e.bb.Write = pos, pos, pos

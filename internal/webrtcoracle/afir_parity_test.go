@@ -52,7 +52,7 @@ func (e *afirEnv) push(rng *rand.Rand) {
 	if e.t%60 == 1 {
 		e.toneBin = 3 + rng.Float64()*55
 	}
-	blk := &e.bb.Buffer[pos]
+	blk := e.bb.At(pos)
 	for band := 0; band < e.bands; band++ {
 		for ch := 0; ch < e.channels; ch++ {
 			x := blk.View(band, ch)
@@ -76,12 +76,12 @@ func (e *afirEnv) push(rng *rand.Rand) {
 	}
 	for ch := 0; ch < e.channels; ch++ {
 		x := blk.View(0, ch)
-		X := &e.fb.Buffer[pos][ch]
+		X := &e.fb.At(pos)[ch]
 		e.fft.PaddedFft(x, e.old[ch], aec3.WindowRectangular, X)
 		copy(e.old[ch], x)
-		X.Spectrum(aec3.OptNone, e.sb.Buffer[pos][ch][:])
+		X.Spectrum(aec3.OptNone, e.sb.At(pos)[ch][:])
 		e.c.SetFft(pos, ch, X)
-		e.c.SetSpectrum(pos, ch, &e.sb.Buffer[pos][ch])
+		e.c.SetSpectrum(pos, ch, &e.sb.At(pos)[ch])
 	}
 	e.fb.Read, e.sb.Read, e.bb.Read = pos, pos, pos
 	e.c.SetRead(pos, pos, pos)

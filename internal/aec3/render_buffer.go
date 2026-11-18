@@ -12,17 +12,19 @@ func NewRenderBuffer(blockBuffer *BlockBuffer, spectrumBuffer *SpectrumBuffer, f
 	return &RenderBuffer{blockBuffer: blockBuffer, spectrumBuffer: spectrumBuffer, fftBuffer: fftBuffer}
 }
 
-func (r *RenderBuffer) GetBlock(bufferOffsetBlocks int) *Block {
+// GetBlock returns a view of the block at the given offset from the read
+// position.
+func (r *RenderBuffer) GetBlock(bufferOffsetBlocks int) Block {
 	p := r.blockBuffer.OffsetIndex(r.blockBuffer.Read, bufferOffsetBlocks)
-	return &r.blockBuffer.Buffer[p]
+	return r.blockBuffer.At(p)
 }
 
 func (r *RenderBuffer) Spectrum(bufferOffsetFfts int) [][FftLengthBy2Plus1]float32 {
 	p := r.spectrumBuffer.OffsetIndex(r.spectrumBuffer.Read, bufferOffsetFfts)
-	return r.spectrumBuffer.Buffer[p]
+	return r.spectrumBuffer.At(p)
 }
 
-func (r *RenderBuffer) GetFftBuffer() [][]FftData { return r.fftBuffer.Buffer }
+func (r *RenderBuffer) GetFftBuffer() *FftBuffer { return r.fftBuffer }
 
 func (r *RenderBuffer) Position() int { return r.fftBuffer.Read }
 
@@ -37,8 +39,8 @@ func (r *RenderBuffer) SpectralSum(numSpectra int, X2 *[FftLengthBy2Plus1]float3
 	*X2 = [FftLengthBy2Plus1]float32{}
 	position := r.spectrumBuffer.Read
 	for j := 0; j < numSpectra; j++ {
-		for c := range r.spectrumBuffer.Buffer[position] {
-			ch := &r.spectrumBuffer.Buffer[position][c]
+		for c := range r.spectrumBuffer.At(position) {
+			ch := &r.spectrumBuffer.At(position)[c]
 			for k := range X2 {
 				X2[k] += ch[k]
 			}
@@ -56,13 +58,13 @@ const rbMaxRows = 64
 // fit in rows.
 func (r *RenderBuffer) spectralRows(numSpectra int, rows *[rbMaxRows]*[FftLengthBy2Plus1]float32) (int, bool) {
 	sb := r.spectrumBuffer
-	if numSpectra*len(sb.Buffer[0]) > rbMaxRows {
+	if numSpectra*len(sb.At(0)) > rbMaxRows {
 		return 0, false
 	}
 	n := 0
 	position := sb.Read
 	for j := 0; j < numSpectra; j++ {
-		b := sb.Buffer[position]
+		b := sb.At(position)
 		for c := range b {
 			rows[n] = &b[c]
 			n++
@@ -78,7 +80,7 @@ func (r *RenderBuffer) spectralRows(numSpectra int, rows *[rbMaxRows]*[FftLength
 func (r *RenderBuffer) SpectralSums(numShorter, numLonger int, X2Shorter, X2Longer *[FftLengthBy2Plus1]float32) {
 	var rows [rbMaxRows]*[FftLengthBy2Plus1]float32
 	if n, ok := r.spectralRows(numLonger, &rows); ok {
-		kernSumRows(X2Shorter, rows[:numShorter*len(r.spectrumBuffer.Buffer[0])])
+		kernSumRows(X2Shorter, rows[:numShorter*len(r.spectrumBuffer.At(0))])
 		kernSumRows(X2Longer, rows[:n])
 		return
 	}
@@ -86,8 +88,8 @@ func (r *RenderBuffer) SpectralSums(numShorter, numLonger int, X2Shorter, X2Long
 	position := r.spectrumBuffer.Read
 	j := 0
 	for ; j < numShorter; j++ {
-		for c := range r.spectrumBuffer.Buffer[position] {
-			ch := &r.spectrumBuffer.Buffer[position][c]
+		for c := range r.spectrumBuffer.At(position) {
+			ch := &r.spectrumBuffer.At(position)[c]
 			for k := range X2Shorter {
 				X2Shorter[k] += ch[k]
 			}
@@ -96,8 +98,8 @@ func (r *RenderBuffer) SpectralSums(numShorter, numLonger int, X2Shorter, X2Long
 	}
 	*X2Longer = *X2Shorter
 	for ; j < numLonger; j++ {
-		for c := range r.spectrumBuffer.Buffer[position] {
-			ch := &r.spectrumBuffer.Buffer[position][c]
+		for c := range r.spectrumBuffer.At(position) {
+			ch := &r.spectrumBuffer.At(position)[c]
 			for k := range X2Longer {
 				X2Longer[k] += ch[k]
 			}

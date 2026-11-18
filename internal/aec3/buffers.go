@@ -39,9 +39,9 @@ func (r *ringIndex) UpdateReadIndex(offset int)  { r.Read = r.OffsetIndex(r.Read
 func (r *ringIndex) IncReadIndex()               { r.Read = r.IncIndex(r.Read) }
 func (r *ringIndex) DecReadIndex()               { r.Read = r.DecIndex(r.Read) }
 
-// The rings below keep all their slots in one backing array (one heap
-// object per ring rather than one per slot); each slot is a full slice
-// expression of its own part, so a slot never grows into its neighbour.
+// The rings below keep all their slots in one pointer-free backing array
+// and hand out slots as views computed from the slot index, so a ring is one
+// heap object that the garbage collector does not scan.
 
 // newFlat3 returns [n0][n1] slices of length length and capacity capacity,
 // all in one backing array.
@@ -62,51 +62,70 @@ func newFlat3(n0, n1, length, capacity int) [][][]float32 {
 	return v
 }
 
-// BlockBuffer is a ring of Blocks (block_buffer.h).
+// BlockBuffer is a ring of Blocks (block_buffer.h). The slots share one
+// pointer-free backing array; At returns a view of one slot.
 type BlockBuffer struct {
 	ringIndex
-	Buffer []Block
+	numBands    int
+	numChannels int
+	data        []float32
 }
 
 func NewBlockBuffer(size, numBands, numChannels int) *BlockBuffer {
-	b := &BlockBuffer{ringIndex: ringIndex{Size: size}, Buffer: make([]Block, size)}
-	n := numBands * numChannels * BlockSize
-	data := make([]float32, size*n)
-	for i := range b.Buffer {
-		b.Buffer[i] = Block{numBands: numBands, numChannels: numChannels, data: data[i*n : (i+1)*n : (i+1)*n]}
-	}
-	return b
+	return &BlockBuffer{ringIndex: ringIndex{Size: size}, numBands: numBands, numChannels: numChannels,
+		data: make([]float32, size*numBands*numChannels*BlockSize)}
 }
 
-// SpectrumBuffer is a ring of per-channel power spectra (spectrum_buffer.h).
+// At returns slot i as a Block that aliases the ring storage.
+func (b *BlockBuffer) At(i int) Block {
+	n := b.numBands * b.numChannels * BlockSize
+	return Block{numBands: b.numBands, numChannels: b.numChannels, data: b.data[i*n : (i+1)*n : (i+1)*n]}
+}
+
+func (b *BlockBuffer) NumBands() int    { return b.numBands }
+func (b *BlockBuffer) NumChannels() int { return b.numChannels }
+
+// SpectrumBuffer is a ring of per-channel power spectra (spectrum_buffer.h),
+// stored slot-major in one backing array.
 type SpectrumBuffer struct {
 	ringIndex
-	Buffer [][][FftLengthBy2Plus1]float32
+	numChannels int
+	data        [][FftLengthBy2Plus1]float32
 }
 
 func NewSpectrumBuffer(size, numChannels int) *SpectrumBuffer {
-	b := &SpectrumBuffer{ringIndex: ringIndex{Size: size}, Buffer: make([][][FftLengthBy2Plus1]float32, size)}
-	data := make([][FftLengthBy2Plus1]float32, size*numChannels)
-	for i := range b.Buffer {
-		b.Buffer[i] = data[i*numChannels : (i+1)*numChannels : (i+1)*numChannels]
-	}
-	return b
+	return &SpectrumBuffer{ringIndex: ringIndex{Size: size}, numChannels: numChannels,
+		data: make([][FftLengthBy2Plus1]float32, size*numChannels)}
 }
 
-// FftBuffer is a ring of per-channel FFTs (fft_buffer.h).
+// At returns the per-channel spectra of slot i.
+func (b *SpectrumBuffer) At(i int) [][FftLengthBy2Plus1]float32 {
+	n := b.numChannels
+	return b.data[i*n : (i+1)*n : (i+1)*n]
+}
+
+func (b *SpectrumBuffer) NumChannels() int { return b.numChannels }
+
+// FftBuffer is a ring of per-channel FFTs (fft_buffer.h), stored slot-major
+// in one backing array.
 type FftBuffer struct {
 	ringIndex
-	Buffer [][]FftData
+	numChannels int
+	data        []FftData
 }
 
 func NewFftBuffer(size, numChannels int) *FftBuffer {
-	b := &FftBuffer{ringIndex: ringIndex{Size: size}, Buffer: make([][]FftData, size)}
-	data := make([]FftData, size*numChannels)
-	for i := range b.Buffer {
-		b.Buffer[i] = data[i*numChannels : (i+1)*numChannels : (i+1)*numChannels]
-	}
-	return b
+	return &FftBuffer{ringIndex: ringIndex{Size: size}, numChannels: numChannels,
+		data: make([]FftData, size*numChannels)}
 }
+
+// At returns the per-channel FFTs of slot i.
+func (b *FftBuffer) At(i int) []FftData {
+	n := b.numChannels
+	return b.data[i*n : (i+1)*n : (i+1)*n]
+}
+
+func (b *FftBuffer) NumChannels() int { return b.numChannels }
 
 // DownsampledRenderBuffer is a ring of decimated samples
 // (downsampled_render_buffer.h).

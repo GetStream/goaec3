@@ -140,13 +140,13 @@ func (r *ResidualEchoEstimator) echoGeneratingPower(spectrumBuffer *SpectrumBuff
 	*X2 = [FftLengthBy2Plus1]float32{}
 	if r.numRenderChannels == 1 {
 		for k := idxStart; k != idxStop; k = spectrumBuffer.IncIndex(k) {
-			kernStdMax(X2[:], spectrumBuffer.Buffer[k][0][:], X2[:])
+			kernStdMax(X2[:], spectrumBuffer.At(k)[0][:], X2[:])
 		}
 	} else {
 		for k := idxStart; k != idxStop; k = spectrumBuffer.IncIndex(k) {
 			var renderPower [FftLengthBy2Plus1]float32
 			for ch := 0; ch < r.numRenderChannels; ch++ {
-				channelPower := &spectrumBuffer.Buffer[k][ch]
+				channelPower := &spectrumBuffer.At(k)[ch]
 				kernAdd(renderPower[:], channelPower[:], renderPower[:])
 			}
 			kernStdMax(X2[:], renderPower[:], X2[:])

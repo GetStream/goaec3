@@ -16,9 +16,9 @@ func afirTestRandFft(rng *rand.Rand, d *FftData, scale float64) {
 
 func afirTestRenderBuffer(rng *rand.Rand, size, numChannels, read int) *RenderBuffer {
 	fb := NewFftBuffer(size, numChannels)
-	for i := range fb.Buffer {
-		for ch := range fb.Buffer[i] {
-			afirTestRandFft(rng, &fb.Buffer[i][ch], 100)
+	for i := range fb.Size {
+		for ch := range fb.At(i) {
+			afirTestRandFft(rng, &fb.At(i)[ch], 100)
 		}
 	}
 	fb.Read = read

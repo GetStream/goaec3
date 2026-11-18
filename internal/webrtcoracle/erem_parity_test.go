@@ -126,7 +126,7 @@ func (e *eremEnv) step(sim *EremSim, saturate bool) bool {
 		for ch := 0; ch < e.sc.numRender; ch++ {
 			hs := e.hist[b][ch]
 			copy(hs, hs[aec3.BlockSize:])
-			x := e.bb.Buffer[pos].View(b, ch)
+			x := e.bb.At(pos).View(b, ch)
 			for i := range x {
 				n := e.t*aec3.BlockSize + i
 				mod := 0.6 + 0.4*math.Sin(2*math.Pi*float64(n)/(3000+500*float64(ch)))
@@ -145,13 +145,14 @@ func (e *eremEnv) step(sim *EremSim, saturate bool) bool {
 		}
 	}
 	for ch := 0; ch < e.sc.numRender; ch++ {
-		x := e.bb.Buffer[pos].View(0, ch)
-		X := &e.fb.Buffer[pos][ch]
+		x := e.bb.At(pos).View(0, ch)
+		X := &e.fb.At(pos)[ch]
 		e.fft.PaddedFft(x, e.old[ch], aec3.WindowRectangular, X)
 		copy(e.old[ch], x)
-		X.Spectrum(aec3.OptNone, e.sb.Buffer[pos][ch][:])
+		X.Spectrum(aec3.OptNone, e.sb.At(pos)[ch][:])
 	}
-	sim.SetRender(pos, &e.bb.Buffer[pos], e.fb.Buffer[pos], e.sb.Buffer[pos])
+	blk := e.bb.At(pos)
+	sim.SetRender(pos, &blk, e.fb.At(pos), e.sb.At(pos))
 	read := (pos + eremReadLag) % eremRenderSize
 	e.fb.Write, e.sb.Write, e.bb.Write = pos, pos, pos
 	e.fb.Read, e.sb.Read, e.bb.Read = read, read, read

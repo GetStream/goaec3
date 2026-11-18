@@ -97,12 +97,13 @@ func afirFreqRespBlockSse2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 func AdaptPartitions(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
 	data := renderBuffer.GetFftBuffer()
 	index := renderBuffer.Position()
-	numRenderChannels := len(data[index])
+	numRenderChannels := data.NumChannels()
 	for p := 0; p < numPartitions; p++ {
+		x := data.At(index)
 		for ch := 0; ch < numRenderChannels; ch++ {
-			afirAdaptAllGo(&data[index][ch], G, &H[p][ch])
+			afirAdaptAllGo(&x[ch], G, &H[p][ch])
 		}
-		if index < len(data)-1 {
+		if index < data.Size-1 {
 			index++
 		} else {
 			index = 0
@@ -122,14 +123,14 @@ func AdaptPartitionsSse2(renderBuffer *RenderBuffer, G *FftData, numPartitions i
 
 func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
 	data := renderBuffer.GetFftBuffer()
-	numRenderChannels := len(data[0])
+	numRenderChannels := data.NumChannels()
 	if afirHasTermKernels && numPartitions*numRenderChannels <= afirMaxTerms {
 		var xs, hs [afirMaxTerms]*FftData
 		n := afirTerms(data, renderBuffer.Position(), numPartitions, H, &xs, &hs)
 		afirAdaptTerms(xs[:n], hs[:n], G)
 		return
 	}
-	lim1 := min(len(data)-renderBuffer.Position(), numPartitions)
+	lim1 := min(data.Size-renderBuffer.Position(), numPartitions)
 	lim2 := numPartitions
 
 	xPartition := renderBuffer.Position()
@@ -138,7 +139,7 @@ func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G
 	for {
 		for ; p < limit; p, xPartition = p+1, xPartition+1 {
 			for ch := 0; ch < numRenderChannels; ch++ {
-				afirAdaptBlock(opt, &data[xPartition][ch], G, &H[p][ch])
+				afirAdaptBlock(opt, &data.At(xPartition)[ch], G, &H[p][ch])
 			}
 		}
 		xPartition = 0
@@ -154,7 +155,7 @@ func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G
 	for {
 		for ; p < limit; p, xPartition = p+1, xPartition+1 {
 			for ch := 0; ch < numRenderChannels; ch++ {
-				afirAdaptBinsGo(&data[xPartition][ch], G, &H[p][ch], FftLengthBy2, FftLengthBy2Plus1)
+				afirAdaptBinsGo(&data.At(xPartition)[ch], G, &H[p][ch], FftLengthBy2, FftLengthBy2Plus1)
 			}
 		}
 		xPartition = 0
@@ -179,12 +180,13 @@ func ApplyFilter(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S
 	S.Im = [FftLengthBy2Plus1]float32{}
 	data := renderBuffer.GetFftBuffer()
 	index := renderBuffer.Position()
-	numRenderChannels := len(data[index])
+	numRenderChannels := data.NumChannels()
 	for p := 0; p < numPartitions; p++ {
+		x := data.At(index)
 		for ch := 0; ch < numRenderChannels; ch++ {
-			afirApplyAllGo(&data[index][ch], &H[p][ch], S)
+			afirApplyAllGo(&x[ch], &H[p][ch], S)
 		}
-		if index < len(data)-1 {
+		if index < data.Size-1 {
 			index++
 		} else {
 			index = 0
@@ -204,7 +206,7 @@ func ApplyFilterSse2(renderBuffer *RenderBuffer, numPartitions int, H [][]FftDat
 
 func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
 	data := renderBuffer.GetFftBuffer()
-	numRenderChannels := len(data[0])
+	numRenderChannels := data.NumChannels()
 	if afirHasTermKernels && numPartitions*numRenderChannels <= afirMaxTerms {
 		var xs, hs [afirMaxTerms]*FftData
 		n := afirTerms(data, renderBuffer.Position(), numPartitions, H, &xs, &hs)
@@ -212,7 +214,7 @@ func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPa
 		return
 	}
 	S.Clear()
-	lim1 := min(len(data)-renderBuffer.Position(), numPartitions)
+	lim1 := min(data.Size-renderBuffer.Position(), numPartitions)
 	lim2 := numPartitions
 
 	xPartition := renderBuffer.Position()
@@ -221,7 +223,7 @@ func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPa
 	for {
 		for ; p < limit; p, xPartition = p+1, xPartition+1 {
 			for ch := 0; ch < numRenderChannels; ch++ {
-				afirApplyBlock(opt, &data[xPartition][ch], &H[p][ch], S)
+				afirApplyBlock(opt, &data.At(xPartition)[ch], &H[p][ch], S)
 			}
 		}
 		limit = lim2
@@ -237,7 +239,7 @@ func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPa
 	for {
 		for ; p < limit; p, xPartition = p+1, xPartition+1 {
 			for ch := 0; ch < numRenderChannels; ch++ {
-				afirApplyBinsGo(&data[xPartition][ch], &H[p][ch], S, FftLengthBy2, FftLengthBy2Plus1)
+				afirApplyBinsGo(&data.At(xPartition)[ch], &H[p][ch], S, FftLengthBy2, FftLengthBy2Plus1)
 			}
 		}
 		limit = lim2
@@ -256,14 +258,14 @@ const afirMaxTerms = 64
 // the C++ accumulation order: partition-major, channel-minor, with the render
 // ring index running from the read position and wrapping to 0 exactly as
 // the lim1/lim2 loops do. It returns the number of pairs.
-func afirTerms(data [][]FftData, position, numPartitions int, H [][]FftData, xs, hs *[afirMaxTerms]*FftData) int {
+func afirTerms(data *FftBuffer, position, numPartitions int, H [][]FftData, xs, hs *[afirMaxTerms]*FftData) int {
 	n := 0
 	xPartition := position
 	for p := 0; p < numPartitions; p++ {
-		if xPartition == len(data) {
+		if xPartition == data.Size {
 			xPartition = 0
 		}
-		xp, hp := data[xPartition], H[p]
+		xp, hp := data.At(xPartition), H[p]
 		hp = hp[:len(xp)]
 		for ch := range xp {
 			xs[n], hs[n] = &xp[ch], &hp[ch]

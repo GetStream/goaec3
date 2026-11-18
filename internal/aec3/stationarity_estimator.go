@@ -151,11 +151,11 @@ func (s *StationarityEstimator) estimateBandStationarity(spectrumBuffer *Spectru
 	indexes *[stWindowLength]int, band int) bool {
 	const thrStationarity float32 = 10
 	var acumPower float32
-	numRenderChannels := len(spectrumBuffer.Buffer[0])
+	numRenderChannels := len(spectrumBuffer.At(0))
 	oneByNumChannels := 1 / float32(numRenderChannels)
 	for _, idx := range indexes {
 		for ch := 0; ch < numRenderChannels; ch++ {
-			acumPower += float32(spectrumBuffer.Buffer[idx][ch][band] * oneByNumChannels)
+			acumPower += float32(spectrumBuffer.At(idx)[ch][band] * oneByNumChannels)
 		}
 	}
 	acumPower += averageReverb[band]

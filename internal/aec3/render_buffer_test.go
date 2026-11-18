@@ -11,9 +11,9 @@ func rbSpectralSumRef(sb *SpectrumBuffer, numSpectra int, X2 *[FftLengthBy2Plus1
 	*X2 = [FftLengthBy2Plus1]float32{}
 	position := sb.Read
 	for j := 0; j < numSpectra; j++ {
-		for c := range sb.Buffer[position] {
+		for c := range sb.At(position) {
 			for k := range X2 {
-				X2[k] += sb.Buffer[position][c][k]
+				X2[k] += sb.At(position)[c][k]
 			}
 		}
 		position = sb.IncIndex(position)
@@ -26,9 +26,9 @@ func TestRenderBufferSpectralSums(t *testing.T) {
 		size := 10 + rng.Intn(40)
 		nch := 1 + rng.Intn(4)
 		sb := NewSpectrumBuffer(size, nch)
-		for i := range sb.Buffer {
-			for c := range sb.Buffer[i] {
-				copy(sb.Buffer[i][c][:], kernEdgeVec(rng, FftLengthBy2Plus1))
+		for i := range sb.Size {
+			for c := range sb.At(i) {
+				copy(sb.At(i)[c][:], kernEdgeVec(rng, FftLengthBy2Plus1))
 			}
 		}
 		sb.Read = rng.Intn(size)

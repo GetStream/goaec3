@@ -345,7 +345,7 @@ func (a *AecState) HandleEchoPathChange(echoPathVariability EchoPathVariability)
 
 func stComputeAvgRenderReverb(spectrumBuffer *SpectrumBuffer, delayBlocks int, reverbDecay float32,
 	reverbModel *ReverbModel, reverbPowerSpectrum *[FftLengthBy2Plus1]float32) {
-	numRenderChannels := len(spectrumBuffer.Buffer[0])
+	numRenderChannels := len(spectrumBuffer.At(0))
 	idxAtDelay := spectrumBuffer.OffsetIndex(spectrumBuffer.Read, delayBlocks)
 	idxPast := spectrumBuffer.IncIndex(idxAtDelay)
 	var X2Data [FftLengthBy2Plus1]float32
@@ -359,13 +359,13 @@ func stComputeAvgRenderReverb(spectrumBuffer *SpectrumBuffer, delayBlocks int, r
 			normalizer := 1 / float32(numRenderChannels)
 			kernScale(renderPower[:], normalizer, renderPower[:])
 		}
-		averageChannels(spectrumBuffer.Buffer[idxPast], &X2Data)
+		averageChannels(spectrumBuffer.At(idxPast), &X2Data)
 		reverbModel.UpdateReverbNoFreqShaping(X2Data[:], 1, reverbDecay)
-		averageChannels(spectrumBuffer.Buffer[idxAtDelay], &X2Data)
+		averageChannels(spectrumBuffer.At(idxAtDelay), &X2Data)
 		X2 = &X2Data
 	} else {
-		reverbModel.UpdateReverbNoFreqShaping(spectrumBuffer.Buffer[idxPast][0][:], 1, reverbDecay)
-		X2 = &spectrumBuffer.Buffer[idxAtDelay][0]
+		reverbModel.UpdateReverbNoFreqShaping(spectrumBuffer.At(idxPast)[0][:], 1, reverbDecay)
+		X2 = &spectrumBuffer.At(idxAtDelay)[0]
 	}
 	reverbPower := reverbModel.Reverb()
 	kernAdd(X2[:], reverbPower[:], reverbPowerSpectrum[:])
@@ -425,7 +425,7 @@ func (a *AecState) Update(externalDelay *DelayEstimate, adaptiveFilterFrequencyR
 		renderBuffer.Spectrum(a.delayState.minFilterDelay), Y2)
 
 	if a.config.EpStrength.EchoCanSaturate {
-		a.saturationDetector.Update(alignedRenderBlock, a.SaturatedCapture(), a.UsableLinearEstimate(),
+		a.saturationDetector.Update(&alignedRenderBlock, a.SaturatedCapture(), a.UsableLinearEstimate(),
 			subtractorOutput, maxEchoPathGain)
 	}
 

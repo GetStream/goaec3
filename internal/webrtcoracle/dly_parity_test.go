@@ -418,16 +418,16 @@ func dlyCompareRdb(t *testing.T, what string, g *aec3.RenderDelayBuffer, c *DlyR
 	}
 	var blocks, spectra, re, im []float32
 	for i := 0; i < bb.Size; i++ {
-		blk := &bb.Buffer[i]
+		blk := bb.At(i)
 		for band := 0; band < blk.NumBands(); band++ {
 			for ch := 0; ch < blk.NumChannels(); ch++ {
 				blocks = append(blocks, blk.View(band, ch)...)
 			}
 		}
-		for ch := range sb.Buffer[i] {
-			spectra = append(spectra, sb.Buffer[i][ch][:]...)
-			re = append(re, fb[i][ch].Re[:]...)
-			im = append(im, fb[i][ch].Im[:]...)
+		for ch := range sb.At(i) {
+			spectra = append(spectra, sb.At(i)[ch][:]...)
+			re = append(re, fb.At(i)[ch].Re[:]...)
+			im = append(im, fb.At(i)[ch].Im[:]...)
 		}
 	}
 	type pair struct {
@@ -545,7 +545,7 @@ func dlyRunRdbParity(t *testing.T, withFft bool) {
 					// Keep the applied delay inside the ring, as the C++
 					// index helpers require.
 					d := ri - captureCalls + ms/4 - cfg.Delay.DelayHeadroomSamples/aec3.BlockSize
-					if d >= 0 && d < len(g.GetRenderBuffer().GetBlockBuffer().Buffer) {
+					if d >= 0 && d < g.GetRenderBuffer().GetBlockBuffer().Size {
 						g.AlignFromExternalDelay()
 						c.AlignFromExternalDelay()
 					}

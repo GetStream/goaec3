@@ -130,12 +130,12 @@ func (r *StRender) Free() { C.st_render_free(r.c) }
 
 // SetBlock writes band 0 of channel ch in slot.
 func (r *StRender) SetBlock(slot, ch int, x []float32) {
-	copy(r.Blocks.Buffer[slot].View(0, ch), x)
+	copy(r.Blocks.At(slot).View(0, ch), x)
 	C.st_render_set_block(r.c, C.int(slot), C.int(ch), stFs(x))
 }
 
 func (r *StRender) SetSpectrum(slot, ch int, x2 *[aec3.FftLengthBy2Plus1]float32) {
-	r.Spectra.Buffer[slot][ch] = *x2
+	r.Spectra.At(slot)[ch] = *x2
 	C.st_render_set_spectrum(r.c, C.int(slot), C.int(ch), stF(&x2[0]))
 }
 

@@ -123,12 +123,12 @@ func NewSgainHarness(cfg *aec3.EchoCanceller3Config, opt aec3.Aec3Optimization, 
 func (h *SgainHarness) Free() { C.sgain_free(h.c) }
 
 func (h *SgainHarness) SetRenderBlock(slot, ch int, x []float32) {
-	copy(h.Blocks.Buffer[slot].View(0, ch), x)
+	copy(h.Blocks.At(slot).View(0, ch), x)
 	C.sgain_set_render_block(h.c, C.int(slot), C.int(ch), sgainF(x))
 }
 
 func (h *SgainHarness) SetRenderSpectrum(slot, ch int, x2 *[aec3.FftLengthBy2Plus1]float32) {
-	h.Spectra.Buffer[slot][ch] = *x2
+	h.Spectra.At(slot)[ch] = *x2
 	C.sgain_set_render_spectrum(h.c, C.int(slot), C.int(ch), (*C.float)(unsafe.Pointer(&x2[0])))
 }
 

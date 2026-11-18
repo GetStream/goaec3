@@ -126,12 +126,12 @@ func TestRenderSignalAnalyzerMatchesBranchingFormulation(t *testing.T) {
 		for step := 0; step < 400; step++ {
 			p := rng.Intn(size)
 			sb.Read, bb.Read = p, p
-			for i := range sb.Buffer {
-				for ch := range sb.Buffer[i] {
-					rsaTestSpectrum(rng, &sb.Buffer[i][ch])
+			for i := range sb.Size {
+				for ch := range sb.At(i) {
+					rsaTestSpectrum(rng, &sb.At(i)[ch])
 				}
 			}
-			b := &bb.Buffer[p]
+			b := bb.At(p)
 			scale := []float32{10, 1000, 30000}[rng.Intn(3)]
 			for band := 0; band < numBands; band++ {
 				for ch := 0; ch < numChannels; ch++ {
@@ -170,14 +170,14 @@ func BenchmarkRenderSignalAnalyzer(b *testing.B) {
 	bb := NewBlockBuffer(size, 1, 1)
 	sb := NewSpectrumBuffer(size, 1)
 	rb := NewRenderBuffer(bb, sb, NewFftBuffer(size, 1))
-	for i := range sb.Buffer {
-		x := &sb.Buffer[i][0]
+	for i := range sb.Size {
+		x := &sb.At(i)[0]
 		level := float32(1000)
 		for k := range x {
 			x[k] = level * float32(rng.ExpFloat64())
 		}
 		x[rng.Intn(FftLengthBy2Plus1)] *= 300
-		v := bb.Buffer[i].View(0, 0)
+		v := bb.At(i).View(0, 0)
 		for k := range v {
 			v[k] = 3000 * float32(rng.NormFloat64())
 		}

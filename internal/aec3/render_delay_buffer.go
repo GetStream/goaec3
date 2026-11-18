@@ -257,7 +257,7 @@ func (r *RenderDelayBuffer) AlignFromExternalDelay() {
 func (r *RenderDelayBuffer) Delay() int { return r.computeDelay() }
 
 // MaxDelay returns the maximum buffer delay.
-func (r *RenderDelayBuffer) MaxDelay() int { return len(r.blocks.Buffer) - 1 - r.bufferHeadroom }
+func (r *RenderDelayBuffer) MaxDelay() int { return r.blocks.Size - 1 - r.bufferHeadroom }
 
 // GetRenderBuffer returns the render buffer for the echo remover.
 func (r *RenderDelayBuffer) GetRenderBuffer() *RenderBuffer { return r.echoRemoverBuffer }
@@ -304,7 +304,7 @@ func (r *RenderDelayBuffer) insertBlock(block *Block, previousWrite int) {
 	ds := r.renderDs
 	f := r.ffts
 	s := r.spectra
-	dst := &b.Buffer[b.Write]
+	dst := b.At(b.Write)
 	numBands := dst.NumBands()
 	numRenderChannels := dst.NumChannels()
 	for band := 0; band < numBands; band++ {
@@ -325,16 +325,16 @@ func (r *RenderDelayBuffer) insertBlock(block *Block, previousWrite int) {
 	}
 
 	var downmixedRender [BlockSize]float32
-	r.renderMixer.ProduceOutput(dst, downmixedRender[:])
+	r.renderMixer.ProduceOutput(&dst, downmixedRender[:])
 	r.renderDecimator.Decimate(downmixedRender[:], ds)
 	out := lr.Buffer[lr.Write : lr.Write+len(ds)]
 	for i := range ds {
 		out[i] = ds[len(ds)-1-i]
 	}
 	for channel := 0; channel < numRenderChannels; channel++ {
-		r.fft.PaddedFft(dst.View(0, channel), b.Buffer[previousWrite].View(0, channel), WindowRectangular,
-			&f.Buffer[f.Write][channel])
-		f.Buffer[f.Write][channel].Spectrum(r.optimization, s.Buffer[s.Write][channel][:])
+		r.fft.PaddedFft(dst.View(0, channel), b.At(previousWrite).View(0, channel), WindowRectangular,
+			&f.At(f.Write)[channel])
+		f.At(f.Write)[channel].Spectrum(r.optimization, s.At(s.Write)[channel][:])
 	}
 }
 

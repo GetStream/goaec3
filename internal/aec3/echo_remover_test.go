@@ -40,7 +40,7 @@ func newErTestRig(cfg *EchoCanceller3Config, rate, nr, nc int) *erTestRig {
 func (r *erTestRig) step(withLinear bool) {
 	r.t++
 	pos := (r.fb.Write - 1 + erTestRingSize) % erTestRingSize
-	blk := &r.bb.Buffer[pos]
+	blk := r.bb.At(pos)
 	for b := 0; b < blk.NumBands(); b++ {
 		for ch := 0; ch < blk.NumChannels(); ch++ {
 			x := blk.View(b, ch)
@@ -51,14 +51,14 @@ func (r *erTestRig) step(withLinear bool) {
 	}
 	for ch := 0; ch < blk.NumChannels(); ch++ {
 		x := blk.View(0, ch)
-		r.fft.PaddedFft(x, r.old[ch], WindowRectangular, &r.fb.Buffer[pos][ch])
+		r.fft.PaddedFft(x, r.old[ch], WindowRectangular, &r.fb.At(pos)[ch])
 		copy(r.old[ch], x)
-		r.fb.Buffer[pos][ch].Spectrum(OptNone, r.sb.Buffer[pos][ch][:])
+		r.fb.At(pos)[ch].Spectrum(OptNone, r.sb.At(pos)[ch][:])
 	}
 	read := (pos + 1) % erTestRingSize
 	r.fb.Write, r.sb.Write, r.bb.Write = pos, pos, pos
 	r.fb.Read, r.sb.Read, r.bb.Read = read, read, read
-	prev := &r.bb.Buffer[read]
+	prev := r.bb.At(read)
 	for b := 0; b < r.capture.NumBands(); b++ {
 		for ch := 0; ch < r.capture.NumChannels(); ch++ {
 			y := r.capture.View(b, ch)

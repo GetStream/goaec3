@@ -205,8 +205,9 @@ func (f *FilterAnalyzer) analyzeRegion(filtersTimeDomain [][]float32, renderBuff
 		f.filterDelaysBlocks[ch] = stCh.peakIndex >> BlockSizeLog2
 		f.updateFilterGain(f.hHighpass[ch], stCh)
 		stCh.filterLengthBlocks = int(float32(len(filtersTimeDomain[ch])) * oneByBlockSize)
+		xBlock := renderBuffer.GetBlock(-f.filterDelaysBlocks[ch])
 		stCh.consistentEstimate = stCh.consistentFilterDetector.Detect(f.hHighpass[ch], f.region,
-			renderBuffer.GetBlock(-f.filterDelaysBlocks[ch]), stCh.peakIndex, f.filterDelaysBlocks[ch])
+			&xBlock, stCh.peakIndex, f.filterDelaysBlocks[ch])
 	}
 }
 

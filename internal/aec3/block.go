@@ -20,8 +20,8 @@ func NewBlockFilled(numBands, numChannels int, v float32) Block {
 	return b
 }
 
-func (b *Block) NumBands() int    { return b.numBands }
-func (b *Block) NumChannels() int { return b.numChannels }
+func (b Block) NumBands() int    { return b.numBands }
+func (b Block) NumChannels() int { return b.numChannels }
 
 func (b *Block) SetNumChannels(numChannels int) {
 	b.numChannels = numChannels
@@ -35,7 +35,7 @@ func (b *Block) SetNumChannels(numChannels int) {
 }
 
 // View returns the BlockSize samples of one band/channel.
-func (b *Block) View(band, channel int) []float32 {
+func (b Block) View(band, channel int) []float32 {
 	i := (band*b.numChannels + channel) * BlockSize
 	return b.data[i : i+BlockSize : i+BlockSize]
 }

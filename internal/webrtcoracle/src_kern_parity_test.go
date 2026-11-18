@@ -177,10 +177,10 @@ func TestSrcAdaptiveFilterKernelsParity(t *testing.T) {
 				rb := aec3.NewRenderBuffer(aec3.NewBlockBuffer(size, 1, numCh), aec3.NewSpectrumBuffer(size, numCh), fb)
 				c := NewSrcRenderBuffer(size, numCh)
 				for iter := 0; iter < 150; iter++ {
-					for i := range fb.Buffer {
-						for ch := range fb.Buffer[i] {
-							srcRandFft(rng, &fb.Buffer[i][ch], 3000)
-							c.SetFft(i, ch, &fb.Buffer[i][ch])
+					for i := range fb.Size {
+						for ch := range fb.At(i) {
+							srcRandFft(rng, &fb.At(i)[ch], 3000)
+							c.SetFft(i, ch, &fb.At(i)[ch])
 						}
 					}
 					fb.Read = rng.Intn(size)

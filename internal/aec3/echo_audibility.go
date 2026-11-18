@@ -66,14 +66,14 @@ func (e *EchoAudibility) updateRenderNoiseEstimator(spectrumBuffer *SpectrumBuff
 	}
 	if e.nonZeroRenderSeen {
 		for idx := e.renderSpectrumWritePrev; idx != renderSpectrumWriteCurrent; idx = spectrumBuffer.DecIndex(idx) {
-			e.renderStationarity.UpdateNoiseEstimator(spectrumBuffer.Buffer[idx])
+			e.renderStationarity.UpdateNoiseEstimator(spectrumBuffer.At(idx))
 		}
 	}
 	e.renderSpectrumWritePrev = renderSpectrumWriteCurrent
 }
 
 func (e *EchoAudibility) isRenderTooLow(blockBuffer *BlockBuffer) bool {
-	numRenderChannels := blockBuffer.Buffer[0].NumChannels()
+	numRenderChannels := blockBuffer.At(0).NumChannels()
 	tooLow := false
 	renderBlockWriteCurrent := blockBuffer.Write
 	if renderBlockWriteCurrent == e.renderBlockWritePrev {
@@ -84,7 +84,7 @@ func (e *EchoAudibility) isRenderTooLow(blockBuffer *BlockBuffer) bool {
 			for ch := 0; ch < numRenderChannels; ch++ {
 				// std::max(std::fabs(*r.first), std::fabs(*r.second)) with
 				// r = std::minmax_element(block).
-				maxAbsChannel := afirMaxAbsMinMax(blockBuffer.Buffer[idx].View(0, ch))
+				maxAbsChannel := afirMaxAbsMinMax(blockBuffer.At(idx).View(0, ch))
 				maxAbsOverChannels = stdMax(maxAbsOverChannels, maxAbsChannel)
 			}
 			if maxAbsOverChannels < 10 {

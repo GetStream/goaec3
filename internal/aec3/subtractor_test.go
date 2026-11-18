@@ -28,13 +28,13 @@ func TestSubtractorProcessZeroAlloc(t *testing.T) {
 
 		step := func() {
 			pos := (fb.Write - 1 + size) % size
-			x := bb.Buffer[pos].View(0, 0)
+			x := bb.At(pos).View(0, 0)
 			for i := range x {
 				x[i] = float32(rng.NormFloat64() * 2000)
 			}
-			fft.PaddedFft(x, old, WindowRectangular, &fb.Buffer[pos][0])
+			fft.PaddedFft(x, old, WindowRectangular, &fb.At(pos)[0])
 			copy(old, x)
-			fb.Buffer[pos][0].Spectrum(opt, sb.Buffer[pos][0][:])
+			fb.At(pos)[0].Spectrum(opt, sb.At(pos)[0][:])
 			fb.Write, sb.Write, bb.Write = pos, pos, pos
 			fb.Read, sb.Read, bb.Read = pos, pos, pos
 			for ch := 0; ch < numCapture; ch++ {

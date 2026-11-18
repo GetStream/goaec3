@@ -218,7 +218,7 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 		// Compute preferred gains.
 		var highBandsGain float32
 		e.suppressionGain.GetGain(nearendSpectrum, echoSpectrum, e.R2, e.R2Unbounded, e.cng.NoiseSpectrum(),
-			e.renderSignalAnalyzer, e.aecState, x, clockDrift, &highBandsGain, G)
+			e.renderSignalAnalyzer, e.aecState, &x, clockDrift, &highBandsGain, G)
 
 		e.suppressionFilter.ApplyGain(e.comfortNoise, e.highBandComfortNoise, G, highBandsGain, YFft, y)
 	} else {
