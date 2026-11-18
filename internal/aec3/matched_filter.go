@@ -1,5 +1,10 @@
 package aec3
 
+import (
+	"math"
+	"sync/atomic"
+)
+
 // Subsample rate used for computing the accumulated error. The implementation
 // of some core functions depends on this constant being equal to 4.
 const dlyAccumulatedErrorSubSampleRate = 4
@@ -668,6 +673,13 @@ type MatchedFilter struct {
 	smoothingSlow                 float32
 	matchingFilterThreshold       float32
 	detectPreEcho                 bool
+
+	// Quiet-render skip (see renderIsQuiet): quietSkip enables it,
+	// quietLimitBits is the bit pattern of the largest quiet magnitude and
+	// loudHint the index of a render sample that last exceeded it.
+	quietSkip      bool
+	quietLimitBits uint32
+	loudHint       int
 }
 
 // NewMatchedFilter mirrors the MatchedFilter constructor (without the data
@@ -715,6 +727,130 @@ func (m *MatchedFilter) init(optimization Aec3Optimization, subBlockSize, window
 		m.instantaneousAccumulatedError = make([]float32, filterSize/dlyAccumulatedErrorSubSampleRate)
 		m.scratchMemory = make([]float32, filterSize)
 	}
+	var quietLimit float32
+	quietLimit, m.quietSkip = MatchedFilterQuietLimit(filterSize, excitationLimit)
+	m.quietLimitBits = math.Float32bits(quietLimit)
+}
+
+// Quiet-render skip.
+//
+// A filter core changes state only through its filter update, which a
+// capture sample triggers when x2_sum > x2_sum_threshold (and the sample is
+// not saturated). When no filter updates during a block, Update has no
+// winner: it clears winner_lag and reported_lag_estimate and leaves the
+// filters, accumulated_error, last_detected_best_lag_filter and
+// number_pre_echo_updates as they are. The error sums and peak indices of
+// such a block are computed and discarded. Update therefore returns right
+// after clearing the two estimates when it can tell beforehand that
+// x2_sum <= x2_sum_threshold holds for every sample of every filter.
+//
+// instantaneous_accumulated_error and scratch_memory are scratch: the
+// accumulated-error core of filter last_detected_best_lag_filter clears and
+// rewrites the former in every call that runs the cores, and Update reads it
+// only later in the same call, when that filter is the winner; the latter is
+// written and read inside one core iteration. A skipped block leaves both
+// stale, which no later block can observe.
+//
+// Bound on x2_sum. Let N be the filter length and suppose |x[k]| <= m for
+// every element of the render buffer, with m finite. In every lane x2_sum
+// is the value of an expression over the N samples of the filter's window,
+// each used once, built from rounded products R(x*x), rounded sums R(a+b)
+// and (AVX2 lane) fused R(x*x+c), from accumulators that start at +0; lanes
+// differ in the shape of the expression only. With u = 2^-24 and
+// eta = 2^-150 (half the smallest subnormal), rounding to nearest gives
+// R(t) <= t*(1+u) + eta for a product or fused term t >= 0 and
+// R(a+b) <= (a+b)*(1+u) for a sum of floats (sums in the subnormal range are
+// exact). By induction over the expression, a node over n samples whose
+// longest path has d rounded operations is at most
+// (sum of its x[k]^2 + n*eta) * (1+u)^d. No path is longer than N+40: one
+// product and at most N-1 chained additions, the additions to the +0
+// accumulators, and the lane reduction (at most 5 levels). Hence
+//
+//	x2_sum <= (N*m^2 + N*eta) * (1+u)^(N+40).
+//
+// dlyQuietLimit picks m with N*m^2*(1+margin) <= x2_sum_threshold for
+// margin = 4*(N+40)*u (dlyQuietMargin), twice the 2*(N+40)*u that bounds
+// (1+u)^(N+40) - 1 for N <= 2^16; the spare half covers N*eta, which is
+// below x2_sum_threshold*2^-66 for the thresholds (>= 2^-60) that get a
+// nonzero m. Smaller thresholds get m = 0: a buffer of zeros gives
+// x2_sum = 0 exactly, which never exceeds a threshold >= 0. The skip is
+// disabled when the threshold is negative, NaN or infinite or N > 2^16.
+//
+// The test |x[k]| <= m runs on the bit patterns: for finite m, clearing the
+// sign bit of x[k] and comparing as integers orders magnitudes, and puts
+// every infinity and NaN above m, so non-finite render samples never count
+// as quiet.
+
+// dlyQuietMargin is the relative margin of the quiet limit for a filter of
+// n samples.
+func dlyQuietMargin(n int) float64 { return 4 * float64(n+40) / (1 << 24) }
+
+// dlyQuietLimit returns the largest magnitude m with
+// n*m^2*(1+margin) <= x2SumThreshold, rounded down, and whether the skip
+// applies at all.
+func dlyQuietLimit(n int, x2SumThreshold float32, margin float64) (float32, bool) {
+	t := float64(x2SumThreshold)
+	if !(t >= 0) || math.IsInf(t, 0) || n <= 0 || n > 1<<16 {
+		return 0, false
+	}
+	if t < 0x1p-60 {
+		return 0, true
+	}
+	m64 := math.Sqrt(t / (float64(n) * (1 + margin)))
+	m := float32(m64)
+	for float64(m) > m64 {
+		m = math.Nextafter32(m, 0)
+	}
+	// One more float32 step down covers the rounding of the float64
+	// evaluation above.
+	return math.Nextafter32(m, 0), true
+}
+
+// MatchedFilterQuietLimit returns the quiet limit of a MatchedFilter with
+// filters of filterSize samples and the given excitation limit: when no
+// render buffer sample exceeds it in magnitude, no filter updates. It
+// reports false when the skip does not apply.
+func MatchedFilterQuietLimit(filterSize int, excitationLimit float32) (float32, bool) {
+	x2SumThreshold := float32(float32(filterSize)*excitationLimit) * excitationLimit
+	return dlyQuietLimit(filterSize, x2SumThreshold, dlyQuietMargin(filterSize))
+}
+
+// dlyQuietSkips counts the blocks every MatchedFilter skipped.
+var dlyQuietSkips atomic.Uint64
+
+// MatchedFilterQuietSkipsForTesting returns the number of Update calls, over
+// all matched filters of the process, that took the quiet-render skip. Tests
+// use it to check that a scenario reaches the skip.
+func MatchedFilterQuietSkipsForTesting() uint64 { return dlyQuietSkips.Load() }
+
+// renderIsQuiet reports whether every sample of the render buffer has a
+// magnitude of at most the quiet limit.
+func (m *MatchedFilter) renderIsQuiet(x []float32) bool {
+	limit := m.quietLimitBits
+	if h := m.loudHint; h < len(x) && math.Float32bits(x[h])&0x7fffffff > limit {
+		return false
+	}
+	i := 0
+	for ; i+16 <= len(x); i += 16 {
+		xx := (*[16]float32)(x[i : i+16])
+		var a, b, c, d uint32
+		for j := 0; j < 16; j += 4 {
+			a = max(a, math.Float32bits(xx[j])&0x7fffffff)
+			b = max(b, math.Float32bits(xx[j+1])&0x7fffffff)
+			c = max(c, math.Float32bits(xx[j+2])&0x7fffffff)
+			d = max(d, math.Float32bits(xx[j+3])&0x7fffffff)
+		}
+		if max(a, b, c, d) > limit {
+			break
+		}
+	}
+	for ; i < len(x); i++ {
+		if math.Float32bits(x[i])&0x7fffffff > limit {
+			m.loudHint = i
+			return false
+		}
+	}
+	return true
 }
 
 // Reset resets the matched filter.
@@ -786,6 +922,12 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 	winnerErrorSum := errorSumAnchor
 	m.hasWinnerLag = false
 	m.hasReportedLagEstimate = false
+	if m.quietSkip && m.renderIsQuiet(renderBuffer.Buffer) {
+		// No filter can update: there is no winner (see the quiet-render
+		// skip above).
+		dlyQuietSkips.Add(1)
+		return
+	}
 	alignmentShift := 0
 	previousLagEstimate, hasPreviousLagEstimate := 0, false
 	winnerIndex := -1
