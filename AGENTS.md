@@ -46,6 +46,10 @@ write changelog narrative.
   It is the spec, the fallback when the experiment is off, and the oracle that
   the archsimd kernel is tested against bit-exactly. A build without
   `GOEXPERIMENT=simd` is still bit-exact; only slower.
+- Where a transcription of the intrinsics is slow as Go code, the fallback is
+  a second pure-Go implementation written for the Go compiler (scalar locals,
+  proven bounds, fused passes; `internal/ooura/fft_fast.go`), tested
+  bit-exactly against the transcription, which stays the spec.
 - archsimd semantics: `a.Mul(b).Add(c)` compiles to separate multiply and add
   (unfused, like `vmlaq_f32`/`_mm_mul_ps`+`_mm_add_ps`); `a.MulAdd(b, c)` is a
   real FMA (like `vfmaq_f32`/`_mm256_fmadd_ps`). Use each exactly where the C++
@@ -71,6 +75,27 @@ write changelog narrative.
 
 - C++ classes that take an `Aec3Optimization` argument keep it in Go so tests
   can drive both lanes against the oracle in one binary.
+
+## Memory safety: no unsafe
+
+- No non-test file imports `unsafe` (so there is no `unsafe.Pointer`,
+  `unsafe.Add`, `unsafe.Slice` or `//go:linkname`). `TestNoUnsafe` in the root
+  package scans every Go file of the module, whatever its build tags, and
+  fails on the import. The only exception is `internal/webrtcoracle`, the cgo
+  test oracle, which no shipped package imports.
+- Unchecked access is obtained by proof, not by pointer arithmetic: convert a
+  slice to an array pointer over a window with constant bounds
+  (`(*[32]float32)(a[64:96])`), then index or re-slice it with a constant, a
+  masked value, or a loop counter with constant limits (`w[j : j+4]`,
+  `w[8*m : 8*m+8]`). Write the window as `x : x+c`; the compiler does not
+  prove `x+c1 : x+c2`. archsimd loads and stores take the resulting
+  `*[N]float32` (`LoadFloat32x4Array`, `StoreArray`).
+- Check with `go build -gcflags=-d=ssa/check_bce ./internal/...` (it lists the
+  checks left in each function; a helper that inlines everywhere still lists
+  the checks of its own never-called body) or look for `panicBounds` calls in
+  `-gcflags=-S` output.
+- Reinterpreting bits goes through `math.Float32bits`/`Float32frombits` or
+  archsimd's `ToBits`/`BitsToFloat32`, never through a pointer cast.
 
 ## Float discipline
 
