@@ -2,28 +2,10 @@ package goaec3
 
 import (
 	"fmt"
-	"os"
 	"testing"
 )
 
-// Open robustness findings. Each test demonstrates one finding and skips
-// until the fix lands; robustPendingFix keeps FuzzEchoCanceller and the
-// boundary sweep away from the same inputs meanwhile. Remove the skip and
-// the matching robustPendingFix clause together.
-
-// robustSkipKnown skips a known-failure test unless
-// GOAEC3_RUN_KNOWN_FAILURES is set.
-func robustSkipKnown(t *testing.T, reason string) {
-	t.Helper()
-	if os.Getenv("GOAEC3_RUN_KNOWN_FAILURES") == "" {
-		t.Skip(reason)
-	}
-}
-
-// robustPendingFix reports whether cfg hits an open finding.
-func robustPendingFix(cfg *Config) bool {
-	return cfg.Suppressor.HighBandsSuppression.AntiHowlingActivationThreshold == 0
-}
+// Regression tests for robustness findings that are fixed.
 
 // robustRunNoPanic creates a canceller and runs frames echo frames; it
 // returns the panic message, or "" when New returns an error or the run
@@ -61,18 +43,15 @@ func robustRunNoPanic(newEC func() (*EchoCanceller, error), frames int) (msg str
 	return ""
 }
 
-// TestKnownFailureAntiHowlingNaN: with
+// TestAntiHowlingThresholdZeroStaysFinite: with
 // Suppressor.HighBandsSuppression.AntiHowlingActivationThreshold = 0 (the
 // lower Validate bound), SuppressionGain::UpperBandsGain computes
 // anti_howling_gain = sqrtf(0 / 0) = NaN while the band energies are zero.
 // The C++ returns std::min(std::min(gain_below_8_khz, anti_howling_gain),
-// gain_bound); std::min(a, NaN) is a, so the gain stays finite. The port
-// uses the builtin min, which returns NaN when any argument is NaN, and the
-// output turns NaN (at 48 kHz within the first frames). The differential
-// fuzz against libwebrtc reproduces it as a bit-exactness failure.
-func TestKnownFailureAntiHowlingNaN(t *testing.T) {
-	robustSkipKnown(t, "open finding: builtin min vs std::min on NaN in SuppressionGain.upperBandsGain")
-	for _, rate := range []int{48000} {
+// gain_bound); std::min(a, NaN) is a, so the gain stays finite, and so does
+// the port, which follows std::min/std::max semantics.
+func TestAntiHowlingThresholdZeroStaysFinite(t *testing.T) {
+	for _, rate := range []int{16000, 32000, 48000} {
 		cfg := DefaultConfig()
 		cfg.Suppressor.HighBandsSuppression.AntiHowlingActivationThreshold = 0
 		if msg := robustRunNoPanic(func() (*EchoCanceller, error) { return New(cfg, rate, 1, 1) }, 200); msg != "" {

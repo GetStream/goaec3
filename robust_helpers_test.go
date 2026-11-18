@@ -343,8 +343,7 @@ const robustMaxFrames = 800
 
 // robustDecode turns fuzz input into a program: rate, channel counts, a
 // config (mutated, validated and resource-capped), an optional agreeing
-// multichannel config and a call sequence. It reports false for configs
-// with an open finding (robustPendingFix).
+// multichannel config and a call sequence.
 func robustDecode(data []byte) (robustProgram, bool) {
 	r := &robustReader{b: data}
 	var p robustProgram
@@ -376,9 +375,6 @@ func robustDecode(data []byte) (robustProgram, bool) {
 		p.mc.Validate()
 		robustCapResources(&p.mc)
 		robustAgree(&p.mc, &p.cfg)
-	}
-	if robustPendingFix(&p.cfg) || (p.useMC && robustPendingFix(&p.mc)) {
-		return p, false
 	}
 
 	frames := 0
@@ -512,8 +508,7 @@ func robustRun(t testing.TB, p *robustProgram) {
 // robustRenderPowerFinite reports whether the render power stays finite.
 // RenderLevels.RenderPowerGainDb is not validated; beyond ~200 dB (or NaN)
 // the scaled render power overflows to Inf and the spectra turn NaN, in
-// libwebrtc as well (at 32 and 48 kHz the port then also hits the open
-// UpperBandsGain finding), so the output has no finiteness guarantee.
+// libwebrtc as well, so the output has no finiteness guarantee.
 func robustRenderPowerFinite(cfg *Config) bool {
 	return cfg.RenderLevels.RenderPowerGainDb <= 200
 }
