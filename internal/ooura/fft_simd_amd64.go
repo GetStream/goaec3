@@ -6,14 +6,14 @@ import "simd/archsimd"
 
 // archsimd's 128-bit float ops on amd64 are VEX-encoded (AVX). They compute
 // the same IEEE results as the SSE2 instructions libwebrtc uses; CPUs
-// without AVX run the pure-Go SSE2 reference.
+// without AVX run the pure-Go lane code (fft_fast.go).
 var useSimd = archsimd.X86.AVX()
 
 func fft(a *[128]float32) {
 	if useSimd {
 		fftSimd(a)
 	} else {
-		fftSSE2Ref(a)
+		fftFast(a)
 	}
 }
 
@@ -21,7 +21,7 @@ func inverseFft(a *[128]float32) {
 	if useSimd {
 		inverseFftSimd(a)
 	} else {
-		inverseFftSSE2Ref(a)
+		inverseFftFast(a)
 	}
 }
 

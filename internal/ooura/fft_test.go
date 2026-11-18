@@ -93,6 +93,20 @@ func TestSimdRefDiffersFromScalar(t *testing.T) {
 	}
 }
 
+// The pure-Go implementations of the builds without archsimd kernels are
+// bit-identical to the transcriptions of the C sources they replace, in
+// every build.
+func TestFastMatchesRef(t *testing.T) {
+	compareFfts(t, "lane/fwd/neon", fftFastLane, fftNeonRef)
+	compareFfts(t, "lane/inv/neon", inverseFftFastLane, inverseFftNeonRef)
+	compareFfts(t, "lane/fwd/sse2", fftFastLane, fftSSE2Ref)
+	compareFfts(t, "lane/inv/sse2", inverseFftFastLane, inverseFftSSE2Ref)
+	compareFfts(t, "scalar/fwd", fftFastScalar, fftScalar)
+	compareFfts(t, "scalar/inv", inverseFftFastScalar, inverseFftScalar)
+	compareFfts(t, "build/fwd", fftFast, fftRef)
+	compareFfts(t, "build/inv", inverseFftFast, inverseFftRef)
+}
+
 func TestFftMatchesLaneRef(t *testing.T) {
 	compareFfts(t, "fwd", Fft, fftRef)
 	compareFfts(t, "inv", InverseFft, inverseFftRef)
@@ -137,6 +151,8 @@ func benchFft(b *testing.B, f fftFunc) {
 
 func BenchmarkFft(b *testing.B) {
 	b.Run("lane", func(b *testing.B) { benchFft(b, Fft) })
+	b.Run("fastLane", func(b *testing.B) { benchFft(b, fftFastLane) })
+	b.Run("fastScalar", func(b *testing.B) { benchFft(b, fftFastScalar) })
 	b.Run("scalar", func(b *testing.B) { benchFft(b, fftScalar) })
 	b.Run("neonRef", func(b *testing.B) { benchFft(b, fftNeonRef) })
 	b.Run("sse2Ref", func(b *testing.B) { benchFft(b, fftSSE2Ref) })
@@ -144,6 +160,8 @@ func BenchmarkFft(b *testing.B) {
 
 func BenchmarkInverseFft(b *testing.B) {
 	b.Run("lane", func(b *testing.B) { benchFft(b, InverseFft) })
+	b.Run("fastLane", func(b *testing.B) { benchFft(b, inverseFftFastLane) })
+	b.Run("fastScalar", func(b *testing.B) { benchFft(b, inverseFftFastScalar) })
 	b.Run("scalar", func(b *testing.B) { benchFft(b, inverseFftScalar) })
 	b.Run("neonRef", func(b *testing.B) { benchFft(b, inverseFftNeonRef) })
 	b.Run("sse2Ref", func(b *testing.B) { benchFft(b, inverseFftSSE2Ref) })

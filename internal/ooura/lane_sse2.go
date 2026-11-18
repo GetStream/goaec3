@@ -7,3 +7,6 @@ package ooura
 
 func fftRef(a *[128]float32)        { fftSSE2Ref(a) }
 func inverseFftRef(a *[128]float32) { inverseFftSSE2Ref(a) }
+
+func fftFast(a *[128]float32)        { fftFastLane(a) }
+func inverseFftFast(a *[128]float32) { inverseFftFastLane(a) }

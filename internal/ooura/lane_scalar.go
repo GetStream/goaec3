@@ -7,3 +7,6 @@ package ooura
 
 func fftRef(a *[128]float32)        { fftScalar(a) }
 func inverseFftRef(a *[128]float32) { inverseFftScalar(a) }
+
+func fftFast(a *[128]float32)        { fftFastScalar(a) }
+func inverseFftFast(a *[128]float32) { inverseFftFastScalar(a) }

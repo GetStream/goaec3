@@ -1,7 +1,8 @@
 package ooura
 
 // Pure-Go transcription of ooura_fft_sse2.cc, intrinsic by intrinsic. It is
-// the specification the amd64 assembly is tested against. Per lane it
+// the specification the archsimd kernel and the pure-Go lane code
+// (fft_fast.go) are tested against. Per lane it
 // computes the same operations as the NEON lane (multiplying by the
 // {-1,1,-1,1} sign table is exact, so vmlaq(x, y, s) == x + s*y), which
 // TestSSE2RefMatchesNeonRef checks.
