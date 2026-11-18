@@ -57,11 +57,17 @@ func (d *Decimator) Decimate(in, out []float32) {
 	out = out[:BlockSize/d.downSamplingFactor]
 	var x [BlockSize]float32
 
-	// Limit the frequency content of the signal to avoid aliasing.
-	d.antiAliasingFilter.Process(in, x[:])
+	if aa, nr := d.antiAliasingFilter.biquads, d.noiseReductionFilter.biquads; len(aa) == 3 && len(nr) == 1 {
+		// Both filters in one pass over the samples (see
+		// dlyApplyBiQuadCascade).
+		dlyApplyBiQuad4(in, x[:], &aa[0], &aa[1], &aa[2], &nr[0])
+	} else {
+		// Limit the frequency content of the signal to avoid aliasing.
+		d.antiAliasingFilter.Process(in, x[:])
 
-	// Reduce the impact of near-end noise.
-	d.noiseReductionFilter.ProcessInPlace(x[:])
+		// Reduce the impact of near-end noise.
+		d.noiseReductionFilter.ProcessInPlace(x[:])
+	}
 
 	// Downsample the signal.
 	for j, k := 0, 0; j < len(out); j, k = j+1, k+d.downSamplingFactor {

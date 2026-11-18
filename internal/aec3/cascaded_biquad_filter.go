@@ -45,10 +45,7 @@ func (f *CascadedBiQuadFilter) init(coefficients []BiQuadCoefficients) {
 // Process applies the biquads on x to form the output in y.
 func (f *CascadedBiQuadFilter) Process(x, y []float32) {
 	if len(f.biquads) > 0 {
-		dlyApplyBiQuad(x, y, &f.biquads[0])
-		for k := 1; k < len(f.biquads); k++ {
-			dlyApplyBiQuad(y, y, &f.biquads[k])
-		}
+		dlyApplyBiQuadCascade(x, y, f.biquads)
 	} else {
 		copy(y[:len(x)], x)
 	}
@@ -57,8 +54,8 @@ func (f *CascadedBiQuadFilter) Process(x, y []float32) {
 // ProcessInPlace applies the biquads on y in place (the C++ Process(y)
 // overload).
 func (f *CascadedBiQuadFilter) ProcessInPlace(y []float32) {
-	for k := range f.biquads {
-		dlyApplyBiQuad(y, y, &f.biquads[k])
+	if len(f.biquads) > 0 {
+		dlyApplyBiQuadCascade(y, y, f.biquads)
 	}
 }
 
@@ -93,4 +90,98 @@ func dlyApplyBiQuad(x, y []float32, biquad *BiQuad) {
 	biquad.X[1] = mX1
 	biquad.Y[0] = mY0
 	biquad.Y[1] = mY1
+}
+
+// dlyApplyBiQuadCascade applies the sections in order, x to y for the first
+// and in place on y for the rest. Up to four sections run in one pass over
+// the samples: each section still receives the output of the previous one
+// sample by sample and performs the operations of dlyApplyBiQuad in the same
+// order, so the result is the same as applying the sections one after the
+// other.
+func dlyApplyBiQuadCascade(x, y []float32, biquads []BiQuad) {
+	for len(biquads) > 0 {
+		switch len(biquads) {
+		case 1:
+			dlyApplyBiQuad(x, y, &biquads[0])
+			return
+		case 2:
+			dlyApplyBiQuad2(x, y, &biquads[0], &biquads[1])
+			return
+		case 3:
+			dlyApplyBiQuad3(x, y, &biquads[0], &biquads[1], &biquads[2])
+			return
+		}
+		dlyApplyBiQuad4(x, y, &biquads[0], &biquads[1], &biquads[2], &biquads[3])
+		biquads = biquads[4:]
+		x = y
+	}
+}
+
+// The multi-section kernels keep the section states in locals and read the
+// coefficients from memory (holding them in registers as well spills).
+
+func dlyApplyBiQuad2(x, y []float32, b0, b1 *BiQuad) {
+	y = y[:len(x)]
+	c0, c1 := &b0.Coefficients, &b1.Coefficients
+	ax0, ax1, ay0, ay1 := b0.X[0], b0.X[1], b0.Y[0], b0.Y[1]
+	bx0, bx1, by0, by1 := b1.X[0], b1.X[1], b1.Y[0], b1.Y[1]
+	for k, v := range x {
+		w := float32(c0.B[0]*v) + float32(c0.B[1]*ax0) + float32(c0.B[2]*ax1) - float32(c0.A[0]*ay0) - float32(c0.A[1]*ay1)
+		ax1, ax0, ay1, ay0 = ax0, v, ay0, w
+		v = w
+		w = float32(c1.B[0]*v) + float32(c1.B[1]*bx0) + float32(c1.B[2]*bx1) - float32(c1.A[0]*by0) - float32(c1.A[1]*by1)
+		bx1, bx0, by1, by0 = bx0, v, by0, w
+		y[k] = w
+	}
+	b0.X[0], b0.X[1], b0.Y[0], b0.Y[1] = ax0, ax1, ay0, ay1
+	b1.X[0], b1.X[1], b1.Y[0], b1.Y[1] = bx0, bx1, by0, by1
+}
+
+func dlyApplyBiQuad3(x, y []float32, b0, b1, b2 *BiQuad) {
+	y = y[:len(x)]
+	c0, c1, c2 := &b0.Coefficients, &b1.Coefficients, &b2.Coefficients
+	ax0, ax1, ay0, ay1 := b0.X[0], b0.X[1], b0.Y[0], b0.Y[1]
+	bx0, bx1, by0, by1 := b1.X[0], b1.X[1], b1.Y[0], b1.Y[1]
+	cx0, cx1, cy0, cy1 := b2.X[0], b2.X[1], b2.Y[0], b2.Y[1]
+	for k, v := range x {
+		w := float32(c0.B[0]*v) + float32(c0.B[1]*ax0) + float32(c0.B[2]*ax1) - float32(c0.A[0]*ay0) - float32(c0.A[1]*ay1)
+		ax1, ax0, ay1, ay0 = ax0, v, ay0, w
+		v = w
+		w = float32(c1.B[0]*v) + float32(c1.B[1]*bx0) + float32(c1.B[2]*bx1) - float32(c1.A[0]*by0) - float32(c1.A[1]*by1)
+		bx1, bx0, by1, by0 = bx0, v, by0, w
+		v = w
+		w = float32(c2.B[0]*v) + float32(c2.B[1]*cx0) + float32(c2.B[2]*cx1) - float32(c2.A[0]*cy0) - float32(c2.A[1]*cy1)
+		cx1, cx0, cy1, cy0 = cx0, v, cy0, w
+		y[k] = w
+	}
+	b0.X[0], b0.X[1], b0.Y[0], b0.Y[1] = ax0, ax1, ay0, ay1
+	b1.X[0], b1.X[1], b1.Y[0], b1.Y[1] = bx0, bx1, by0, by1
+	b2.X[0], b2.X[1], b2.Y[0], b2.Y[1] = cx0, cx1, cy0, cy1
+}
+
+func dlyApplyBiQuad4(x, y []float32, b0, b1, b2, b3 *BiQuad) {
+	y = y[:len(x)]
+	c0, c1, c2, c3 := &b0.Coefficients, &b1.Coefficients, &b2.Coefficients, &b3.Coefficients
+	ax0, ax1, ay0, ay1 := b0.X[0], b0.X[1], b0.Y[0], b0.Y[1]
+	bx0, bx1, by0, by1 := b1.X[0], b1.X[1], b1.Y[0], b1.Y[1]
+	cx0, cx1, cy0, cy1 := b2.X[0], b2.X[1], b2.Y[0], b2.Y[1]
+	dx0, dx1, dy0, dy1 := b3.X[0], b3.X[1], b3.Y[0], b3.Y[1]
+	for k, v := range x {
+		w := float32(c0.B[0]*v) + float32(c0.B[1]*ax0) + float32(c0.B[2]*ax1) - float32(c0.A[0]*ay0) - float32(c0.A[1]*ay1)
+		ax1, ax0, ay1, ay0 = ax0, v, ay0, w
+		v = w
+		w = float32(c1.B[0]*v) + float32(c1.B[1]*bx0) + float32(c1.B[2]*bx1) - float32(c1.A[0]*by0) - float32(c1.A[1]*by1)
+		bx1, bx0, by1, by0 = bx0, v, by0, w
+		v = w
+		w = float32(c2.B[0]*v) + float32(c2.B[1]*cx0) + float32(c2.B[2]*cx1) - float32(c2.A[0]*cy0) - float32(c2.A[1]*cy1)
+		cx1, cx0, cy1, cy0 = cx0, v, cy0, w
+		v = w
+		w = float32(c3.B[0]*v) + float32(c3.B[1]*dx0) + float32(c3.B[2]*dx1) - float32(c3.A[0]*dy0) - float32(c3.A[1]*dy1)
+		dx1, dx0, dy1, dy0 = dx0, v, dy0, w
+		y[k] = w
+	}
+	b0.X[0], b0.X[1], b0.Y[0], b0.Y[1] = ax0, ax1, ay0, ay1
+	b1.X[0], b1.X[1], b1.Y[0], b1.Y[1] = bx0, bx1, by0, by1
+	b2.X[0], b2.X[1], b2.Y[0], b2.Y[1] = cx0, cx1, cy0, cy1
+	b3.X[0], b3.X[1], b3.Y[0], b3.Y[1] = dx0, dx1, dy0, dy1
 }
