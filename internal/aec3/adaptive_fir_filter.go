@@ -259,19 +259,22 @@ const afirMaxTerms = 64
 // ring index running from the read position and wrapping to 0 exactly as
 // the lim1/lim2 loops do. It returns the number of pairs.
 func afirTerms(data *FftBuffer, position, numPartitions int, H FirCoefficients, xs, hs *[afirMaxTerms]*FftData) int {
-	n := 0
-	xPartition := position
-	for p := 0; p < numPartitions; p++ {
-		if xPartition == data.Size {
-			xPartition = 0
+	nc := data.numChannels
+	n := numPartitions * nc
+	x := data.data
+	h := H.data[:n]
+	if H.numChannels != nc || n > afirMaxTerms {
+		panic("aec3: filter and render buffer shapes differ")
+	}
+	// Both arrays are partition-major, so the pairs are consecutive elements;
+	// the render ring wraps to its start.
+	xi := position * nc
+	for t := range h {
+		if xi == len(x) {
+			xi = 0
 		}
-		xp, hp := data.At(xPartition), H.At(p)
-		hp = hp[:len(xp)]
-		for ch := range xp {
-			xs[n], hs[n] = &xp[ch], &hp[ch]
-			n++
-		}
-		xPartition++
+		xs[t], hs[t] = &x[xi], &h[t]
+		xi++
 	}
 	return n
 }
