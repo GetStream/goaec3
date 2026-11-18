@@ -199,18 +199,28 @@ func benchmarkLags() []int {
 }
 
 func BenchmarkHighestPeakAggregator(b *testing.B) {
-	lags := benchmarkLags()
-	b.Run("rescan", func(b *testing.B) {
-		a := newRefHighestPeakAggregator(2432)
-		for i := 0; i < b.N; i++ {
-			a.Aggregate(lags[i&4095])
-		}
-	})
-	b.Run("incremental", func(b *testing.B) {
-		var a dlyHighestPeakAggregator
-		a.init(2432)
-		for i := 0; i < b.N; i++ {
-			a.Aggregate(lags[i&4095])
-		}
-	})
+	jittered := benchmarkLags()
+	alternating := make([]int, 4096)
+	for i := range alternating {
+		alternating[i] = 700 + i&1
+	}
+	for _, c := range []struct {
+		name string
+		lags []int
+	}{{"jittered", jittered}, {"alternating", alternating}} {
+		lags := c.lags
+		b.Run(c.name+"/rescan", func(b *testing.B) {
+			a := newRefHighestPeakAggregator(2432)
+			for i := 0; i < b.N; i++ {
+				a.Aggregate(lags[i&4095])
+			}
+		})
+		b.Run(c.name+"/incremental", func(b *testing.B) {
+			var a dlyHighestPeakAggregator
+			a.init(2432)
+			for i := 0; i < b.N; i++ {
+				a.Aggregate(lags[i&4095])
+			}
+		})
+	}
 }
