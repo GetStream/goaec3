@@ -6,7 +6,7 @@ name: bench
 # differ in CPU from job to job, so every job also builds the merge base with
 # main and alternates base and head runs on the same machine; the summary
 # reports the Go/C++ ratio and the head/base ratio of that job, the CPU
-# model, the internal/aec3 kernel benchmarks of both, and a CPU profile of
+# model, the internal/aec3 and filter bank kernel benchmarks of both, and a CPU profile of
 # the Go side. The lane is checked bit-exact on the runner before timing.
 
 on:
@@ -118,10 +118,12 @@ jobs:
         run: |
           go test -c -o bench.test -tags webrtc_src_oracle ./internal/webrtcoracle/
           go test -c -o kern.test ./internal/aec3/
+          go test -c -o bandskern.test ./internal/bands/
           if [ -n "$BASE" ]; then
             (cd "$RUNNER_TEMP/base" &&
               go test -c -o "$GITHUB_WORKSPACE/base.test" -tags webrtc_src_oracle ./internal/webrtcoracle/ &&
-              go test -c -o "$GITHUB_WORKSPACE/basekern.test" ./internal/aec3/)
+              go test -c -o "$GITHUB_WORKSPACE/basekern.test" ./internal/aec3/ &&
+              go test -c -o "$GITHUB_WORKSPACE/basebandskern.test" ./internal/bands/)
           fi
       # The numbers below count only if this lane is bit-exact on this
       # runner: the unit and kernel-against-reference tests and the oracle
@@ -150,8 +152,10 @@ jobs:
           for _ in $(seq 5); do
             if [ -n "$BASE" ]; then
               (cd internal/aec3 && ../../basekern.test -test.run '^$' -test.bench "$kb" -test.count 1) | tee -a basekern.txt
+              (cd internal/bands && ../../basebandskern.test -test.run '^$' -test.bench 'ThreeBandFilterBank.*/dispatch' -test.count 1) | grep '^Benchmark' | tee -a basekern.txt
             fi
             (cd internal/aec3 && ../../kern.test -test.run '^$' -test.bench "$kb" -test.count 1) | tee -a kern.txt
+            (cd internal/bands && ../../bandskern.test -test.run '^$' -test.bench 'ThreeBandFilterBank.*/dispatch' -test.count 1) | grep '^Benchmark' | tee -a kern.txt
           done
           if [ -n "$BASE" ]; then
             go run golang.org/x/perf/cmd/benchstat@v0.0.0-20250813145418-2f7363a06fe1 basekern.txt kern.txt | tee kernstat.txt

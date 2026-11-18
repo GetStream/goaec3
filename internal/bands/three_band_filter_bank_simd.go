@@ -46,7 +46,7 @@ func (f *ThreeBandFilterBank) Analysis(in *[FullBandSize]float32, out *[NumBands
 		f.analysisRef(in, out)
 		return
 	}
-	bsAnalysisSIMD(&f.analysisHist, in, (*[SplitBandSize]float32)(out[0]),
+	bsAnalysisKernel(&f.analysisHist, in, (*[SplitBandSize]float32)(out[0]),
 		(*[SplitBandSize]float32)(out[1]), (*[SplitBandSize]float32)(out[2]))
 }
 
@@ -71,7 +71,7 @@ func (f *ThreeBandFilterBank) Synthesis(in *[NumBands][]float32, out *[FullBandS
 		f.synthesisRef(in, out)
 		return
 	}
-	bsSynthesisSIMD(&f.synthesisHist, in0, in1, in2, out)
+	bsSynthesisKernel(&f.synthesisHist, in0, in1, in2, out)
 }
 
 // synthesisRef runs the reference on the state held in synthesisHist.
