@@ -140,8 +140,10 @@ FMA intrinsic, and a test fails if the compiler fuses one anywhere else.
 AEC3 reaches libm only through `exp2f`, `exp10f` and `log10f`. Their float
 results differ between Apple libm and glibc, so goaec3 uses the correctly
 rounded value, and the oracle substitutes the same functions. Against stock,
-unmodified libwebrtc with Apple libm, 18 scenarios of 60 s each matched bit
-for bit too (glibc is not yet compared).
+unmodified libwebrtc, 18 scenarios of 60 s each matched bit for bit too with
+Apple libm. With glibc 2.39 the audio and linear output are bit-exact as well;
+only the ERL metric differs, by at most 2.4e-6 dB, because glibc's `log10f` is
+not correctly rounded.
 
 Robustness: native fuzzing of the public API, a one-hour soak per setup
 (echo reduction holds at 31–37 dB), `-race` tests for concurrent render and
