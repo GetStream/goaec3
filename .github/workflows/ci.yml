@@ -1,0 +1,126 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Nightly, to catch runner image and toolchain drift.
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.27.4"
+  # GOAMD64=v1 keeps AVX2 switchable through GODEBUG=cpu.avx2=off.
+  GOAMD64: v1
+  GOTOOLCHAIN: local
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Cache WebRTC sources
+        uses: actions/cache@v4
+        with:
+          path: tmp_check/webrtc-m141
+          key: webrtc-m141-${{ hashFiles('scripts/fetch-webrtc.sh') }}
+      - name: Fetch WebRTC sources
+        run: bash scripts/fetch-webrtc.sh
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt needed:"
+            echo "$out"
+            exit 1
+          fi
+      - name: go vet
+        run: |
+          go vet ./...
+          GOEXPERIMENT=simd go vet ./...
+          go vet -tags purego ./...
+          GOEXPERIMENT=simd GOARCH=arm64 go vet ./...
+          CC=clang CXX=clang++ go vet -tags webrtc_src_oracle ./...
+          CC=clang CXX=clang++ GOEXPERIMENT=simd go vet -tags 'webrtc_src_oracle purego' ./...
+      - name: Generated source-oracle files are current
+        run: bash scripts/gen-src-oracle.sh -check
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+  test:
+    name: test (${{ matrix.os }}, ${{ matrix.lane }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        lane: [default, simd, purego]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go test
+        run: |
+          case "${{ matrix.lane }}" in
+            default) go test -count=1 ./... ;;
+            simd) GOEXPERIMENT=simd go test -count=1 ./... ;;
+            purego) go test -count=1 -tags purego ./... ;;
+          esac
+
+  # End-to-end (BlockProcessor, EchoCanceller3, public API) and per-kernel
+  # (matched filter, adaptive filter) parity against the C++ reference built
+  # from the pinned WebRTC sources. GOAEC3_EXPECT_LANE makes each job fail if
+  # Go or C++ runs another lane than the one named.
+  oracle-src:
+    name: oracle-src (${{ matrix.os }}, ${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 runners have AVX2 and FMA.
+          - { os: ubuntu-latest, name: avx2-simd, lane: avx2, experiment: simd }
+          - { os: ubuntu-latest, name: avx2, lane: avx2 }
+          - { os: ubuntu-latest, name: sse2-simd, lane: sse2, experiment: simd, godebug: cpu.avx2=off }
+          - { os: ubuntu-latest, name: sse2, lane: sse2, godebug: cpu.avx2=off }
+          - { os: ubuntu-latest, name: scalar, lane: none, tags: purego }
+          - { os: ubuntu-24.04-arm, name: neon-simd, lane: neon, experiment: simd }
+          - { os: ubuntu-24.04-arm, name: neon, lane: neon }
+          - { os: ubuntu-24.04-arm, name: scalar, lane: none, tags: purego }
+          - { os: macos-latest, name: neon-simd, lane: neon, experiment: simd }
+          - { os: macos-latest, name: scalar, lane: none, tags: purego }
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: clang
+      CXX: clang++
+      GOEXPERIMENT: ${{ matrix.experiment }}
+      GODEBUG: ${{ matrix.godebug }}
+      GOAEC3_EXPECT_LANE: ${{ matrix.lane }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Cache WebRTC sources
+        uses: actions/cache@v4
+        with:
+          path: tmp_check/webrtc-m141
+          key: webrtc-m141-${{ hashFiles('scripts/fetch-webrtc.sh') }}
+      - name: Fetch WebRTC sources
+        run: bash scripts/fetch-webrtc.sh
+      - name: clang
+        run: clang --version
+      - name: Parity against the source-built WebRTC
+        run: go test -count=1 -timeout 40m -v -tags "webrtc_src_oracle ${{ matrix.tags }}" ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
+        shell: bash -o pipefail {0}
