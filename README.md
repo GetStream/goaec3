@@ -151,7 +151,25 @@ make bench                                   # Go vs libwebrtc
 
 ## Performance
 
-_TODO: numbers pending a run on an idle machine._
+Time per 10 ms frame (`AnalyzeRender` + `ProcessCapture`, band splitting and
+float conversion included), on identical converged echo input, against
+libwebrtc m141's `EchoCanceller3` driven through `webrtc::AudioBuffer`
+(release build, NEON). Apple M4 Max, Go 1.27.4, median of 6 runs:
+
+| Case | goaec3, `GOEXPERIMENT=simd` | libwebrtc (C++) | goaec3, pure Go |
+| --- | --- | --- | --- |
+| 16 kHz mono | **57 µs** | 64 µs | 220 µs |
+| 48 kHz mono | **64 µs** | 75 µs | 257 µs |
+| 48 kHz stereo | **91 µs** | 101 µs | 378 µs |
+
+With `GOEXPERIMENT=simd` goaec3 is 10–14% faster than libwebrtc while
+producing the same output bit for bit; that is under 1% of one core per
+stream at 16 kHz. Without the experiment the same lanes run as plain Go,
+about 3.5× slower. Zero allocations per frame in every case.
+
+```sh
+GOEXPERIMENT=simd go test -tags webrtc_oracle -run '^$' -bench BenchmarkEc3VsLibwebrtc ./internal/webrtcoracle/
+```
 
 ## Docs
 
