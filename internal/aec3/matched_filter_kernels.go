@@ -15,30 +15,66 @@ package aec3
 // dlyDotNeonRef accumulates h*x and x*x over len(h)/4 groups of 4 into the
 // NEON lane accumulators with unfused multiply-add (vmlaq_f32).
 func dlyDotNeonRef(h, x []float32, acc *[8]float32) {
-	x = x[:len(h)]
-	for k := 0; k+4 <= len(h); k += 4 {
-		for l := 0; l < 4; l++ {
-			xk := x[k+l]
-			acc[4+l] += float32(xk * xk)
-			acc[l] += float32(h[k+l] * xk)
-		}
+	n := len(h) &^ 3
+	h = h[:n:n]
+	x = x[:n:n]
+	// The eight lanes are independent chains, kept in locals.
+	s0, s1, s2, s3 := acc[0], acc[1], acc[2], acc[3]
+	q0, q1, q2, q3 := acc[4], acc[5], acc[6], acc[7]
+	for k := 0; k < len(h)-3; k += 4 {
+		hh := (*[4]float32)(h[k : k+4])
+		xx := (*[4]float32)(x[k : k+4])
+		x0, x1, x2, x3 := xx[0], xx[1], xx[2], xx[3]
+		q0 += float32(x0 * x0)
+		q1 += float32(x1 * x1)
+		q2 += float32(x2 * x2)
+		q3 += float32(x3 * x3)
+		s0 += float32(hh[0] * x0)
+		s1 += float32(hh[1] * x1)
+		s2 += float32(hh[2] * x2)
+		s3 += float32(hh[3] * x3)
 	}
+	acc[0], acc[1], acc[2], acc[3] = s0, s1, s2, s3
+	acc[4], acc[5], acc[6], acc[7] = q0, q1, q2, q3
 }
 
 // dlyDotSse2Ref accumulates over len(h)/8 groups of 8 into the two pairs of
 // SSE2 lane accumulators (_mm_mul_ps + _mm_add_ps).
 func dlyDotSse2Ref(h, x []float32, acc *[16]float32) {
-	x = x[:len(h)]
-	for k := 0; k+8 <= len(h); k += 8 {
-		for l := 0; l < 4; l++ {
-			xk := x[k+l]
-			xk4 := x[k+4+l]
-			acc[8+l] += float32(xk * xk)
-			acc[12+l] += float32(xk4 * xk4)
-			acc[l] += float32(h[k+l] * xk)
-			acc[4+l] += float32(h[k+4+l] * xk4)
-		}
+	n := len(h) &^ 7
+	h = h[:n:n]
+	x = x[:n:n]
+	// The sixteen lanes are independent chains, kept in locals.
+	s0, s1, s2, s3 := acc[0], acc[1], acc[2], acc[3]
+	s4, s5, s6, s7 := acc[4], acc[5], acc[6], acc[7]
+	q0, q1, q2, q3 := acc[8], acc[9], acc[10], acc[11]
+	q4, q5, q6, q7 := acc[12], acc[13], acc[14], acc[15]
+	for k := 0; k < len(h)-7; k += 8 {
+		hh := (*[8]float32)(h[k : k+8])
+		xx := (*[8]float32)(x[k : k+8])
+		x0, x1, x2, x3 := xx[0], xx[1], xx[2], xx[3]
+		x4, x5, x6, x7 := xx[4], xx[5], xx[6], xx[7]
+		q0 += float32(x0 * x0)
+		q1 += float32(x1 * x1)
+		q2 += float32(x2 * x2)
+		q3 += float32(x3 * x3)
+		q4 += float32(x4 * x4)
+		q5 += float32(x5 * x5)
+		q6 += float32(x6 * x6)
+		q7 += float32(x7 * x7)
+		s0 += float32(hh[0] * x0)
+		s1 += float32(hh[1] * x1)
+		s2 += float32(hh[2] * x2)
+		s3 += float32(hh[3] * x3)
+		s4 += float32(hh[4] * x4)
+		s5 += float32(hh[5] * x5)
+		s6 += float32(hh[6] * x6)
+		s7 += float32(hh[7] * x7)
 	}
+	acc[0], acc[1], acc[2], acc[3] = s0, s1, s2, s3
+	acc[4], acc[5], acc[6], acc[7] = s4, s5, s6, s7
+	acc[8], acc[9], acc[10], acc[11] = q0, q1, q2, q3
+	acc[12], acc[13], acc[14], acc[15] = q4, q5, q6, q7
 }
 
 // dlyDotAvx2Ref accumulates over len(h)/16 groups of 16 into the two pairs
@@ -169,8 +205,18 @@ func dlyAccErrAvx2Ref(h, x []float32, y float32, accErr []float32, x2 *[16]float
 // The scalar, NEON (vmlaq_f32) and SSE2 update loops all compute this per
 // element, so it serves every unfused lane.
 func dlyAxpyRef(h, x []float32, alpha float32) {
-	x = x[:len(h)]
-	for k := range h {
+	n := len(h)
+	x = x[:n:n]
+	k := 0
+	for ; k < n-3; k += 4 {
+		hh := (*[4]float32)(h[k : k+4])
+		xx := (*[4]float32)(x[k : k+4])
+		hh[0] += float32(alpha * xx[0])
+		hh[1] += float32(alpha * xx[1])
+		hh[2] += float32(alpha * xx[2])
+		hh[3] += float32(alpha * xx[3])
+	}
+	for ; k < n; k++ {
 		h[k] += float32(alpha * x[k])
 	}
 }
