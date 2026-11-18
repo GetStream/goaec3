@@ -77,7 +77,7 @@ func MatchedFilterCoreNeon(xStartIndex int, x2SumThreshold, smoothing float32, x
 			filtersUpdated, errorSum, accumulatedError, scratchMemory)
 		return
 	}
-	dlyCoreFused(4, xStartIndex, x2SumThreshold,
+	dlyCoreLane(4, xStartIndex, x2SumThreshold,
 		smoothing, x, y, h, filtersUpdated, errorSum)
 }
 
@@ -130,7 +130,7 @@ func MatchedFilterCoreSse2(xStartIndex int, x2SumThreshold, smoothing float32, x
 			filtersUpdated, errorSum, accumulatedError, scratchMemory)
 		return
 	}
-	dlyCoreFused(8, xStartIndex, x2SumThreshold,
+	dlyCoreLane(8, xStartIndex, x2SumThreshold,
 		smoothing, x, y, h, filtersUpdated, errorSum)
 }
 
@@ -187,7 +187,7 @@ func MatchedFilterCoreAvx2(xStartIndex int, x2SumThreshold, smoothing float32, x
 			filtersUpdated, errorSum, accumulatedError, scratchMemory)
 		return
 	}
-	dlyCoreFused(16, xStartIndex, x2SumThreshold,
+	dlyCoreLane(16, xStartIndex, x2SumThreshold,
 		smoothing, x, y, h, filtersUpdated, errorSum)
 }
 
@@ -390,6 +390,85 @@ func dlyCoreFused(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, 
 		if x2Sum > x2SumThreshold && !dlySaturated(y[i]) {
 			alpha := float32(smoothing*e) / x2Sum
 			pend.set(xStartIndex, chunk1, hSize, alpha, g == 16)
+			*filtersUpdated = true
+		}
+		if xStartIndex > 0 {
+			xStartIndex--
+		} else {
+			xStartIndex = xSize - 1
+		}
+	}
+	if pend.active {
+		pend.apply(h, x, 0, hSize)
+	}
+}
+
+// dlyCoreSimple is dlyCoreFused with less bookkeeping: the update of a
+// sample is fused into the next sample's dot product only when neither
+// sample wraps around the circular buffer and h is a whole number of
+// groups, so one update-and-dot kernel call covers all of h. Otherwise the
+// pending update runs as its own pass first and the dot product follows the
+// C++ chunk loop. The update of every element is the same operation either
+// way.
+func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
+	filtersUpdated *bool, errorSum *float32) {
+	hSize := len(h)
+	xSize := len(x)
+	var pend dlyPendingAxpy
+	pendWhole := false // the pending update covers h with one x stretch at pendStart
+	pendStart := 0
+	for i := range y {
+		var acc [32]float32
+		var x2Sum, s float32
+		chunk1 := min(hSize, xSize-xStartIndex)
+		chunk2 := hSize - chunk1
+		v1 := chunk1 &^ (g - 1)
+		if pend.active && pendWhole && v1 == hSize {
+			xa := x[pendStart : pendStart+hSize]
+			xb := x[xStartIndex : xStartIndex+hSize]
+			switch g {
+			case 4:
+				dlyAxpyDotNeon(h, xa, xb, pend.alpha, (*[8]float32)(acc[:8]))
+			case 8:
+				dlyAxpyDotSse2(h, xa, xb, pend.alpha, (*[16]float32)(acc[:16]))
+			default:
+				dlyAxpyFmaDotAvx2(h, xa, xb, pend.alpha, &acc)
+			}
+		} else {
+			if pend.active {
+				pend.apply(h, x, 0, hSize)
+			}
+			dlyLaneDot(g, h[:v1], x[xStartIndex:xStartIndex+v1], &acc)
+			for k := v1; k < chunk1; k++ {
+				xk := x[xStartIndex+k]
+				x2Sum += float32(xk * xk)
+				s += float32(h[k] * xk)
+			}
+			v2 := chunk2 &^ (g - 1)
+			dlyLaneDot(g, h[chunk1:chunk1+v2], x[:v2], &acc)
+			for k := chunk1 + v2; k < hSize; k++ {
+				xk := x[k-chunk1]
+				x2Sum += float32(xk * xk)
+				s += float32(h[k] * xk)
+			}
+		}
+		switch g {
+		case 4:
+			s, x2Sum = dlyReduceNeon((*[8]float32)(acc[:8]), s, x2Sum)
+		case 8:
+			s, x2Sum = dlyReduceSse2((*[16]float32)(acc[:16]), s, x2Sum)
+		default:
+			s, x2Sum = dlyReduceAvx2(&acc, s, x2Sum)
+		}
+
+		e := y[i] - s
+		*errorSum += float32(e * e)
+		pend.active = false
+		if x2Sum > x2SumThreshold && !dlySaturated(y[i]) {
+			alpha := float32(smoothing*e) / x2Sum
+			pend.set(xStartIndex, chunk1, hSize, alpha, g == 16)
+			pendWhole = chunk1 == hSize
+			pendStart = xStartIndex
 			*filtersUpdated = true
 		}
 		if xStartIndex > 0 {

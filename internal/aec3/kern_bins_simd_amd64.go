@@ -136,11 +136,48 @@ func kernPack(re, im *[FftLengthBy2Plus1]float32, v *[FftLength]float32) {
 	v[1] = re[FftLengthBy2]
 }
 
-// kernMinMaxFast reports whether kernMinMax has a fast path.
-const kernMinMaxFast = false
+// kernHas128 reports whether the 128-bit kernels of kern_bins_simd128.go
+// run; their VEX encoding needs AVX.
+var kernHas128 = archsimd.X86.AVX()
 
-// kernMinMax defers to the caller's loop (MINPS/MAXPS do not propagate NaN).
-func kernMinMax(x []float32) (mn, mx float32, ok bool) { return 0, 0, false }
+// kernMinMaxFast reports whether kernMinMax has a fast path.
+const kernMinMaxFast = true
+
+// kernMinMax returns the minimum and maximum of x with ok = true when they
+// are exact for every compare-loop formulation (see the arm64 kernMinMax):
+// no element is NaN and neither extreme is zero, so each extreme has a
+// single bit pattern. MINPS/MAXPS drop a NaN operand instead of propagating
+// it, so NaN is detected by its own unordered compare.
+func kernMinMax(x []float32) (mn, mx float32, ok bool) {
+	if !kernHas128 || len(x) < 8 {
+		return 0, 0, false
+	}
+	vmn := archsimd.LoadFloat32x4(x)
+	vmx := vmn
+	nan := vmn.IsNaN()
+	j := 4
+	for ; j+4 <= len(x); j += 4 {
+		v := archsimd.LoadFloat32x4(x[j:])
+		vmn = vmn.Min(v)
+		vmx = vmx.Max(v)
+		nan = nan.Or(v.IsNaN())
+	}
+	if nan.ToBits() != 0 {
+		return 0, 0, false
+	}
+	var a, b [4]float32
+	vmn.StoreArray(&a)
+	vmx.StoreArray(&b)
+	mn, mx = min(a[0], a[1], a[2], a[3]), max(b[0], b[1], b[2], b[3])
+	for ; j < len(x); j++ {
+		mn = min(mn, x[j])
+		mx = max(mx, x[j])
+	}
+	if mn == mn && mx == mx && mn != 0 && mx != 0 {
+		return mn, mx, true
+	}
+	return 0, 0, false
+}
 
 // kernClamp is kernClampGeneric, std::min(std::max(x, lo), hi), as compares
 // and selects: MINPS/MAXPS return their second operand on NaN and equal

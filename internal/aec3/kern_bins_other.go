@@ -1,8 +1,8 @@
-//go:build !goexperiment.simd || purego || !arm64
+//go:build !goexperiment.simd || purego || !(arm64 || amd64)
 
 package aec3
 
-// kern_bins.go helpers that have archsimd kernels on arm64 only.
+// kern_bins.go helpers that have archsimd kernels on arm64 and amd64 only.
 
 func kernMulAdd2(a, b, c, d, z []float32) { kernMulAdd2Generic(a, b, c, d, z) }
 

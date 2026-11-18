@@ -92,7 +92,7 @@ func kernClampGeneric(x []float32, lo, hi float32) {
 	}
 }
 
-// The helpers below have archsimd kernels on arm64 only; other builds run
+// The helpers below have archsimd kernels on arm64 and amd64 only; other builds run
 // these references (kern_bins_other.go).
 
 // kernMulAdd2Generic sets z = float32(a*b) + float32(c*d) element-wise.

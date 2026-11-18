@@ -112,12 +112,26 @@ func TestDlyMatchedFilterCoreLanesMatchReference(t *testing.T) {
 			var updA, updB bool
 			esA, esB := float32(rng.NormFloat64()), float32(0)
 			esB = esA
+			esB0 := esA
 			mf := &MatchedFilter{optimization: opt}
 			mf.runCore(xs, thr, 0.7, x, y, hA, &updA, &esA, false)
 			dlyCoreLaneRef(opt, xs, thr, 0.7, x, y, hB, &updB, &esB)
 			dlyRequireBits(t, "h", hA, hB)
 			if updA != updB || math.Float32bits(esA) != math.Float32bits(esB) {
 				t.Fatalf("opt %d trial %d: updated %v/%v errorSum %v/%v", opt, trial, updA, updB, esA, esB)
+			}
+			// Both core drivers, whichever one the build's lanes use.
+			g := map[Aec3Optimization]int{OptNeon: 4, OptSse2: 8, OptAvx2: 16}[opt]
+			for name, core := range map[string]func(int, int, float32, float32, []float32, []float32, []float32,
+				*bool, *float32){"fused": dlyCoreFused, "simple": dlyCoreSimple} {
+				hC := append([]float32(nil), h0...)
+				var updC bool
+				esC := esB0
+				core(g, xs, thr, 0.7, x, y, hC, &updC, &esC)
+				dlyRequireBits(t, name+" h", hC, hB)
+				if updC != updB || math.Float32bits(esC) != math.Float32bits(esB) {
+					t.Fatalf("%s opt %d trial %d: updated %v/%v errorSum %v/%v", name, opt, trial, updC, updB, esC, esB)
+				}
 			}
 		}
 	}
@@ -169,7 +183,7 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 		startIdx int
 	}{
 		{"None", OptNone, 100}, {"Neon", OptNeon, 100}, {"Sse2", OptSse2, 100}, {"Avx2", OptAvx2, 100},
-		{"NeonWrap", OptNeon, len(x) - 300},
+		{"NeonWrap", OptNeon, len(x) - 300}, {"Sse2Wrap", OptSse2, len(x) - 300}, {"Avx2Wrap", OptAvx2, len(x) - 300},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			mf := NewMatchedFilter(tc.opt, 16, 32, 5, 24, 150, 0.7, 0.7, 0.2, true)

@@ -9,13 +9,25 @@ import "simd/archsimd"
 // registers round exactly like MULPS/ADDPS, so they reproduce the SSE2 lane.
 // The NEON lane runs its pure-Go reference on amd64.
 //
-// The loops walk shrinking slices through fixed-size array views, so the
-// compiler proves every load and store in bounds.
+// The loops index fixed-size array views of slices resliced to a common
+// length and capacity (x[:n:n]) with an index bounded by len-15 (or len-7),
+// so the compiler proves every access in bounds and the loop carries a
+// single induction variable. fma(a, b, c) is symmetric in a and b, and
+// VFMADD213PS overwrites the receiver, so the receiver of each MulAdd is the
+// multiplicand that dies there.
 
 var (
 	dlyUseAvx = archsimd.X86.AVX()
 	dlyUseFma = archsimd.X86.AVX2() && archsimd.X86.FMA()
 )
+
+// dlyCoreLane runs the MatchedFilterCore loop of the SIMD lane with group
+// size g. On amd64 the update of a sample is fused into the next sample's
+// dot product only when both cover h in one stretch (see dlyCoreSimple).
+func dlyCoreLane(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
+	filtersUpdated *bool, errorSum *float32) {
+	dlyCoreSimple(g, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum)
+}
 
 func dlyLd4(p *[4]float32) archsimd.Float32x4 { return archsimd.LoadFloat32x4Array(p) }
 
@@ -36,24 +48,21 @@ func dlyDotSse2(h, x []float32, acc *[16]float32) {
 		dlyDotSse2Ref(h, x, acc)
 		return
 	}
-	x = x[:len(h)]
+	n := len(h)
+	x = x[:n:n]
 	s := dlyLd4((*[4]float32)(acc[0:4]))
 	s4 := dlyLd4((*[4]float32)(acc[4:8]))
 	x2 := dlyLd4((*[4]float32)(acc[8:12]))
 	x24 := dlyLd4((*[4]float32)(acc[12:16]))
-	for len(h) >= 8 && len(x) >= 8 {
-		hh := (*[8]float32)(h)
-		xx := (*[8]float32)(x)
+	for i := 0; i < n-7; i += 8 {
+		hh := (*[8]float32)(h[i : i+8])
+		xx := (*[8]float32)(x[i : i+8])
 		xk := dlyLd4((*[4]float32)(xx[0:4]))
-		hk := dlyLd4((*[4]float32)(hh[0:4]))
 		xk4 := dlyLd4((*[4]float32)(xx[4:8]))
-		hk4 := dlyLd4((*[4]float32)(hh[4:8]))
 		x2 = x2.Add(xk.Mul(xk))
 		x24 = x24.Add(xk4.Mul(xk4))
-		s = s.Add(hk.Mul(xk))
-		s4 = s4.Add(hk4.Mul(xk4))
-		h = h[8:]
-		x = x[8:]
+		s = s.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(xk))
+		s4 = s4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(xk4))
 	}
 	s.StoreArray((*[4]float32)(acc[0:4]))
 	s4.StoreArray((*[4]float32)(acc[4:8]))
@@ -68,17 +77,18 @@ func dlyAxpyDotSse2(h, xa, xb []float32, alpha float32, acc *[16]float32) {
 		dlyAxpyDotSse2Ref(h, xa, xb, alpha, acc)
 		return
 	}
-	xa = xa[:len(h)]
-	xb = xb[:len(h)]
+	n := len(h)
+	xa = xa[:n:n]
+	xb = xb[:n:n]
 	a := archsimd.BroadcastFloat32x4(alpha)
 	s := dlyLd4((*[4]float32)(acc[0:4]))
 	s4 := dlyLd4((*[4]float32)(acc[4:8]))
 	x2 := dlyLd4((*[4]float32)(acc[8:12]))
 	x24 := dlyLd4((*[4]float32)(acc[12:16]))
-	for len(h) >= 8 && len(xa) >= 8 && len(xb) >= 8 {
-		hh := (*[8]float32)(h)
-		aa := (*[8]float32)(xa)
-		bb := (*[8]float32)(xb)
+	for i := 0; i < n-7; i += 8 {
+		hh := (*[8]float32)(h[i : i+8])
+		aa := (*[8]float32)(xa[i : i+8])
+		bb := (*[8]float32)(xb[i : i+8])
 		hk := dlyLd4((*[4]float32)(hh[0:4])).Add(a.Mul(dlyLd4((*[4]float32)(aa[0:4]))))
 		hk4 := dlyLd4((*[4]float32)(hh[4:8])).Add(a.Mul(dlyLd4((*[4]float32)(aa[4:8]))))
 		hk.StoreArray((*[4]float32)(hh[0:4]))
@@ -89,9 +99,6 @@ func dlyAxpyDotSse2(h, xa, xb []float32, alpha float32, acc *[16]float32) {
 		x24 = x24.Add(xk4.Mul(xk4))
 		s = s.Add(hk.Mul(xk))
 		s4 = s4.Add(hk4.Mul(xk4))
-		h = h[8:]
-		xa = xa[8:]
-		xb = xb[8:]
 	}
 	s.StoreArray((*[4]float32)(acc[0:4]))
 	s4.StoreArray((*[4]float32)(acc[4:8]))
@@ -103,33 +110,31 @@ func dlyAccErrSse2(h, x []float32, y float32, accErr []float32, x2 *[8]float32) 
 	if !dlyUseAvx {
 		return dlyAccErrSse2Ref(h, x, y, accErr, x2)
 	}
-	x = x[:len(h)]
-	accErr = accErr[:len(h)/8*2]
+	n := len(h) &^ 7
+	h = h[:n:n]
+	x = x[:n:n]
+	accErr = accErr[: n/4 : n/4]
 	x2v := dlyLd4((*[4]float32)(x2[0:4]))
 	x2v4 := dlyLd4((*[4]float32)(x2[4:8]))
 	var s float32
-	for len(h) >= 8 && len(x) >= 8 && len(accErr) >= 2 {
-		hh := (*[8]float32)(h)
-		xx := (*[8]float32)(x)
-		ae := (*[2]float32)(accErr)
+	for g := 0; g < len(accErr)-1; g += 2 {
+		i := 4 * g
+		hh := (*[8]float32)(h[i : i+8])
+		xx := (*[8]float32)(x[i : i+8])
+		ae := (*[2]float32)(accErr[g : g+2])
 		xk := dlyLd4((*[4]float32)(xx[0:4]))
-		hk := dlyLd4((*[4]float32)(hh[0:4]))
 		xk4 := dlyLd4((*[4]float32)(xx[4:8]))
-		hk4 := dlyLd4((*[4]float32)(hh[4:8]))
 		x2v = x2v.Add(xk.Mul(xk))
 		x2v4 = x2v4.Add(xk4.Mul(xk4))
 		var p, q [4]float32
-		hk.Mul(xk).StoreArray(&p)
-		hk4.Mul(xk4).StoreArray(&q)
+		dlyLd4((*[4]float32)(hh[0:4])).Mul(xk).StoreArray(&p)
+		dlyLd4((*[4]float32)(hh[4:8])).Mul(xk4).StoreArray(&q)
 		s += ((p[0] + p[1]) + p[2]) + p[3]
 		e0 := s - y
 		s += ((q[0] + q[1]) + q[2]) + q[3]
 		e1 := s - y
 		ae[0] += float32(e0 * e0)
 		ae[1] += float32(e1 * e1)
-		h = h[8:]
-		x = x[8:]
-		accErr = accErr[2:]
 	}
 	x2v.StoreArray((*[4]float32)(x2[0:4]))
 	x2v4.StoreArray((*[4]float32)(x2[4:8]))
@@ -141,27 +146,24 @@ func dlyAxpy(h, x []float32, alpha float32) {
 		dlyAxpyRef(h, x, alpha)
 		return
 	}
-	x = x[:len(h)]
+	n := len(h)
+	x = x[:n:n]
 	a := archsimd.BroadcastFloat32x4(alpha)
-	for len(h) >= 8 && len(x) >= 8 {
-		hh := (*[8]float32)(h)
-		xx := (*[8]float32)(x)
+	i := 0
+	for ; i < n-7; i += 8 {
+		hh := (*[8]float32)(h[i : i+8])
+		xx := (*[8]float32)(x[i : i+8])
 		h0 := dlyLd4((*[4]float32)(hh[0:4])).Add(a.Mul(dlyLd4((*[4]float32)(xx[0:4]))))
 		h1 := dlyLd4((*[4]float32)(hh[4:8])).Add(a.Mul(dlyLd4((*[4]float32)(xx[4:8]))))
 		h0.StoreArray((*[4]float32)(hh[0:4]))
 		h1.StoreArray((*[4]float32)(hh[4:8]))
-		h = h[8:]
-		x = x[8:]
 	}
-	for len(h) >= 4 && len(x) >= 4 {
-		hp := (*[4]float32)(h)
-		dlyLd4(hp).Add(a.Mul(dlyLd4((*[4]float32)(x)))).StoreArray(hp)
-		h = h[4:]
-		x = x[4:]
+	for ; i < n-3; i += 4 {
+		hp := (*[4]float32)(h[i : i+4])
+		dlyLd4(hp).Add(a.Mul(dlyLd4((*[4]float32)(x[i : i+4])))).StoreArray(hp)
 	}
-	x = x[:len(h)]
-	for k := range h {
-		h[k] += float32(alpha * x[k])
+	for ; i < n; i++ {
+		h[i] += float32(alpha * x[i])
 	}
 }
 
@@ -170,24 +172,21 @@ func dlyDotAvx2(h, x []float32, acc *[32]float32) {
 		dlyDotAvx2Ref(h, x, acc)
 		return
 	}
-	x = x[:len(h)]
+	n := len(h)
+	x = x[:n:n]
 	s := dlyLd8((*[8]float32)(acc[0:8]))
 	s8 := dlyLd8((*[8]float32)(acc[8:16]))
 	x2 := dlyLd8((*[8]float32)(acc[16:24]))
 	x28 := dlyLd8((*[8]float32)(acc[24:32]))
-	for len(h) >= 16 && len(x) >= 16 {
-		hh := (*[16]float32)(h)
-		xx := (*[16]float32)(x)
+	for i := 0; i < n-15; i += 16 {
+		hh := (*[16]float32)(h[i : i+16])
+		xx := (*[16]float32)(x[i : i+16])
 		xk := dlyLd8((*[8]float32)(xx[0:8]))
-		hk := dlyLd8((*[8]float32)(hh[0:8]))
 		xk8 := dlyLd8((*[8]float32)(xx[8:16]))
-		hk8 := dlyLd8((*[8]float32)(hh[8:16]))
+		s = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(xk, s)
+		s8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(xk8, s8)
 		x2 = xk.MulAdd(xk, x2)
 		x28 = xk8.MulAdd(xk8, x28)
-		s = hk.MulAdd(xk, s)
-		s8 = hk8.MulAdd(xk8, s8)
-		h = h[16:]
-		x = x[16:]
 	}
 	s.StoreArray((*[8]float32)(acc[0:8]))
 	s8.StoreArray((*[8]float32)(acc[8:16]))
@@ -203,30 +202,28 @@ func dlyAxpyFmaDotAvx2(h, xa, xb []float32, alpha float32, acc *[32]float32) {
 		dlyAxpyFmaDotAvx2Ref(h, xa, xb, alpha, acc)
 		return
 	}
-	xa = xa[:len(h)]
-	xb = xb[:len(h)]
+	n := len(h)
+	xa = xa[:n:n]
+	xb = xb[:n:n]
 	a := archsimd.BroadcastFloat32x8(alpha)
 	s := dlyLd8((*[8]float32)(acc[0:8]))
 	s8 := dlyLd8((*[8]float32)(acc[8:16]))
 	x2 := dlyLd8((*[8]float32)(acc[16:24]))
 	x28 := dlyLd8((*[8]float32)(acc[24:32]))
-	for len(h) >= 16 && len(xa) >= 16 && len(xb) >= 16 {
-		hh := (*[16]float32)(h)
-		aa := (*[16]float32)(xa)
-		bb := (*[16]float32)(xb)
+	for i := 0; i < n-15; i += 16 {
+		hh := (*[16]float32)(h[i : i+16])
+		aa := (*[16]float32)(xa[i : i+16])
+		bb := (*[16]float32)(xb[i : i+16])
 		hk := dlyLd8((*[8]float32)(aa[0:8])).MulAdd(a, dlyLd8((*[8]float32)(hh[0:8])))
 		hk8 := dlyLd8((*[8]float32)(aa[8:16])).MulAdd(a, dlyLd8((*[8]float32)(hh[8:16])))
 		hk.StoreArray((*[8]float32)(hh[0:8]))
 		hk8.StoreArray((*[8]float32)(hh[8:16]))
 		xk := dlyLd8((*[8]float32)(bb[0:8]))
 		xk8 := dlyLd8((*[8]float32)(bb[8:16]))
-		x2 = xk.MulAdd(xk, x2)
-		x28 = xk8.MulAdd(xk8, x28)
 		s = hk.MulAdd(xk, s)
 		s8 = hk8.MulAdd(xk8, s8)
-		h = h[16:]
-		xa = xa[16:]
-		xb = xb[16:]
+		x2 = xk.MulAdd(xk, x2)
+		x28 = xk8.MulAdd(xk8, x28)
 	}
 	s.StoreArray((*[8]float32)(acc[0:8]))
 	s8.StoreArray((*[8]float32)(acc[8:16]))
@@ -235,85 +232,84 @@ func dlyAxpyFmaDotAvx2(h, xa, xb []float32, alpha float32, acc *[32]float32) {
 	archsimd.ClearAVXUpperBits()
 }
 
+// dlyAccErrChunk is the number of 16-sample groups dlyAccErrAvx2 runs
+// through its 256-bit pass before it adds up their sums.
+const dlyAccErrChunk = 32
+
+// dlyAccErrAvx2 alternates three passes per chunk of dlyAccErrChunk groups:
+// the 256-bit pass accumulates x*x and stores each group's four sub-group
+// sums in the order the running sum adds them (hadd lanes [0], [4], [1],
+// [5]); after ClearAVXUpperBits the scalar pass runs the running sum and
+// stores every error s - y; the 128-bit pass then adds the squared errors
+// into accErr with fused multiply-adds. The passes communicate through
+// buffers written long before they are read, so no load waits on a narrower
+// store.
 func dlyAccErrAvx2(h, x []float32, y float32, accErr []float32, x2 *[16]float32) float32 {
 	if !dlyUseFma {
 		return dlyAccErrAvx2Ref(h, x, y, accErr, x2)
 	}
-	x = x[:len(h)]
-	accErr = accErr[:len(h)/16*4]
+	groups := len(h) / 16
+	n := 16 * groups
+	h = h[:n:n]
+	x = x[:n:n]
+	accErr = accErr[: 4*groups : 4*groups]
 	var s float32
-	// The 256-bit pass and the scalar running sum alternate per chunk of
-	// dlyAccErrChunk groups, so the upper YMM halves are clean (see
-	// ClearAVXUpperBits) while the scalar code runs. sums[4*g:4*g+4] holds
-	// group g's four sub-group sums in the order the running sum adds them
-	// (hadd lanes [0], [4], [1], [5]).
-	var sums [4 * dlyAccErrChunk]float32
-	for len(h) >= 16 && len(x) >= 16 && len(accErr) >= 4 {
+	var sums, es [4 * dlyAccErrChunk]float32
+	for g0 := 0; g0 < groups; g0 += dlyAccErrChunk {
+		m := min(dlyAccErrChunk, groups-g0)
+		hc := h[16*g0 : 16*(g0+m)]
+		xc := x[16*g0 : 16*(g0+m) : 16*(g0+m)]
 		x2v := dlyLd8((*[8]float32)(x2[0:8]))
 		x2v8 := dlyLd8((*[8]float32)(x2[8:16]))
-		n := 0
-		for n < dlyAccErrChunk && len(h) >= 16 && len(x) >= 16 {
-			hh := (*[16]float32)(h)
-			xx := (*[16]float32)(x)
+		for g := 0; g < m && 16*g < len(hc)-15; g++ {
+			i := 16 * g
+			hh := (*[16]float32)(hc[i : i+16])
+			xx := (*[16]float32)(xc[i : i+16])
 			xk := dlyLd8((*[8]float32)(xx[0:8]))
-			hk := dlyLd8((*[8]float32)(hh[0:8]))
 			xk8 := dlyLd8((*[8]float32)(xx[8:16]))
-			hk8 := dlyLd8((*[8]float32)(hh[8:16]))
+			p := dlyLd8((*[8]float32)(hh[0:8])).Mul(xk)
+			q := dlyLd8((*[8]float32)(hh[8:16])).Mul(xk8)
 			x2v = xk.MulAdd(xk, x2v)
 			x2v8 = xk8.MulAdd(xk8, x2v8)
-			p := hk.Mul(xk)
-			q := hk8.Mul(xk8)
 			r := p.ConcatAddPairsGrouped(q)
 			r = r.ConcatAddPairsGrouped(r)
-			r.GetLo().ConcatPermuteScalars(0, 4, 1, 5, r.GetHi()).StoreArray((*[4]float32)(sums[4*n : 4*n+4]))
-			h = h[16:]
-			x = x[16:]
-			n++
+			r.GetLo().ConcatPermuteScalars(0, 4, 1, 5, r.GetHi()).StoreArray((*[4]float32)(sums[4*g : 4*g+4]))
 		}
 		x2v.StoreArray((*[8]float32)(x2[0:8]))
 		x2v8.StoreArray((*[8]float32)(x2[8:16]))
 		archsimd.ClearAVXUpperBits()
-		for g := 0; g < n && len(accErr) >= 4; g++ {
-			sg := (*[4]float32)(sums[4*g : 4*g+4])
-			ap := (*[4]float32)(accErr)
-			var e [4]float32
-			s += sg[0]
-			e[0] = s - y
-			s += sg[1]
-			e[1] = s - y
-			s += sg[2]
-			e[2] = s - y
-			s += sg[3]
-			e[3] = s - y
-			ev := archsimd.LoadFloat32x4Array(&e)
+		sc := sums[:4*m]
+		ec := es[:len(sc)]
+		for j, v := range sc {
+			s += v
+			ec[j] = s - y
+		}
+		ac := accErr[4*g0 : 4*(g0+m)]
+		for j := 0; j < len(ac)-3 && j < len(ec)-3; j += 4 {
+			ap := (*[4]float32)(ac[j : j+4])
+			ev := dlyLd4((*[4]float32)(ec[j : j+4]))
 			ev.MulAdd(ev, dlyLd4(ap)).StoreArray(ap)
-			accErr = accErr[4:]
 		}
 	}
 	return s
 }
-
-// dlyAccErrChunk is the number of 16-sample groups dlyAccErrAvx2 runs
-// through its 256-bit pass before it adds up their sums.
-const dlyAccErrChunk = 32
 
 func dlyAxpyFma(h, x []float32, alpha float32) {
 	if !dlyUseFma {
 		dlyAxpyFmaRef(h, x, alpha)
 		return
 	}
-	x = x[:len(h)]
+	n := len(h)
+	x = x[:n:n]
 	a := archsimd.BroadcastFloat32x8(alpha)
-	for len(h) >= 8 && len(x) >= 8 {
-		hp := (*[8]float32)(h)
-		dlyLd8((*[8]float32)(x)).MulAdd(a, dlyLd8(hp)).StoreArray(hp)
-		h = h[8:]
-		x = x[8:]
+	i := 0
+	for ; i < n-7; i += 8 {
+		hp := (*[8]float32)(h[i : i+8])
+		dlyLd8((*[8]float32)(x[i:i+8])).MulAdd(a, dlyLd8(hp)).StoreArray(hp)
 	}
 	archsimd.ClearAVXUpperBits()
-	x = x[:len(h)]
-	for k := range h {
-		h[k] = fmaf(x[k], alpha, h[k])
+	for ; i < n; i++ {
+		h[i] = fmaf(x[i], alpha, h[i])
 	}
 }
 

@@ -39,3 +39,10 @@ func dlyAxpyFmaDotAvx2(h, xa, xb []float32, alpha float32, acc *[32]float32) {
 }
 
 func dlyMaxSquarePeakIndex(h []float32) int { return dlyMaxSquarePeakIndexRef(h) }
+
+// dlyCoreLane runs the MatchedFilterCore loop of the SIMD lane with group
+// size g, with every update fused into the next dot product.
+func dlyCoreLane(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
+	filtersUpdated *bool, errorSum *float32) {
+	dlyCoreFused(g, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum)
+}
