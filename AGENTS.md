@@ -101,7 +101,13 @@ write changelog narrative.
 ## Allocation discipline
 
 Steady-state processing is allocation-free. Lock new hot paths with a
-`testing.AllocsPerRun(...) == 0` test after warm-up.
+`testing.AllocsPerRun(...) == 0` test after warm-up. The one exception is the
+render transfer queue: it starts small and grows to the deepest render burst
+so far (up to `RenderTransferQueueSizeFrames`), so a render burst deeper than
+any before grows the queue once; allocation tests warm up past the deepest
+burst they measure. Keep per-instance state in few heap objects (one backing
+array per ring or per multi-dimensional buffer); `TestNewFootprint` bounds
+the objects per canceller.
 
 ## Build and test
 

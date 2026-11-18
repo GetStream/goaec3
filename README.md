@@ -59,7 +59,8 @@ for {
 - `AnalyzeRender` may run on a different goroutine than `ProcessCapture`,
   like WebRTC's render and capture threads. `NotifyEchoPathGainChange` may be
   called from any goroutine.
-- Frames are caller-owned. Once warmed up, the hot path allocates nothing.
+- Frames are caller-owned. The hot path allocates nothing in steady state; a
+  render burst deeper than any before grows the queue once.
 - Non-finite input (NaN) poisons the canceller's state permanently, exactly
   as in libwebrtc: every later output is NaN while the metrics can still look
   healthy. Sanitize input upstream, or create a new canceller.

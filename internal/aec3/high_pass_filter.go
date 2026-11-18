@@ -33,18 +33,29 @@ func ec3ChooseHighPassCoefficients(sampleRateHz int) []BiQuadCoefficients {
 // the channels directly.
 type HighPassFilter struct {
 	sampleRateHz int
-	filters      []*CascadedBiQuadFilter
+	filters      []CascadedBiQuadFilter
+}
+
+// newHighPassFilters returns numChannels filters whose sections share one
+// backing array.
+func newHighPassFilters(coefficients []BiQuadCoefficients, numChannels int) []CascadedBiQuadFilter {
+	n := len(coefficients)
+	sections := make([]BiQuad, numChannels*n)
+	filters := make([]CascadedBiQuadFilter, numChannels)
+	for k := range filters {
+		filters[k].biquads = sections[k*n : (k+1)*n : (k+1)*n]
+		for i, c := range coefficients {
+			filters[k].biquads[i] = BiQuad{Coefficients: c}
+		}
+	}
+	return filters
 }
 
 // NewHighPassFilter returns a filter for numChannels channels at
 // sampleRateHz (16000, 32000 or 48000).
 func NewHighPassFilter(sampleRateHz, numChannels int) *HighPassFilter {
-	f := &HighPassFilter{sampleRateHz: sampleRateHz, filters: make([]*CascadedBiQuadFilter, numChannels)}
-	coefficients := ec3ChooseHighPassCoefficients(sampleRateHz)
-	for k := range f.filters {
-		f.filters[k] = NewCascadedBiQuadFilter(coefficients)
-	}
-	return f
+	return &HighPassFilter{sampleRateHz: sampleRateHz,
+		filters: newHighPassFilters(ec3ChooseHighPassCoefficients(sampleRateHz), numChannels)}
 }
 
 // Process filters audio[channel] in place (the C++
@@ -77,10 +88,8 @@ func (f *HighPassFilter) ResetChannels(numChannels int) {
 	for k := 0; k < oldNumChannels; k++ {
 		f.filters[k].Reset()
 	}
-	coefficients := ec3ChooseHighPassCoefficients(f.sampleRateHz)
-	for k := oldNumChannels; k < numChannels; k++ {
-		f.filters = append(f.filters, NewCascadedBiQuadFilter(coefficients))
-	}
+	f.filters = append(f.filters, newHighPassFilters(ec3ChooseHighPassCoefficients(f.sampleRateHz),
+		numChannels-oldNumChannels)...)
 }
 
 // SampleRateHz returns the sample rate the filter was designed for.

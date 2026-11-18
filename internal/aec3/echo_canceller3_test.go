@@ -240,18 +240,120 @@ func TestEc3RenderTransferQueue(t *testing.T) {
 	out := ec3NewFrame(1, 1, SplitBandSize)
 	for i := 0; i < 4; i++ {
 		in[0][0][0] = float32(i)
-		ok := q.Insert(&in)
+		ok := q.Insert(in)
 		if ok != (i < 3) {
 			t.Fatalf("insert %d: %v", i, ok)
 		}
 	}
 	for i := 0; i < 3; i++ {
-		if !q.Remove(&out) || out[0][0][0] != float32(i) {
+		if !q.Remove(out) || out[0][0][0] != float32(i) {
 			t.Fatalf("remove %d: %v", i, out[0][0][0])
 		}
 	}
-	if q.Remove(&out) {
+	if q.Remove(out) {
 		t.Fatal("remove from empty queue")
+	}
+}
+
+// TestEc3RenderTransferQueueGrowth drives the queue with random bursts of
+// inserts and removes against a FIFO that holds up to maxFrames frames, and
+// checks the accepted and dropped frames, their order and contents, and that
+// the capacity tracks the deepest burst.
+func TestEc3RenderTransferQueueGrowth(t *testing.T) {
+	rng := rand.New(rand.NewSource(9))
+	for _, c := range []struct{ maxFrames, numBands, numChannels int }{
+		{1, 1, 1}, {3, 1, 1}, {7, 2, 3}, {RenderTransferQueueSizeFrames, 3, 2},
+	} {
+		var q ec3RenderTransferQueue
+		q.init(c.maxFrames, c.numBands, c.numChannels)
+		in := ec3NewFrame(c.numBands, c.numChannels, SplitBandSize)
+		out := ec3NewFrame(c.numBands, c.numChannels, SplitBandSize)
+		var fifo []float32
+		next, deepest := float32(0), 0
+		for step := 0; step < 4000; step++ {
+			burst := rng.Intn(4)
+			if rng.Intn(40) == 0 {
+				burst = rng.Intn(2*c.maxFrames + 2)
+			}
+			for range burst {
+				next++
+				for band := range in {
+					for ch := range in[band] {
+						for k := range in[band][ch] {
+							in[band][ch][k] = next + float32(band*1000+ch*100) + float32(k)/1024
+						}
+					}
+				}
+				ok := q.Insert(in)
+				if want := len(fifo) < c.maxFrames; ok != want {
+					t.Fatalf("%+v step %d: Insert = %v with %d queued, want %v", c, step, ok, len(fifo), want)
+				}
+				if ok {
+					fifo = append(fifo, next)
+					deepest = max(deepest, len(fifo))
+				}
+			}
+			wantCapacity := min(c.maxFrames, ec3RenderTransferQueueInitialFrames)
+			for wantCapacity < deepest {
+				wantCapacity = min(c.maxFrames, 2*wantCapacity)
+			}
+			if q.capacity() != wantCapacity {
+				t.Fatalf("%+v step %d: capacity %d after a burst of %d, want %d", c, step, q.capacity(), deepest, wantCapacity)
+			}
+			for range rng.Intn(5) {
+				ok := q.Remove(out)
+				if ok != (len(fifo) > 0) {
+					t.Fatalf("%+v step %d: Remove = %v with %d queued", c, step, ok, len(fifo))
+				}
+				if !ok {
+					break
+				}
+				want := fifo[0]
+				fifo = fifo[1:]
+				for band := range out {
+					for ch := range out[band] {
+						for k := range out[band][ch] {
+							if v := want + float32(band*1000+ch*100) + float32(k)/1024; out[band][ch][k] != v {
+								t.Fatalf("%+v step %d: out[%d][%d][%d] = %v, want %v", c, step, band, ch, k, out[band][ch][k], v)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestEc3RenderTransferQueueAllocationFree(t *testing.T) {
+	var q ec3RenderTransferQueue
+	q.init(RenderTransferQueueSizeFrames, 3, 2)
+	in := ec3NewFrame(3, 2, SplitBandSize)
+	out := ec3NewFrame(3, 2, SplitBandSize)
+	// Warm up past the deepest burst of the measured loop.
+	for range 8 {
+		q.Insert(in)
+	}
+	for q.Remove(out) {
+	}
+	if a := testing.AllocsPerRun(100, func() {
+		for range 8 {
+			q.Insert(in)
+		}
+		for q.Remove(out) {
+		}
+	}); a != 0 {
+		t.Fatalf("queue allocates %v times per burst", a)
+	}
+	// A deeper burst grows the queue once, and then no more.
+	before := q.capacity()
+	if a := testing.AllocsPerRun(100, func() {
+		for range 20 {
+			q.Insert(in)
+		}
+		for q.Remove(out) {
+		}
+	}); a != 0 || before != 8 || q.capacity() != 32 {
+		t.Fatalf("burst of 20: %v allocations per burst after the first, capacity %d -> %d", a, before, q.capacity())
 	}
 }
 

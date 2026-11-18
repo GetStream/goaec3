@@ -39,6 +39,29 @@ func (r *ringIndex) UpdateReadIndex(offset int)  { r.Read = r.OffsetIndex(r.Read
 func (r *ringIndex) IncReadIndex()               { r.Read = r.IncIndex(r.Read) }
 func (r *ringIndex) DecReadIndex()               { r.Read = r.DecIndex(r.Read) }
 
+// The rings below keep all their slots in one backing array (one heap
+// object per ring rather than one per slot); each slot is a full slice
+// expression of its own part, so a slot never grows into its neighbour.
+
+// newFlat3 returns [n0][n1] slices of length length and capacity capacity,
+// all in one backing array.
+func newFlat3(n0, n1, length, capacity int) [][][]float32 {
+	var data []float32
+	if capacity > 0 {
+		data = make([]float32, n0*n1*capacity)
+	}
+	views := make([][]float32, n0*n1)
+	v := make([][][]float32, n0)
+	for i := range v {
+		v[i] = views[i*n1 : (i+1)*n1 : (i+1)*n1]
+		for j := range v[i] {
+			k := (i*n1 + j) * capacity
+			v[i][j] = data[k : k+length : k+capacity]
+		}
+	}
+	return v
+}
+
 // BlockBuffer is a ring of Blocks (block_buffer.h).
 type BlockBuffer struct {
 	ringIndex
@@ -47,8 +70,10 @@ type BlockBuffer struct {
 
 func NewBlockBuffer(size, numBands, numChannels int) *BlockBuffer {
 	b := &BlockBuffer{ringIndex: ringIndex{Size: size}, Buffer: make([]Block, size)}
+	n := numBands * numChannels * BlockSize
+	data := make([]float32, size*n)
 	for i := range b.Buffer {
-		b.Buffer[i] = NewBlock(numBands, numChannels)
+		b.Buffer[i] = Block{numBands: numBands, numChannels: numChannels, data: data[i*n : (i+1)*n : (i+1)*n]}
 	}
 	return b
 }
@@ -61,8 +86,9 @@ type SpectrumBuffer struct {
 
 func NewSpectrumBuffer(size, numChannels int) *SpectrumBuffer {
 	b := &SpectrumBuffer{ringIndex: ringIndex{Size: size}, Buffer: make([][][FftLengthBy2Plus1]float32, size)}
+	data := make([][FftLengthBy2Plus1]float32, size*numChannels)
 	for i := range b.Buffer {
-		b.Buffer[i] = make([][FftLengthBy2Plus1]float32, numChannels)
+		b.Buffer[i] = data[i*numChannels : (i+1)*numChannels : (i+1)*numChannels]
 	}
 	return b
 }
@@ -75,8 +101,9 @@ type FftBuffer struct {
 
 func NewFftBuffer(size, numChannels int) *FftBuffer {
 	b := &FftBuffer{ringIndex: ringIndex{Size: size}, Buffer: make([][]FftData, size)}
+	data := make([]FftData, size*numChannels)
 	for i := range b.Buffer {
-		b.Buffer[i] = make([]FftData, numChannels)
+		b.Buffer[i] = data[i*numChannels : (i+1)*numChannels : (i+1)*numChannels]
 	}
 	return b
 }

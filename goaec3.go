@@ -13,7 +13,8 @@
 // 16-bit float scale AEC3 works in and, at 32 and 48 kHz, split into 16 kHz
 // bands and merged back, exactly as webrtc::AudioBuffer does.
 //
-// Once warmed up, AnalyzeRender and ProcessCapture do not allocate.
+// AnalyzeRender and ProcessCapture allocate nothing in steady state; a render
+// burst deeper than any before grows the queue once.
 package goaec3
 
 import (
@@ -85,19 +86,27 @@ func ec3NewSideBuffers(sampleRateHz, numChannels int) ec3SideBuffers {
 	s := ec3SideBuffers{splitter: bands.NewBandSplitter(sampleRateHz, numChannels)}
 	frameLength := sampleRateHz / 100
 	numBands := s.splitter.NumBands()
-	s.full = make([][]float32, numChannels)
-	for ch := range s.full {
-		s.full[ch] = make([]float32, frameLength)
+	// One backing array for the samples and one for the slice headers.
+	splitLength := aec3.SplitBandSize
+	if numBands == 1 {
+		splitLength = 0 // At 16 kHz the single band is the full-band signal.
 	}
+	data := make([]float32, numChannels*(frameLength+numBands*splitLength))
+	views := make([][]float32, numChannels*(1+numBands))
+	s.full = views[:numChannels:numChannels]
+	for ch := range s.full {
+		s.full[ch] = data[ch*frameLength : (ch+1)*frameLength : (ch+1)*frameLength]
+	}
+	data, views = data[numChannels*frameLength:], views[numChannels:]
 	s.split = make([][][]float32, numBands)
 	for band := range s.split {
-		s.split[band] = make([][]float32, numChannels)
+		s.split[band] = views[band*numChannels : (band+1)*numChannels : (band+1)*numChannels]
 		for ch := range s.split[band] {
 			if numBands == 1 {
-				// At 16 kHz the single band is the full-band signal.
 				s.split[band][ch] = s.full[ch]
 			} else {
-				s.split[band][ch] = make([]float32, aec3.SplitBandSize)
+				i := (band*numChannels + ch) * splitLength
+				s.split[band][ch] = data[i : i+splitLength : i+splitLength]
 			}
 		}
 	}
@@ -198,8 +207,9 @@ func newEchoCanceller(cfg, multichannelCfg *Config, sampleRateHz, numRenderChann
 	}
 	if e.exportLinearOutput {
 		e.linear = make([][]float32, numCaptureChannels)
+		data := make([]float32, numCaptureChannels*LinearOutputFrameSize)
 		for ch := range e.linear {
-			e.linear[ch] = make([]float32, LinearOutputFrameSize)
+			e.linear[ch] = data[ch*LinearOutputFrameSize : (ch+1)*LinearOutputFrameSize : (ch+1)*LinearOutputFrameSize]
 		}
 	}
 	return e, nil

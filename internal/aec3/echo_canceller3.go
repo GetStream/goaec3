@@ -38,60 +38,100 @@ func ec3DetectSaturation(y []float32) bool {
 
 // ec3RenderTransferQueue is the SwapQueue that moves 10 ms render frames
 // ([band][channel][SplitBandSize]) from AnalyzeRender to the capture side.
-// Insert and Remove swap the caller's frame with a queue slot; Insert fails
-// (and drops the frame) when the queue is full, Remove fails when it is
-// empty. It is safe for one inserting and one removing goroutine.
+// Insert copies the caller's frame into the queue and Remove copies the
+// oldest queued frame out; Insert fails (and drops the frame) when maxFrames
+// frames are queued, Remove fails when the queue is empty. The frames live
+// in one flat buffer that starts at ec3RenderTransferQueueInitialFrames
+// frames and doubles, up to maxFrames, when a render burst fills it, so the
+// queue holds as many frames as the deepest burst so far. It is safe for one
+// inserting and one removing goroutine.
 type ec3RenderTransferQueue struct {
 	mu             sync.Mutex
-	queue          [][][][]float32
+	numBands       int
+	numChannels    int
+	maxFrames      int
+	buffer         []float32 // [frame][band][channel][SplitBandSize]
 	nextWriteIndex int
 	nextReadIndex  int
 	numElements    int
 }
 
+// ec3RenderTransferQueueInitialFrames is the initial queue capacity: render
+// and capture alternate in steady state, so one frame is queued at a time.
+const ec3RenderTransferQueueInitialFrames = 4
+
+// ec3NewFrame returns a [numBands][numChannels][frameLength] frame whose
+// samples share one backing array.
 func ec3NewFrame(numBands, numChannels, frameLength int) [][][]float32 {
-	frame := make([][][]float32, numBands)
-	for band := range frame {
-		frame[band] = make([][]float32, numChannels)
-		for ch := range frame[band] {
-			frame[band][ch] = make([]float32, frameLength)
-		}
-	}
-	return frame
+	return newFlat3(numBands, numChannels, frameLength, frameLength)
 }
 
-func (q *ec3RenderTransferQueue) init(size, numBands, numChannels int) {
-	q.queue = make([][][][]float32, size)
-	for i := range q.queue {
-		q.queue[i] = ec3NewFrame(numBands, numChannels, SplitBandSize)
-	}
+func (q *ec3RenderTransferQueue) init(maxFrames, numBands, numChannels int) {
+	q.numBands, q.numChannels, q.maxFrames = numBands, numChannels, maxFrames
+	q.buffer = make([]float32, min(maxFrames, ec3RenderTransferQueueInitialFrames)*q.frameSize())
 }
 
-func (q *ec3RenderTransferQueue) Insert(input *[][][]float32) bool {
+func (q *ec3RenderTransferQueue) frameSize() int { return q.numBands * q.numChannels * SplitBandSize }
+
+func (q *ec3RenderTransferQueue) capacity() int { return len(q.buffer) / q.frameSize() }
+
+func (q *ec3RenderTransferQueue) slot(index int) []float32 {
+	n := q.frameSize()
+	return q.buffer[index*n : (index+1)*n : (index+1)*n]
+}
+
+// grow doubles the capacity (up to maxFrames), keeping the queued frames in
+// order at the start of the new buffer.
+func (q *ec3RenderTransferQueue) grow() {
+	n := q.frameSize()
+	capacity := q.capacity()
+	buffer := make([]float32, min(q.maxFrames, 2*capacity)*n)
+	for i := 0; i < q.numElements; i++ {
+		copy(buffer[i*n:(i+1)*n], q.slot((q.nextReadIndex+i)%capacity))
+	}
+	q.buffer = buffer
+	q.nextReadIndex = 0
+	q.nextWriteIndex = q.numElements
+}
+
+func (q *ec3RenderTransferQueue) Insert(input [][][]float32) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.numElements == len(q.queue) {
-		return false
+	if q.numElements == q.capacity() {
+		if q.numElements == q.maxFrames {
+			return false
+		}
+		q.grow()
 	}
-	*input, q.queue[q.nextWriteIndex] = q.queue[q.nextWriteIndex], *input
+	dst := q.slot(q.nextWriteIndex)
+	for band := range input {
+		for ch := range input[band] {
+			copy(dst[(band*q.numChannels+ch)*SplitBandSize:][:SplitBandSize], input[band][ch])
+		}
+	}
 	q.numElements++
 	q.nextWriteIndex++
-	if q.nextWriteIndex == len(q.queue) {
+	if q.nextWriteIndex == q.capacity() {
 		q.nextWriteIndex = 0
 	}
 	return true
 }
 
-func (q *ec3RenderTransferQueue) Remove(output *[][][]float32) bool {
+func (q *ec3RenderTransferQueue) Remove(output [][][]float32) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.numElements == 0 {
 		return false
 	}
-	*output, q.queue[q.nextReadIndex] = q.queue[q.nextReadIndex], *output
+	src := q.slot(q.nextReadIndex)
+	for band := range output {
+		for ch := range output[band] {
+			copy(output[band][ch], src[(band*q.numChannels+ch)*SplitBandSize:][:SplitBandSize])
+		}
+	}
 	q.numElements--
 	q.nextReadIndex++
-	if q.nextReadIndex == len(q.queue) {
+	if q.nextReadIndex == q.capacity() {
 		q.nextReadIndex = 0
 	}
 	return true
@@ -137,7 +177,7 @@ func (w *ec3RenderWriter) Insert(input [][][]float32) {
 		w.highPassFilter.Process(w.renderQueueInputFrame[0])
 	}
 
-	_ = w.renderTransferQueue.Insert(&w.renderQueueInputFrame)
+	_ = w.renderTransferQueue.Insert(w.renderQueueInputFrame)
 }
 
 // EchoCanceller3 is the main AEC3 class (echo_canceller3.h). It receives
@@ -181,11 +221,7 @@ type EchoCanceller3 struct {
 }
 
 func ec3NewSubFrameView(numBands, numChannels int) [][][]float32 {
-	v := make([][][]float32, numBands)
-	for band := range v {
-		v[band] = make([][]float32, numChannels)
-	}
-	return v
+	return newFlat3(numBands, numChannels, 0, 0)
 }
 
 // NewEchoCanceller3 creates an echo canceller. multichannelConfig is the
@@ -429,7 +465,7 @@ func (e *EchoCanceller3) bufferRemainingRenderFrameContent() {
 
 // emptyRenderQueue empties the render transfer queue.
 func (e *EchoCanceller3) emptyRenderQueue() {
-	frameToBuffer := e.renderTransferQueue.Remove(&e.renderQueueOutputFrame)
+	frameToBuffer := e.renderTransferQueue.Remove(e.renderQueueOutputFrame)
 	for frameToBuffer {
 		if e.multichannelContentDetector.UpdateDetection(e.renderQueueOutputFrame) {
 			// Reinitialize the AEC when proper stereo is detected.
@@ -441,7 +477,7 @@ func (e *EchoCanceller3) emptyRenderQueue() {
 		e.bufferRenderFrameContent(e.multichannelContentDetector.IsTemporaryMultiChannelContentDetected(), 1)
 		e.bufferRemainingRenderFrameContent()
 
-		frameToBuffer = e.renderTransferQueue.Remove(&e.renderQueueOutputFrame)
+		frameToBuffer = e.renderTransferQueue.Remove(e.renderQueueOutputFrame)
 	}
 }
 

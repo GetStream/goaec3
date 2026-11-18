@@ -354,8 +354,9 @@ func NewAdaptiveFirFilter(maxSizePartitions, initialSizePartitions, sizeChangeDu
 		oldTargetSizePartitions:  initialSizePartitions,
 		H:                        make([][]FftData, maxSizePartitions),
 	}
+	h := make([]FftData, maxSizePartitions*numRenderChannels)
 	for p := range f.H {
-		f.H[p] = make([]FftData, numRenderChannels)
+		f.H[p] = h[p*numRenderChannels : (p+1)*numRenderChannels : (p+1)*numRenderChannels]
 	}
 	f.oneBySizeChangeDurationBlocks = 1 / float32(f.sizeChangeDurationBlocks)
 	afirZeroFilter(0, f.maxSizePartitions, f.H)

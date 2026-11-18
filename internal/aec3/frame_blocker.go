@@ -10,14 +10,8 @@ type FrameBlocker struct {
 
 // NewFrameBlocker returns a blocker for numBands bands of numChannels.
 func NewFrameBlocker(numBands, numChannels int) *FrameBlocker {
-	f := &FrameBlocker{numBands: numBands, numChannels: numChannels, buffer: make([][][]float32, numBands)}
-	for band := range f.buffer {
-		f.buffer[band] = make([][]float32, numChannels)
-		for ch := range f.buffer[band] {
-			f.buffer[band][ch] = make([]float32, 0, BlockSize)
-		}
-	}
-	return f
+	return &FrameBlocker{numBands: numBands, numChannels: numChannels,
+		buffer: newFlat3(numBands, numChannels, 0, BlockSize)}
 }
 
 // InsertSubFrameAndExtractBlock inserts one 80 sample multiband subframe

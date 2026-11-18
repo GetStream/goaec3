@@ -11,14 +11,8 @@ type BlockFramer struct {
 
 // NewBlockFramer returns a framer whose buffers start with BlockSize zeros.
 func NewBlockFramer(numBands, numChannels int) *BlockFramer {
-	f := &BlockFramer{numBands: numBands, numChannels: numChannels, buffer: make([][][]float32, numBands)}
-	for band := range f.buffer {
-		f.buffer[band] = make([][]float32, numChannels)
-		for ch := range f.buffer[band] {
-			f.buffer[band][ch] = make([]float32, BlockSize)
-		}
-	}
-	return f
+	return &BlockFramer{numBands: numBands, numChannels: numChannels,
+		buffer: newFlat3(numBands, numChannels, BlockSize, BlockSize)}
 }
 
 // InsertBlock adds a 64 sample block into the data that will form the next
