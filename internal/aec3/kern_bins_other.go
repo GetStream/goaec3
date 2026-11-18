@@ -52,7 +52,9 @@ func kernRefinedMu(X2, hError, E2 *[FftLengthBy2Plus1]float32, gate, sp float32,
 	kernRefinedMuGeneric(X2, hError, E2, gate, sp, mu)
 }
 
-func kernRefinedHError(mu, X2, hError *[FftLengthBy2Plus1]float32) { kernRefinedHErrorGeneric(mu, X2, hError) }
+func kernRefinedHError(mu, X2, hError *[FftLengthBy2Plus1]float32) {
+	kernRefinedHErrorGeneric(mu, X2, hError)
+}
 
 func kernRefinedLeak(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []float32, disallowLeakageDiverged bool,
 	leakageConverged, leakageDiverged, errorFloor, errorCeil float32, hError *[FftLengthBy2Plus1]float32) {
