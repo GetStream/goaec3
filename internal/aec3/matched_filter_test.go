@@ -91,6 +91,17 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 		sB = dlyAccErrAvx2Ref(h, x, y, accB, &x16b)
 		dlyRequireBits(t, "accErrAvx2", append(accA, append(x16a[:], sA)...), append(accB, append(x16b[:], sB)...))
 
+		ts, tx := float32(rng.NormFloat64()), float32(rng.NormFloat64())
+		if trial%7 == 0 {
+			ts, tx = 0, 0
+		}
+		s1, x1 := dlyReduceSse2(&a16, ts, tx)
+		s2, x2 := dlyReduceSse2Ref(&a16, ts, tx)
+		dlyRequireBits(t, "reduceSse2", []float32{s1, x1}, []float32{s2, x2})
+		s1, x1 = dlyReduceAvx2(&a32, ts, tx)
+		s2, x2 = dlyReduceAvx2Ref(&a32, ts, tx)
+		dlyRequireBits(t, "reduceAvx2", []float32{s1, x1}, []float32{s2, x2})
+
 		m := rng.Intn(n + 1)
 		alpha := float32(rng.NormFloat64() * 1e-4)
 		hA := append([]float32(nil), h[:m]...)

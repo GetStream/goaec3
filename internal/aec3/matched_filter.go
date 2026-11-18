@@ -198,8 +198,8 @@ func dlyReduceNeon(acc *[8]float32, s, x2Sum float32) (float32, float32) {
 	return s, x2Sum
 }
 
-// dlyReduceSse2 adds the SSE2 lane sums to the scalar tail sums.
-func dlyReduceSse2(acc *[16]float32, s, x2Sum float32) (float32, float32) {
+// dlyReduceSse2Ref adds the SSE2 lane sums to the scalar tail sums.
+func dlyReduceSse2Ref(acc *[16]float32, s, x2Sum float32) (float32, float32) {
 	var v [4]float32
 	for l := range v {
 		v[l] = acc[8+l] + acc[12+l]
@@ -212,9 +212,9 @@ func dlyReduceSse2(acc *[16]float32, s, x2Sum float32) (float32, float32) {
 	return s, x2Sum
 }
 
-// dlyReduceAvx2 adds the AVX2 lane sums to the scalar tail sums:
+// dlyReduceAvx2Ref adds the AVX2 lane sums to the scalar tail sums:
 // hsum_ab(x2_sum_256 + x2_sum_256_8, s_256 + s_256_8).
-func dlyReduceAvx2(acc *[32]float32, s, x2Sum float32) (float32, float32) {
+func dlyReduceAvx2Ref(acc *[32]float32, s, x2Sum float32) (float32, float32) {
 	var a, b [8]float32
 	for l := range a {
 		a[l] = acc[16+l] + acc[24+l]

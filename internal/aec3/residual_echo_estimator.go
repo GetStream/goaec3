@@ -147,9 +147,7 @@ func (r *ResidualEchoEstimator) echoGeneratingPower(spectrumBuffer *SpectrumBuff
 			var renderPower [FftLengthBy2Plus1]float32
 			for ch := 0; ch < r.numRenderChannels; ch++ {
 				channelPower := &spectrumBuffer.Buffer[k][ch]
-				for j := 0; j < FftLengthBy2Plus1; j++ {
-					renderPower[j] += channelPower[j]
-				}
+				kernAdd(renderPower[:], channelPower[:], renderPower[:])
 			}
 			kernStdMax(X2[:], renderPower[:], X2[:])
 		}
@@ -162,9 +160,7 @@ func (r *ResidualEchoEstimator) renderPowerAt(renderBuffer *RenderBuffer, offset
 		*data = [FftLengthBy2Plus1]float32{}
 		for ch := 0; ch < r.numRenderChannels; ch++ {
 			channelPower := &X2[ch]
-			for k := 0; k < FftLengthBy2Plus1; k++ {
-				data[k] += channelPower[k]
-			}
+			kernAdd(data[:], channelPower[:], data[:])
 		}
 		return data
 	}

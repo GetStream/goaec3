@@ -46,3 +46,11 @@ func dlyCoreLane(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y
 	filtersUpdated *bool, errorSum *float32) {
 	dlyCoreFused(g, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum)
 }
+
+func dlyReduceSse2(acc *[16]float32, s, x2Sum float32) (float32, float32) {
+	return dlyReduceSse2Ref(acc, s, x2Sum)
+}
+
+func dlyReduceAvx2(acc *[32]float32, s, x2Sum float32) (float32, float32) {
+	return dlyReduceAvx2Ref(acc, s, x2Sum)
+}

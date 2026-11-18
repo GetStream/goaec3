@@ -48,9 +48,9 @@ func dlyCoreLaneRef(opt Aec3Optimization, xStartIndex int, x2SumThreshold, smoot
 		case OptNeon:
 			s, x2Sum = dlyReduceNeon(&a8, s, x2Sum)
 		case OptSse2:
-			s, x2Sum = dlyReduceSse2(&a16, s, x2Sum)
+			s, x2Sum = dlyReduceSse2Ref(&a16, s, x2Sum)
 		default:
-			s, x2Sum = dlyReduceAvx2(&a32, s, x2Sum)
+			s, x2Sum = dlyReduceAvx2Ref(&a32, s, x2Sum)
 		}
 		e := y[i] - s
 		*errorSum += float32(e * e)
