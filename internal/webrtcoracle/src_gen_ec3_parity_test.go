@@ -19,26 +19,6 @@ import (
 // scalar (kNone, scalar Ooura) source build of all of aec3 under purego.
 const ec3Scalar = purego
 
-// ec3EchoRemoverPorted reports whether aec3.EchoRemover is functional (its
-// API stub panics). Tests that run the echo remover skip until it is.
-func ec3EchoRemoverPorted() (ok bool) {
-	defer func() {
-		if recover() != nil {
-			ok = false
-		}
-	}()
-	cfg := aec3.DefaultEchoCanceller3Config()
-	aec3.NewEchoRemover(&cfg, 16000, 1, 1).GetMetrics()
-	return true
-}
-
-func ec3RequireEchoRemover(t *testing.T) {
-	t.Helper()
-	if !ec3EchoRemoverPorted() {
-		t.Skip("aec3.EchoRemover is not ported yet")
-	}
-}
-
 func TestEc3ConfigFlatten(t *testing.T) {
 	cfg := aec3.DefaultEchoCanceller3Config()
 	// Ec3FlattenConfig panics when the Go and C++ leaf counts differ.
@@ -825,7 +805,6 @@ func TestEc3CancellerPassthroughParity(t *testing.T) {
 // TestEc3CancellerParity is the end-to-end comparison with the echo
 // remover: output every frame and metrics.
 func TestEc3CancellerParity(t *testing.T) {
-	ec3RequireEchoRemover(t)
 	for _, c := range ec3Cases(false) {
 		t.Run(c.name, func(t *testing.T) { ec3RunCanceller(t, c, true) })
 	}
@@ -913,7 +892,6 @@ func TestEc3PublicAPIPassthroughParity(t *testing.T) {
 }
 
 func TestEc3PublicAPIParity(t *testing.T) {
-	ec3RequireEchoRemover(t)
 	for _, rate := range []int{16000, 32000, 48000} {
 		for _, ch := range [][2]int{{1, 1}, {2, 1}, {2, 2}} {
 			for _, linear := range []bool{false, true} {
