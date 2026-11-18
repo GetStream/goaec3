@@ -461,13 +461,21 @@ func TestSteadyStateAllocations(t *testing.T) {
 // the config and runs echo audio through three base setups (16 kHz mono;
 // 48 kHz stereo with subband nearend detection and linear output; 32 kHz
 // external delay). Nothing may panic and, for finite fields, the output must
-// stay finite; robustPendingFix lists the open findings it skips.
+// stay finite; robustPendingFix lists the open findings it skips, and the
+// configs New rejects (robustRejected) must return ErrConfig.
 func TestBoundaryConfigSweep(t *testing.T) {
 	frames := 40
 	if testing.Short() {
 		frames = 20
 	}
 	failures := robustSweepFailures(t, frames, func(path string, cfg *Config) bool {
+		if robustRejected(cfg) {
+			// The documented ErrConfig set: New must refuse it.
+			if _, err := New(*cfg, 16000, 1, 1); !errors.Is(err, ErrConfig) {
+				t.Errorf("%s: New error = %v, want ErrConfig", path, err)
+			}
+			return true
+		}
 		if robustPendingFix(cfg) {
 			return true
 		}
