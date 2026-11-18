@@ -196,10 +196,7 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 		if e.aecState.UsableLinearEstimate() {
 			// E2 is bound by Y2.
 			for ch := 0; ch < nch; ch++ {
-				E2, Y2 := &e.E2[ch], &e.Y2[ch]
-				for k := range E2 {
-					E2[k] = min(E2[k], Y2[k])
-				}
+				kernMinGo(e.E2[ch][:], e.Y2[ch][:], e.E2[ch][:])
 			}
 		}
 		nearendSpectrum := e.Y2
@@ -275,11 +272,7 @@ func (e *EchoRemover) formLinearFilterOutput(so *SubtractorOutput, output *[FftL
 
 // erLinearEchoPower computes the power of the difference between Y and E.
 func erLinearEchoPower(E, Y *FftData, S2 *[FftLengthBy2Plus1]float32) {
-	for k := range E.Re {
-		dr := Y.Re[k] - E.Re[k]
-		di := Y.Im[k] - E.Im[k]
-		S2[k] = float32(dr*dr) + float32(di*di)
-	}
+	kernDiffPower(Y.Re[:], E.Re[:], Y.Im[:], E.Im[:], S2[:])
 }
 
 // erSignalTransition fades between two input signals using a fixed-size

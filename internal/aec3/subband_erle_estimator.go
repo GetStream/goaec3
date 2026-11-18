@@ -197,10 +197,8 @@ func (s *SubbandErleEstimator) updateAccumulatedSpectra(X2 *[FftLengthBy2Plus1]f
 			s.accumE2[ch] = [FftLengthBy2Plus1]float32{}
 			s.accumLowRenderEnergy[ch] = [FftLengthBy2Plus1]bool{}
 		}
-		for k := 0; k < FftLengthBy2Plus1; k++ {
-			s.accumY2[ch][k] = Y2[ch][k] + s.accumY2[ch][k]
-			s.accumE2[ch][k] = E2[ch][k] + s.accumE2[ch][k]
-		}
+		kernAdd(Y2[ch][:], s.accumY2[ch][:], s.accumY2[ch][:])
+		kernAdd(E2[ch][:], s.accumE2[ch][:], s.accumE2[ch][:])
 		for k := range X2 {
 			s.accumLowRenderEnergy[ch][k] = s.accumLowRenderEnergy[ch][k] || X2[k] < stX2BandEnergyThreshold
 		}

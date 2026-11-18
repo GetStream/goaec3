@@ -100,6 +100,9 @@ func (r *RenderSignalAnalyzer) identifyStrongNarrowBandComponent(renderBuffer *R
 
 // afirMaxAbsMinMax is max(|min|, |max|) of x via std::minmax_element.
 func afirMaxAbsMinMax(x []float32) float32 {
+	if mn, mx, ok := kernMinMax(x); ok {
+		return max(afirAbs(mn), afirAbs(mx))
+	}
 	mn, mx := x[0], x[0]
 	for _, v := range x[1:] {
 		if v < mn {

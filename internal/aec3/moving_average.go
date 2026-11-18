@@ -29,14 +29,9 @@ func (m *MovingAverage) Average(input, output []float32) {
 	output = output[:n]
 	copy(output, input)
 	for i := 0; i < len(m.memory); i += n {
-		mem := m.memory[i : i+n]
-		for k := range output {
-			output[k] = mem[k] + output[k]
-		}
+		kernAdd(m.memory[i:i+n], output, output)
 	}
-	for k := range output {
-		output[k] *= m.scaling
-	}
+	kernScale(output, m.scaling, output)
 	if m.memLen > 0 {
 		copy(m.memory[m.memIndex*n:], input)
 		m.memIndex = (m.memIndex + 1) % m.memLen

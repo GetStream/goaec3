@@ -91,9 +91,7 @@ func (f *Aec3Fft) ZeroPaddedFft(x []float32, window Window, X *FftData) {
 	case WindowRectangular:
 		copy(fft[FftLengthBy2:], x)
 	case WindowHanning:
-		for i, v := range x {
-			fft[FftLengthBy2+i] = v * hanning64[i]
-		}
+		vectorMultiply(x, hanning64[:], fft[FftLengthBy2:])
 	default:
 		panic("aec3: unsupported window for ZeroPaddedFft")
 	}
@@ -110,12 +108,8 @@ func (f *Aec3Fft) PaddedFft(x, xOld []float32, window Window, X *FftData) {
 		copy(fft[:], xOld)
 		copy(fft[FftLengthBy2:], x)
 	case WindowSqrtHanning:
-		for i, v := range xOld {
-			fft[i] = v * sqrtHanning128[i]
-		}
-		for i, v := range x {
-			fft[FftLengthBy2+i] = v * sqrtHanning128[FftLengthBy2+i]
-		}
+		vectorMultiply(xOld, sqrtHanning128[:FftLengthBy2], fft[:FftLengthBy2])
+		vectorMultiply(x, sqrtHanning128[FftLengthBy2:], fft[FftLengthBy2:])
 	default:
 		panic("aec3: unsupported window for PaddedFft")
 	}

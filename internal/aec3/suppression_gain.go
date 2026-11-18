@@ -44,14 +44,7 @@ func sgLimitHighFrequencyGains(conservativeHfSuppression bool, gain *[FftLengthB
 }
 
 func sgWeigh(threshold, normalizer float32, begin, end int, echo, weightedEcho *[FftLengthBy2Plus1]float32) {
-	for k := begin; k < end; k++ {
-		if echo[k] < threshold {
-			tmp := float32((threshold - echo[k]) * normalizer)
-			weightedEcho[k] = float32(echo[k] * max(0, 1-float32(tmp*tmp)))
-		} else {
-			weightedEcho[k] = echo[k]
-		}
-	}
+	kernWeigh(threshold, normalizer, echo[begin:end], weightedEcho[begin:end])
 }
 
 // sgWeightEchoForAudibility scales the echo according to assessed audibility
@@ -320,16 +313,7 @@ func (s *SuppressionGain) params() *sgGainParameters {
 // level.
 func (s *SuppressionGain) GainToNoAudibleEcho(nearend, echo, masker, gain *[FftLengthBy2Plus1]float32) {
 	p := s.params()
-	for k := range gain {
-		enr := echo[k] / (nearend[k] + 1) // Echo-to-nearend ratio.
-		emr := echo[k] / (masker[k] + 1)  // Echo-to-masker (noise) ratio.
-		g := float32(1)
-		if enr > p.enrTransparent[k] && emr > p.emrTransparent[k] {
-			g = (p.enrSuppress[k] - enr) / (p.enrSuppress[k] - p.enrTransparent[k])
-			g = max(g, p.emrTransparent[k]/emr)
-		}
-		gain[k] = g
-	}
+	kernNoAudibleEcho(nearend, echo, masker, &p.enrTransparent, &p.enrSuppress, &p.emrTransparent, gain)
 }
 
 // GetMinGain computes the minimum gain as the attenuating gain to put the
@@ -344,14 +328,7 @@ func (s *SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho
 	if lowNoiseRender {
 		minEchoPower = s.config.EchoAudibility.LowRenderLimit
 	}
-	for k := range minGain {
-		if weightedResidualEcho[k] > 0 {
-			minGain[k] = minEchoPower / weightedResidualEcho[k]
-		} else {
-			minGain[k] = 1
-		}
-		minGain[k] = min(minGain[k], 1)
-	}
+	kernMinGain(weightedResidualEcho, minEchoPower, minGain)
 
 	sup := &s.config.Suppressor
 	if !s.initialState || sup.LfSmoothingDuringInitialPhase {
@@ -372,9 +349,9 @@ func (s *SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho
 func (s *SuppressionGain) GetMaxGain(maxGain *[FftLengthBy2Plus1]float32) {
 	inc := s.params().maxIncFactor
 	floor := s.config.Suppressor.FloorFirstIncrease
-	for k := range maxGain {
-		maxGain[k] = min(max(s.lastGain[k]*inc, floor), 1)
-	}
+	// maxGain = min(max(lastGain*inc, floor), 1).
+	kernScale(s.lastGain[:], inc, maxGain[:])
+	kernClamp(maxGain[:], floor, 1)
 }
 
 // LowerBandGain computes the gain for the first band.
@@ -401,10 +378,9 @@ func (s *SuppressionGain) LowerBandGain(lowNoiseRender bool, aecState *AecState,
 		s.GainToNoAudibleEcho(&nearend, &weightedResidualEcho, &comfortNoise[0], &G)
 
 		// Clamp gains.
-		for k := range gain {
-			G[k] = max(min(G[k], maxGain[k]), minGain[k])
-			gain[k] = min(gain[k], G[k])
-		}
+		kernMinGo(G[:], maxGain[:], G[:])
+		kernMaxGo(G[:], minGain[:], G[:])
+		kernMinGo(gain[:], G[:], gain[:])
 
 		// Store data required for the gain computation of the next block.
 		s.lastNearend[ch] = nearend

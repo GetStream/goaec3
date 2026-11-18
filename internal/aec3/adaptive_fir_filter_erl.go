@@ -27,6 +27,14 @@ func ErlComputerSSE2(H2 [][FftLengthBy2Plus1]float32, erl []float32) {
 
 func afirErlComputerSimd(opt Aec3Optimization, H2 [][FftLengthBy2Plus1]float32, erl []float32) {
 	e := (*[FftLengthBy2Plus1]float32)(erl)
+	if len(H2) <= rbMaxRows {
+		var rows [rbMaxRows]*[FftLengthBy2Plus1]float32
+		for j := range H2 {
+			rows[j] = &H2[j]
+		}
+		kernSumRows(e, rows[:len(H2)])
+		return
+	}
 	*e = [FftLengthBy2Plus1]float32{}
 	for j := range H2 {
 		afirErlBlock(opt, &H2[j], e)

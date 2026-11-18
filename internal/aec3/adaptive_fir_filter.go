@@ -39,6 +39,15 @@ func ComputeFrequencyResponseSse2(numPartitions int, H [][]FftData, H2 [][FftLen
 }
 
 func afirComputeFrequencyResponseSimd(opt Aec3Optimization, numPartitions int, H [][]FftData, H2 [][FftLengthBy2Plus1]float32) {
+	if opt == OptNeon && afirHasNeonFreqResp {
+		for p := 0; p < numPartitions; p++ {
+			afirFreqRespPartitionNEON(H[p], &H2[p])
+		}
+		for i := numPartitions; i < len(H2); i++ {
+			H2[i] = [FftLengthBy2Plus1]float32{}
+		}
+		return
+	}
 	for i := range H2 {
 		H2[i] = [FftLengthBy2Plus1]float32{}
 	}
@@ -93,6 +102,12 @@ func AdaptPartitionsSse2(renderBuffer *RenderBuffer, G *FftData, numPartitions i
 func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
 	data := renderBuffer.GetFftBuffer()
 	numRenderChannels := len(data[0])
+	if afirHasTermKernels && numPartitions*numRenderChannels <= afirMaxTerms {
+		var xs, hs [afirMaxTerms]*FftData
+		n := afirTerms(data, renderBuffer.Position(), numPartitions, H, &xs, &hs)
+		afirAdaptTerms(xs[:n], hs[:n], G)
+		return
+	}
 	lim1 := min(len(data)-renderBuffer.Position(), numPartitions)
 	lim2 := numPartitions
 
@@ -167,9 +182,15 @@ func ApplyFilterSse2(renderBuffer *RenderBuffer, numPartitions int, H [][]FftDat
 }
 
 func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
-	S.Clear()
 	data := renderBuffer.GetFftBuffer()
 	numRenderChannels := len(data[0])
+	if afirHasTermKernels && numPartitions*numRenderChannels <= afirMaxTerms {
+		var xs, hs [afirMaxTerms]*FftData
+		n := afirTerms(data, renderBuffer.Position(), numPartitions, H, &xs, &hs)
+		afirApplyTerms(xs[:n], hs[:n], S)
+		return
+	}
+	S.Clear()
 	lim1 := min(len(data)-renderBuffer.Position(), numPartitions)
 	lim2 := numPartitions
 
@@ -203,6 +224,51 @@ func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPa
 		if p >= lim2 {
 			break
 		}
+	}
+}
+
+// afirMaxTerms bounds the (partition, channel) pairs that the term kernels
+// take from stack arrays; larger filters run the per-partition loops.
+const afirMaxTerms = 64
+
+// afirTerms lists the (X, H) operand pairs of ApplyFilter/AdaptPartitions in
+// the C++ accumulation order: partition-major, channel-minor, with the render
+// ring index running from the read position and wrapping to 0 exactly as
+// the lim1/lim2 loops do. It returns the number of pairs.
+func afirTerms(data [][]FftData, position, numPartitions int, H [][]FftData, xs, hs *[afirMaxTerms]*FftData) int {
+	n := 0
+	xPartition := position
+	for p := 0; p < numPartitions; p++ {
+		if xPartition == len(data) {
+			xPartition = 0
+		}
+		xp, hp := data[xPartition], H[p]
+		hp = hp[:len(xp)]
+		for ch := range xp {
+			xs[n], hs[n] = &xp[ch], &hp[ch]
+			n++
+		}
+		xPartition++
+	}
+	return n
+}
+
+// afirApplyTermsGo is the term kernel reference: S = sum over the pairs of
+// X*H, accumulated per bin in pair order starting from +0 (as S.Clear()
+// followed by the per-partition S += X*H).
+func afirApplyTermsGo(xs, hs []*FftData, s *FftData) {
+	s.Clear()
+	hs = hs[:len(xs)]
+	for t, x := range xs {
+		afirApplyBinsGo(x, hs[t], s, 0, FftLengthBy2Plus1)
+	}
+}
+
+// afirAdaptTermsGo is the term kernel reference: H += conj(X)*G per pair.
+func afirAdaptTermsGo(xs, hs []*FftData, g *FftData) {
+	hs = hs[:len(xs)]
+	for t, x := range xs {
+		afirAdaptBinsGo(x, g, hs[t], 0, FftLengthBy2Plus1)
 	}
 }
 
@@ -409,9 +475,7 @@ func (f *AdaptiveFirFilter) constrainAndUpdateImpulseResponse(impulseResponse *[
 		hp := &f.H[f.partitionToConstrain][ch]
 		f.fft.Ifft(hp, &h)
 		const scale = 1.0 / FftLengthBy2
-		for i := 0; i < FftLengthBy2; i++ {
-			h[i] *= scale
-		}
+		kernScale(h[:FftLengthBy2], scale, h[:FftLengthBy2])
 		clear(h[FftLengthBy2:])
 
 		if ch == 0 {
@@ -441,9 +505,7 @@ func (f *AdaptiveFirFilter) constrain() {
 		hp := &f.H[f.partitionToConstrain][ch]
 		f.fft.Ifft(hp, &h)
 		const scale = 1.0 / FftLengthBy2
-		for i := 0; i < FftLengthBy2; i++ {
-			h[i] *= scale
-		}
+		kernScale(h[:FftLengthBy2], scale, h[:FftLengthBy2])
 		clear(h[FftLengthBy2:])
 		f.fft.Fft(&h, hp)
 	}

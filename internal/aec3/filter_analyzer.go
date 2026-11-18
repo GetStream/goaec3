@@ -244,13 +244,9 @@ func (f *FilterAnalyzer) preProcessFilters(filtersTimeDomain [][]float32) {
 		hp := f.hHighpass[ch]
 		clear(hp[f.region.StartSample : f.region.EndSample+1])
 		x := filtersTimeDomain[ch]
-		for k := max(len(h)-1, f.region.StartSample); k <= f.region.EndSample; k++ {
-			tmp := hp[k]
-			for j := range h {
-				tmp += float32(x[k-j] * h[j])
-			}
-			hp[k] = tmp
-		}
+		// hp[k] was cleared above, so each output is +0 plus the three
+		// products in tap order.
+		kernFir3(x, h, hp, max(len(h)-1, f.region.StartSample), f.region.EndSample)
 	}
 }
 

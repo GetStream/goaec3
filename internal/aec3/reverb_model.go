@@ -27,8 +27,6 @@ func (r *ReverbModel) UpdateReverbNoFreqShaping(powerSpectrum []float32, powerSp
 // UpdateReverb updates the reverb estimate with a per-frequency scaling.
 func (r *ReverbModel) UpdateReverb(powerSpectrum, powerSpectrumScaling []float32, reverbDecay float32) {
 	if reverbDecay > 0 {
-		for k := range powerSpectrum {
-			r.reverb[k] = (r.reverb[k] + float32(powerSpectrum[k]*powerSpectrumScaling[k])) * reverbDecay
-		}
+		kernReverb(r.reverb[:len(powerSpectrum)], powerSpectrum, powerSpectrumScaling, reverbDecay)
 	}
 }

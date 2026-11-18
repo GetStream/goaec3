@@ -9,15 +9,14 @@ import "math"
 func subPredictionError(fft *Aec3Fft, S *FftData, y []float32, tmp *[FftLength]float32, e, s *[BlockSize]float32) {
 	fft.Ifft(S, tmp)
 	const scale float32 = 1.0 / FftLengthBy2
-	y = y[:BlockSize]
-	for k := range e {
-		e[k] = y[k] - float32(tmp[k+FftLengthBy2]*scale)
+	// e = y - float32(tmp*scale) and s = scale*tmp: the scaled output is
+	// rounded once and shared.
+	var scaled [BlockSize]float32
+	if s == nil {
+		s = &scaled
 	}
-	if s != nil {
-		for k := range s {
-			s[k] = scale * tmp[k+FftLengthBy2]
-		}
-	}
+	kernScale(tmp[FftLengthBy2:], scale, s[:])
+	kernSub(y[:BlockSize], s[:], e[:])
 }
 
 // subScaleFilterOutput scales the filter output s by factor and recomputes
@@ -295,8 +294,6 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 
 		s.coarseFilter[ch].Adapt(renderBuffer, G)
 
-		for k := range eRefined {
-			eRefined[k] = min(max(eRefined[k], -32768), 32767)
-		}
+		kernClamp(eRefined[:], -32768, 32767)
 	}
 }

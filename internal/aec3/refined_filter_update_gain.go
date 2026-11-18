@@ -82,39 +82,23 @@ func (g *RefinedFilterUpdateGain) Compute(renderPower *[FftLengthBy2Plus1]float3
 	} else {
 		// mu = H_error / (0.5* H_error* X2 + n * E2).
 		var mu [FftLengthBy2Plus1]float32
-		sp := float32(sizePartitions)
-		for k := range mu {
-			if X2[k] >= g.currentConfig.NoiseGate {
-				h := g.hError[k]
-				mu[k] = h / (float32(float32(0.5*h)*X2[k]) + float32(sp*E2Refined[k]))
-			}
-		}
+		kernRefinedMu(X2, &g.hError, E2Refined, g.currentConfig.NoiseGate, float32(sizePartitions), &mu)
 
 		// Avoid updating the filter close to narrow bands in the render signals.
 		renderSignalAnalyzer.MaskRegionsAroundNarrowBands(&mu)
 
 		// H_error = H_error - 0.5 * mu * X2 * H_error.
-		for k := range g.hError {
-			g.hError[k] -= float32(float32(float32(0.5*mu[k])*X2[k]) * g.hError[k])
-		}
+		kernRefinedHError(&mu, X2, &g.hError)
 
 		// G = mu * E.
-		for k := range mu {
-			G.Re[k] = mu[k] * ERefined.Re[k]
-			G.Im[k] = mu[k] * ERefined.Im[k]
-		}
+		vectorMultiply(mu[:], ERefined.Re[:], G.Re[:])
+		vectorMultiply(mu[:], ERefined.Im[:], G.Im[:])
 	}
 
 	// H_error = H_error + factor * erl.
-	for k := range g.hError {
-		if E2Refined[k] <= E2Coarse[k] || disallowLeakageDiverged {
-			g.hError[k] += float32(g.currentConfig.LeakageConverged * erl[k])
-		} else {
-			g.hError[k] += float32(g.currentConfig.LeakageDiverged * erl[k])
-		}
-		g.hError[k] = max(g.hError[k], g.currentConfig.ErrorFloor)
-		g.hError[k] = min(g.hError[k], g.currentConfig.ErrorCeil)
-	}
+	c := &g.currentConfig
+	kernRefinedLeak(E2Refined, E2Coarse, erl, disallowLeakageDiverged, c.LeakageConverged, c.LeakageDiverged,
+		c.ErrorFloor, c.ErrorCeil, &g.hError)
 }
 
 func (g *RefinedFilterUpdateGain) updateCurrentConfig() {

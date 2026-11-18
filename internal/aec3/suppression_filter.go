@@ -36,9 +36,7 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 	eLowestBand []FftData, e *Block) {
 	// Comfort noise gain is sqrt(1-g^2), where g is the suppression gain.
 	var noiseGain [FftLengthBy2Plus1]float32
-	for i := range noiseGain {
-		noiseGain[i] = 1 - float32(suppressionGain[i]*suppressionGain[i])
-	}
+	kernOneMinusSq(suppressionGain[:], noiseGain[:])
 	NewVectorMath(f.optimization).Sqrt(noiseGain[:])
 
 	highBandsNoiseScaling := 0.4 * float32(math.Sqrt(float64(1-float32(highBandsGain*highBandsGain))))
@@ -51,15 +49,10 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 		E.Assign(&eLowestBand[ch])
 
 		cn := &comfortNoise[ch]
-		for i := 0; i < FftLengthBy2Plus1; i++ {
-			// Apply suppression gains.
-			eReal := float32(E.Re[i] * suppressionGain[i])
-			eImag := float32(E.Im[i] * suppressionGain[i])
-
-			// Scale and add the comfort noise.
-			E.Re[i] = eReal + float32(noiseGain[i]*cn.Re[i])
-			E.Im[i] = eImag + float32(noiseGain[i]*cn.Im[i])
-		}
+		// Apply suppression gains, then scale and add the comfort noise:
+		// E = float32(E*g) + float32(noiseGain*cn).
+		kernMulAdd2(E.Re[:], suppressionGain[:], noiseGain[:], cn.Re[:], E.Re[:])
+		kernMulAdd2(E.Im[:], suppressionGain[:], noiseGain[:], cn.Im[:], E.Im[:])
 
 		// Synthesis filterbank.
 		const ifftNormalization float32 = 2.0 / FftLength
@@ -70,11 +63,9 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 
 		// Window and add the first half of e_extended with the second half of
 		// e_extended from the previous block.
-		for i := 0; i < FftLengthBy2; i++ {
-			e0i := float32(e0Old[i] * sqrtHanning128[FftLengthBy2+i])
-			e0i += float32(eExtended[i] * sqrtHanning128[i])
-			e0[i] = e0i * ifftNormalization
-		}
+		e0 = e0[:FftLengthBy2]
+		kernMulAdd2(e0Old[:], sqrtHanning128[FftLengthBy2:], eExtended[:FftLengthBy2], sqrtHanning128[:FftLengthBy2], e0)
+		kernScale(e0, ifftNormalization, e0)
 
 		// The second half of e_extended is stored for the succeeding frame.
 		copy(e0Old[:], eExtended[FftLengthBy2:])
@@ -82,9 +73,7 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 		// Apply suppression gain to upper bands.
 		for b := 1; b < numBands; b++ {
 			eBand := e.View(b, ch)
-			for i := range eBand {
-				eBand[i] *= highBandsGain
-			}
+			kernScale(eBand, highBandsGain, eBand)
 		}
 
 		// Add comfort noise to band 1.
@@ -94,9 +83,7 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 
 			e1 := e.View(1, ch)
 			gain := highBandsNoiseScaling * ifftNormalization
-			for i := 0; i < FftLengthBy2; i++ {
-				e1[i] += float32(eExtended[i] * gain)
-			}
+			kernAxpy(eExtended[:FftLengthBy2], gain, e1)
 		}
 
 		// Delay upper bands to match the delay of the filter bank.
@@ -110,10 +97,8 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 
 		// Clamp output of all bands.
 		for b := 0; b < numBands; b++ {
-			eBand := e.View(b, ch)
-			for i, v := range eBand {
-				eBand[i] = supSafeClamp(v, -32768, 32767)
-			}
+			// Equal to supSafeClamp on every non-NaN sample; a NaN stays NaN.
+			kernClamp(e.View(b, ch), -32768, 32767)
 		}
 	}
 }

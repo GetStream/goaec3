@@ -53,9 +53,7 @@ func (e *ErlEstimator) Update(convergedFilters []bool, renderSpectra, captureSpe
 			if !convergedFilters[ch] {
 				continue
 			}
-			for k := range maxCaptureSpectrum {
-				maxCaptureSpectrum[k] = stMaxf(maxCaptureSpectrum[k], captureSpectra[ch][k])
-			}
+			kernStdMax(maxCaptureSpectrum[:], captureSpectra[ch][:], maxCaptureSpectrum[:])
 		}
 	} else {
 		maxCaptureSpectrum = captureSpectra[0]
@@ -64,9 +62,7 @@ func (e *ErlEstimator) Update(convergedFilters []bool, renderSpectra, captureSpe
 	var maxRenderSpectrum [FftLengthBy2Plus1]float32
 	maxRenderSpectrum = renderSpectra[0]
 	for ch := 1; ch < len(renderSpectra); ch++ {
-		for k := range maxRenderSpectrum {
-			maxRenderSpectrum[k] = stMaxf(maxRenderSpectrum[k], renderSpectra[ch][k])
-		}
+		kernStdMax(maxRenderSpectrum[:], renderSpectra[ch][:], maxRenderSpectrum[:])
 	}
 	X2 := &maxRenderSpectrum
 	Y2 := &maxCaptureSpectrum

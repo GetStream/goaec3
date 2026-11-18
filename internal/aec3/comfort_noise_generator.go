@@ -105,27 +105,13 @@ func (c *ComfortNoiseGenerator) Compute(saturatedCapture bool,
 	if !saturatedCapture {
 		// Smooth Y2.
 		for ch := 0; ch < c.numCaptureChannels; ch++ {
-			s := &c.y2Smoothed[ch]
-			y := &Y2[ch]
-			for k := range s {
-				a, b := s[k], y[k]
-				s[k] = a + float32(0.1*(b-a))
-			}
+			kernSmooth(c.y2Smoothed[ch][:], Y2[ch][:], 0.1)
 		}
 
 		if c.n2Counter > 50 {
 			// Update N2 from Y2_smoothed.
 			for ch := 0; ch < c.numCaptureChannels; ch++ {
-				n := &c.n2[ch]
-				s := &c.y2Smoothed[ch]
-				for k := range n {
-					a, b := n[k], s[k]
-					if b < a {
-						n[k] = (float32(0.9*b) + float32(0.1*a)) * 1.0002
-					} else {
-						n[k] = a * 1.0002
-					}
-				}
+				kernNoiseUpdate(&c.n2[ch], &c.y2Smoothed[ch])
 			}
 		}
 
@@ -136,30 +122,15 @@ func (c *ComfortNoiseGenerator) Compute(saturatedCapture bool,
 			} else {
 				// Compute the N2_initial from N2.
 				for ch := 0; ch < c.numCaptureChannels; ch++ {
-					n := &c.n2[ch]
-					ini := &c.n2Initial[ch]
-					for k := range n {
-						a, b := n[k], ini[k]
-						if a > b {
-							ini[k] = b + float32(0.001*(a-b))
-						} else {
-							ini[k] = a
-						}
-					}
+					kernNoiseInitialUpdate(&c.n2[ch], &c.n2Initial[ch])
 				}
 			}
 		}
 
 		for ch := 0; ch < c.numCaptureChannels; ch++ {
-			n := &c.n2[ch]
-			for k := range n {
-				n[k] = max(n[k], c.noiseFloor)
-			}
+			kernMaxScalarGo(c.n2[ch][:], c.noiseFloor)
 			if c.n2Initial != nil {
-				ini := &c.n2Initial[ch]
-				for k := range ini {
-					ini[k] = max(ini[k], c.noiseFloor)
-				}
+				kernMaxScalarGo(c.n2Initial[ch][:], c.noiseFloor)
 			}
 		}
 	}

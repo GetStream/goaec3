@@ -59,20 +59,14 @@ func (g *CoarseFilterUpdateGain) Compute(renderPower *[FftLengthBy2Plus1]float32
 	// Compute mu.
 	var mu [FftLengthBy2Plus1]float32
 	X2 := renderPower
-	for k := range mu {
-		if X2[k] > g.currentConfig.NoiseGate {
-			mu[k] = g.currentConfig.Rate / X2[k]
-		}
-	}
+	kernCoarseMu(X2, g.currentConfig.NoiseGate, g.currentConfig.Rate, &mu)
 
 	// Avoid updating the filter close to narrow bands in the render signals.
 	renderSignalAnalyzer.MaskRegionsAroundNarrowBands(&mu)
 
 	// G = mu * E.
-	for k := range mu {
-		G.Re[k] = mu[k] * ECoarse.Re[k]
-		G.Im[k] = mu[k] * ECoarse.Im[k]
-	}
+	vectorMultiply(mu[:], ECoarse.Re[:], G.Re[:])
+	vectorMultiply(mu[:], ECoarse.Im[:], G.Im[:])
 }
 
 func (g *CoarseFilterUpdateGain) updateCurrentConfig() {

@@ -36,23 +36,7 @@ func fftDataSpectrumGeneric(re, im, out *[FftLengthBy2Plus1]float32) {
 }
 
 // CopyFromPackedArray unpacks the Ooura output layout.
-func (f *FftData) CopyFromPackedArray(v *[FftLength]float32) {
-	f.Re[0] = v[0]
-	f.Re[FftLengthBy2] = v[1]
-	f.Im[0] = 0
-	f.Im[FftLengthBy2] = 0
-	for k, j := 1, 2; k < FftLengthBy2; k, j = k+1, j+2 {
-		f.Re[k] = v[j]
-		f.Im[k] = v[j+1]
-	}
-}
+func (f *FftData) CopyFromPackedArray(v *[FftLength]float32) { kernUnpack(v, &f.Re, &f.Im) }
 
 // CopyToPackedArray packs into the Ooura input layout.
-func (f *FftData) CopyToPackedArray(v *[FftLength]float32) {
-	v[0] = f.Re[0]
-	v[1] = f.Re[FftLengthBy2]
-	for k, j := 1, 2; k < FftLengthBy2; k, j = k+1, j+2 {
-		v[j] = f.Re[k]
-		v[j+1] = f.Im[k]
-	}
-}
+func (f *FftData) CopyToPackedArray(v *[FftLength]float32) { kernPack(&f.Re, &f.Im, v) }

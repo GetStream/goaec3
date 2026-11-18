@@ -23,3 +23,18 @@ func afirFreqRespBlock(opt Aec3Optimization, h *FftData, h2 *[FftLengthBy2Plus1]
 func afirErlBlock(_ Aec3Optimization, h2, erl *[FftLengthBy2Plus1]float32) {
 	afirErlBlockGo(h2, erl)
 }
+
+// afirHasTermKernels is false: the lanes run their per-partition loops.
+const afirHasTermKernels = false
+
+func afirApplyTerms(xs, hs []*FftData, s *FftData) { afirApplyTermsGo(xs, hs, s) }
+
+func afirAdaptTerms(xs, hs []*FftData, g *FftData) { afirAdaptTermsGo(xs, hs, g) }
+
+// afirHasNeonFreqResp is false: the NEON lane runs afirFreqRespBlock per
+// channel.
+const afirHasNeonFreqResp = false
+
+func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
+	panic("aec3: no NEON frequency response kernel")
+}

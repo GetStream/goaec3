@@ -57,9 +57,7 @@ func stGetRenderIndexesToAnalyze(spectrumBuffer *SpectrumBuffer, renderPreWindow
 
 func stLinearEstimate(S2Linear, erle, R2 [][FftLengthBy2Plus1]float32) {
 	for ch := range R2 {
-		for k := 0; k < FftLengthBy2Plus1; k++ {
-			R2[ch][k] = S2Linear[ch][k] / erle[ch][k]
-		}
+		kernDiv(S2Linear[ch][:], erle[ch][:], R2[ch][:])
 	}
 }
 
@@ -127,10 +125,8 @@ func (r *ResidualEchoEstimator) Estimate(aecState *AecState, renderBuffer *Rende
 		var residualScaling [FftLengthBy2Plus1]float32
 		aecState.GetResidualEchoScaling(residualScaling[:])
 		for ch := 0; ch < numCaptureChannels; ch++ {
-			for k := 0; k < FftLengthBy2Plus1; k++ {
-				R2[ch][k] *= residualScaling[k]
-				R2Unbounded[ch][k] *= residualScaling[k]
-			}
+			vectorMultiply(R2[ch][:], residualScaling[:], R2[ch][:])
+			vectorMultiply(R2Unbounded[ch][:], residualScaling[:], R2Unbounded[ch][:])
 		}
 	}
 }
@@ -141,10 +137,7 @@ func (r *ResidualEchoEstimator) echoGeneratingPower(spectrumBuffer *SpectrumBuff
 	*X2 = [FftLengthBy2Plus1]float32{}
 	if r.numRenderChannels == 1 {
 		for k := idxStart; k != idxStop; k = spectrumBuffer.IncIndex(k) {
-			s := &spectrumBuffer.Buffer[k][0]
-			for j := 0; j < FftLengthBy2Plus1; j++ {
-				X2[j] = stMaxf(X2[j], s[j])
-			}
+			kernStdMax(X2[:], spectrumBuffer.Buffer[k][0][:], X2[:])
 		}
 	} else {
 		for k := idxStart; k != idxStop; k = spectrumBuffer.IncIndex(k) {
@@ -155,9 +148,7 @@ func (r *ResidualEchoEstimator) echoGeneratingPower(spectrumBuffer *SpectrumBuff
 					renderPower[j] += channelPower[j]
 				}
 			}
-			for j := 0; j < FftLengthBy2Plus1; j++ {
-				X2[j] = stMaxf(X2[j], renderPower[j])
-			}
+			kernStdMax(X2[:], renderPower[:], X2[:])
 		}
 	}
 }
@@ -215,9 +206,7 @@ func (r *ResidualEchoEstimator) updateReverb(reverbType stReverbType, aecState *
 func (r *ResidualEchoEstimator) addReverb(R2 [][FftLengthBy2Plus1]float32) {
 	reverbPower := r.echoReverb.Reverb()
 	for ch := range R2 {
-		for k := 0; k < FftLengthBy2Plus1; k++ {
-			R2[ch][k] += reverbPower[k]
-		}
+		vectorAccumulate(reverbPower[:], R2[ch][:])
 	}
 }
 
