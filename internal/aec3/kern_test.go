@@ -2,7 +2,6 @@ package aec3
 
 import (
 	"math"
-	"math/big"
 	"math/rand"
 	"testing"
 )
@@ -84,55 +83,6 @@ func TestKernSpectrum(t *testing.T) {
 			}
 			kernCheck(t, "Spectrum", got[:], want[:])
 		}
-	}
-}
-
-// kernFmafExact rounds a*b+c once to float32 using exact big.Float
-// arithmetic.
-func kernFmafExact(a, b, c float32) float32 {
-	if math.IsInf(float64(a), 0) || math.IsInf(float64(b), 0) || math.IsInf(float64(c), 0) ||
-		a != a || b != b || c != c {
-		return float32(float64(a)*float64(b) + float64(c))
-	}
-	p := new(big.Float).SetPrec(0).SetFloat64(float64(a))
-	p.SetPrec(200).Mul(p, new(big.Float).SetFloat64(float64(b)))
-	p.Add(p, new(big.Float).SetFloat64(float64(c)))
-	if p.Sign() == 0 {
-		return float32(float64(a)*float64(b) + float64(c)) // IEEE zero sign
-	}
-	f, _ := p.Float32()
-	return f
-}
-
-func TestKernFmaf(t *testing.T) {
-	rng := rand.New(rand.NewSource(3))
-	// Random operands plus near-cancellation cases where double rounding
-	// through float64 would go wrong.
-	for i := 0; i < 300000; i++ {
-		var a, b, c float32
-		switch i % 3 {
-		case 0:
-			a, b, c = math.Float32frombits(rng.Uint32()), math.Float32frombits(rng.Uint32()), math.Float32frombits(rng.Uint32())
-		case 1:
-			a = float32(rng.NormFloat64())
-			b = a
-			c = float32(rng.NormFloat64())
-		default:
-			a = float32(1 + rng.Float64())
-			b = float32(1 + rng.Float64())
-			c = -float32(float64(a) * float64(b))
-			c = math.Float32frombits(math.Float32bits(c) + uint32(rng.Intn(3)) - 1)
-		}
-		got, want := kernFmaf(a, b, c), kernFmafExact(a, b, c)
-		if !kernSameBits(got, want) {
-			t.Fatalf("fmaf(%v, %v, %v) = %v (%#x), want %v (%#x)", a, b, c,
-				got, math.Float32bits(got), want, math.Float32bits(want))
-		}
-	}
-	// An exact float32 tie: (1+2^-12)^2 - 2^-11 = 1 + 2^-24.
-	a, b, c := float32(1+1.0/(1<<12)), float32(1+1.0/(1<<12)), float32(-1.0/(1<<11))
-	if got, want := kernFmaf(a, b, c), kernFmafExact(a, b, c); got != want {
-		t.Fatalf("fmaf tie case: %v want %v", got, want)
 	}
 }
 

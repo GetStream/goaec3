@@ -2,7 +2,6 @@ package aec3
 
 import (
 	"math"
-	"math/big"
 	"math/rand"
 	"testing"
 )
@@ -24,34 +23,6 @@ func dlyRequireBits(t *testing.T, what string, got, want []float32) {
 		if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
 			t.Fatalf("%s[%d]: got %v (%#x), want %v (%#x)", what, i, got[i], math.Float32bits(got[i]),
 				want[i], math.Float32bits(want[i]))
-		}
-	}
-}
-
-func TestDlyFmafCorrectlyRounded(t *testing.T) {
-	rng := rand.New(rand.NewSource(1))
-	exact := func(a, b, c float32) float32 {
-		p := new(big.Float).SetPrec(400).SetFloat64(float64(a))
-		p.Mul(p, new(big.Float).SetPrec(400).SetFloat64(float64(b)))
-		p.Add(p, new(big.Float).SetPrec(400).SetFloat64(float64(c)))
-		f, _ := p.Float32()
-		return f
-	}
-	for i := 0; i < 200000; i++ {
-		a := float32(rng.NormFloat64())
-		b := float32(rng.NormFloat64())
-		var c float32
-		switch i % 3 {
-		case 0:
-			c = float32(rng.NormFloat64())
-		case 1:
-			// Near-cancellation and halfway cases.
-			c = -float32(float64(a)*float64(b)) * (1 + float32(rng.Intn(5)-2)*0x1p-24)
-		default:
-			c = float32(rng.NormFloat64() * 1e-8)
-		}
-		if got, want := dlyFmaf(a, b, c), exact(a, b, c); math.Float32bits(got) != math.Float32bits(want) {
-			t.Fatalf("dlyFmaf(%v, %v, %v) = %v, want %v", a, b, c, got, want)
 		}
 	}
 }

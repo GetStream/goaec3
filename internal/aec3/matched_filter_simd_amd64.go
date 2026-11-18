@@ -293,7 +293,7 @@ func dlyAxpyFma(h, x []float32, alpha float32) {
 	}
 	x = x[:len(h)]
 	for k := range h {
-		h[k] = dlyFmaf(x[k], alpha, h[k])
+		h[k] = fmaf(x[k], alpha, h[k])
 	}
 }
 

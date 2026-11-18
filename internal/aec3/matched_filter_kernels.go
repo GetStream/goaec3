@@ -1,7 +1,5 @@
 package aec3
 
-import "math"
-
 // Pure-Go lane references for the MatchedFilterCore inner loops. Each one
 // reproduces the arithmetic of one libwebrtc SIMD variant lane by lane; they
 // are the specification the archsimd kernels are tested against and the
@@ -45,17 +43,35 @@ func dlyDotSse2Ref(h, x []float32, acc *[16]float32) {
 
 // dlyDotAvx2Ref accumulates over len(h)/16 groups of 16 into the two pairs
 // of AVX2 lane accumulators with fused multiply-add (_mm256_fmadd_ps).
+//
+// Sample j of a group feeds s_256 (j < 8) or s_256_8 (j >= 8) lane j%8,
+// which is acc[j], and the matching x2 lane acc[16+j]; each lane is an
+// independent chain of fmaf, expanded inline (see fmaf).
 func dlyDotAvx2Ref(h, x []float32, acc *[32]float32) {
 	x = x[:len(h)]
-	for k := 0; k+16 <= len(h); k += 16 {
-		for l := 0; l < 8; l++ {
-			xk := x[k+l]
-			xk8 := x[k+8+l]
-			acc[16+l] = dlyFmaf(xk, xk, acc[16+l])
-			acc[24+l] = dlyFmaf(xk8, xk8, acc[24+l])
-			acc[l] = dlyFmaf(h[k+l], xk, acc[l])
-			acc[8+l] = dlyFmaf(h[k+8+l], xk8, acc[8+l])
+	s := (*[16]float32)(acc[0:16])
+	x2 := (*[16]float32)(acc[16:32])
+	for len(h) >= 16 && len(x) >= 16 {
+		hh := (*[16]float32)(h)
+		xx := (*[16]float32)(x)
+		for j := range 16 {
+			xj := xx[j]
+			q := fmafSum(xj, xj, x2[j])
+			r := float32(q)
+			if fmafHard(q) {
+				r = fmafSlow(xj, xj, x2[j])
+			}
+			x2[j] = r
+			hj := hh[j]
+			q = fmafSum(hj, xj, s[j])
+			r = float32(q)
+			if fmafHard(q) {
+				r = fmafSlow(hj, xj, s[j])
+			}
+			s[j] = r
 		}
+		h = h[16:]
+		x = x[16:]
 	}
 }
 
@@ -114,24 +130,37 @@ func dlyAccErrSse2Ref(h, x []float32, y float32, accErr []float32, x2 *[8]float3
 // order [0],[4],[1],[5] visits the four 4-sample sub-groups in sequence.
 func dlyAccErrAvx2Ref(h, x []float32, y float32, accErr []float32, x2 *[16]float32) float32 {
 	x = x[:len(h)]
+	accErr = accErr[:len(h)/16*4]
 	var s float32
-	for g := 0; g < len(h)/16; g++ {
-		k := 16 * g
+	for len(h) >= 16 && len(x) >= 16 && len(accErr) >= 4 {
+		hh := (*[16]float32)(h)
+		xx := (*[16]float32)(x)
+		ae := (*[4]float32)(accErr)
 		var p [16]float32
-		for l := 0; l < 8; l++ {
-			xk := x[k+l]
-			xk8 := x[k+8+l]
-			x2[l] = dlyFmaf(xk, xk, x2[l])
-			x2[8+l] = dlyFmaf(xk8, xk8, x2[8+l])
-			p[l] = float32(h[k+l] * xk)
-			p[8+l] = float32(h[k+8+l] * xk8)
+		for j := range 16 {
+			xj := xx[j]
+			q := fmafSum(xj, xj, x2[j])
+			r := float32(q)
+			if fmafHard(q) {
+				r = fmafSlow(xj, xj, x2[j])
+			}
+			x2[j] = r
+			p[j] = float32(hh[j] * xj)
 		}
-		for sub := 0; sub < 4; sub++ {
+		for sub := range 4 {
 			o := 4 * sub
 			s += (p[o] + p[o+1]) + (p[o+2] + p[o+3])
 			e := s - y
-			accErr[4*g+sub] = dlyFmaf(e, e, accErr[4*g+sub])
+			q := fmafSum(e, e, ae[sub])
+			r := float32(q)
+			if fmafHard(q) {
+				r = fmafSlow(e, e, ae[sub])
+			}
+			ae[sub] = r
 		}
+		h = h[16:]
+		x = x[16:]
+		accErr = accErr[4:]
 	}
 	return s
 }
@@ -170,31 +199,12 @@ func dlyAxpyFmaDotAvx2Ref(h, xa, xb []float32, alpha float32, acc *[32]float32) 
 // dlyAxpyFmaRef computes h = fma(x, alpha, h) (_mm256_fmadd_ps).
 func dlyAxpyFmaRef(h, x []float32, alpha float32) {
 	x = x[:len(h)]
-	for k := range h {
-		h[k] = dlyFmaf(x[k], alpha, h[k])
-	}
-}
-
-// dlyFmaf returns a*b+c rounded once to float32. The float64 product of two
-// float32 values is exact; the sum is computed with TwoSum and rounded to
-// odd at float64 precision, which makes the final rounding to float32
-// correct (float64 has more than 24+2 significand bits).
-func dlyFmaf(a, b, c float32) float32 {
-	p := float64(float64(a) * float64(b))
-	cc := float64(c)
-	s := float64(p + cc)
-	bb := float64(s - p)
-	err := float64(float64(p-float64(s-bb)) + float64(cc-bb))
-	if err != 0 && !math.IsInf(s, 0) {
-		bits := math.Float64bits(s)
-		if bits&1 == 0 {
-			if (err > 0) == (s > 0) {
-				bits++
-			} else {
-				bits--
-			}
-			s = math.Float64frombits(bits)
+	for k, xk := range x {
+		q := fmafSum(xk, alpha, h[k])
+		r := float32(q)
+		if fmafHard(q) {
+			r = fmafSlow(xk, alpha, h[k])
 		}
+		h[k] = r
 	}
-	return float32(s)
 }

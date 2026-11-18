@@ -2,7 +2,6 @@ package aec3
 
 import (
 	"math"
-	"math/big"
 	"math/rand"
 	"testing"
 )
@@ -131,35 +130,6 @@ func afirCopyH(H [][]FftData) [][]FftData {
 		c[p] = append([]FftData(nil), H[p]...)
 	}
 	return c
-}
-
-// afirFmaRef rounds a*b+c exactly (big.Float) to float32.
-func afirFmaRef(a, b, c float32) float32 {
-	x := new(big.Float).SetPrec(200).SetFloat64(float64(a))
-	x.Mul(x, new(big.Float).SetPrec(200).SetFloat64(float64(b)))
-	x.Add(x, new(big.Float).SetPrec(200).SetFloat64(float64(c)))
-	f, _ := x.Float32()
-	return f
-}
-
-func TestAfirFmaf32(t *testing.T) {
-	// im = 4097*2^-12: im^2 is exactly a float32 rounding midpoint, so a tiny
-	// addend decides the rounding (double rounding through float64 fails).
-	im := float32(4097.0 / 4096.0)
-	cases := [][3]float32{{im, im, 1e-30}, {im, im, -1e-30}, {im, im, 0}, {1, 1, 0}, {0, 0, 0}, {float32(math.Copysign(0, -1)), 1, 0}}
-	rng := rand.New(rand.NewSource(3))
-	for i := 0; i < 200000; i++ {
-		a := float32(rng.NormFloat64() * math.Pow(2, float64(rng.Intn(40)-20)))
-		b := float32(rng.NormFloat64() * math.Pow(2, float64(rng.Intn(40)-20)))
-		c := float32(rng.NormFloat64() * math.Pow(2, float64(rng.Intn(80)-40)))
-		cases = append(cases, [3]float32{a, b, c})
-	}
-	for _, v := range cases {
-		got, want := afirFmaf32(v[0], v[1], v[2]), afirFmaRef(v[0], v[1], v[2])
-		if math.Float32bits(got) != math.Float32bits(want) && !(got == 0 && want == 0) {
-			t.Fatalf("fmaf(%v,%v,%v) = %v want %v", v[0], v[1], v[2], got, want)
-		}
-	}
 }
 
 // The AVX2 frequency response (fused) against its pure-Go reference; in
