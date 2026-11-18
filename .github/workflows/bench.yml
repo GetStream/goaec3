@@ -104,6 +104,13 @@ jobs:
           echo "CPU_MODEL=${model:-unknown}" >>"$GITHUB_ENV"
       - name: Build the benchmark binary
         run: go test -c -o bench.test -tags webrtc_src_oracle ./internal/webrtcoracle/
+      # The numbers below count only if this lane is bit-exact on this
+      # runner: the kernel-against-reference tests and the oracle parity
+      # tests of the benchmarked binary.
+      - name: Parity
+        run: |
+          go test -count=1 ./internal/...
+          ./bench.test -test.count 1 -test.timeout 40m
       - name: Benchmark
         run: |
           ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc' \
