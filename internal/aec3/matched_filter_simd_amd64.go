@@ -302,6 +302,23 @@ func dlyAxpyFma(h, x []float32, alpha float32) {
 
 var dlyPeakSimd = dlyUseAvx
 
+// dlyZeroAcc clears the lane accumulators with 256-bit stores. The AVX2
+// kernels load them as 256-bit vectors, and a load cannot be forwarded from
+// the two narrower stores a Go zero value is written with: it would wait
+// for them to reach the cache at the start of every capture sample.
+func dlyZeroAcc(acc *[32]float32) {
+	if !dlyUseAvx {
+		*acc = [32]float32{}
+		return
+	}
+	var z archsimd.Float32x8
+	z.StoreArray((*[8]float32)(acc[0:8]))
+	z.StoreArray((*[8]float32)(acc[8:16]))
+	z.StoreArray((*[8]float32)(acc[16:24]))
+	z.StoreArray((*[8]float32)(acc[24:32]))
+	archsimd.ClearAVXUpperBits()
+}
+
 // dlyReduceSse2 is dlyReduceSse2Ref with the lane sums of x2 and s side by
 // side: lanes 0 and 1 of t run ((v0 + v1) + v2) + v3 for each.
 func dlyReduceSse2(acc *[16]float32, s, x2Sum float32) (float32, float32) {

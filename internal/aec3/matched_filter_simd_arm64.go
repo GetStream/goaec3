@@ -238,3 +238,6 @@ func dlyReduceSse2(acc *[16]float32, s, x2Sum float32) (float32, float32) {
 func dlyReduceAvx2(acc *[32]float32, s, x2Sum float32) (float32, float32) {
 	return dlyReduceAvx2Ref(acc, s, x2Sum)
 }
+
+// dlyZeroAcc clears the lane accumulators.
+func dlyZeroAcc(acc *[32]float32) { *acc = [32]float32{} }

@@ -141,6 +141,7 @@ func MatchedFilterCoreAccumulatedErrorAvx2(xStartIndex int, x2SumThreshold, smoo
 	hSize := len(h)
 	xSize := len(x)
 	clear(accumulatedError)
+	var x2buf [32]float32
 	for i := range y {
 		chunk1 := min(hSize, xSize-xStartIndex)
 		var xp []float32
@@ -152,8 +153,9 @@ func MatchedFilterCoreAccumulatedErrorAvx2(xStartIndex int, x2SumThreshold, smoo
 		} else {
 			xp = x[xStartIndex : xStartIndex+hSize]
 		}
-		var x2v [16]float32
-		s := dlyAccErrAvx2(h, xp, y[i], accumulatedError, &x2v)
+		dlyZeroAcc(&x2buf)
+		x2v := (*[16]float32)(x2buf[:16])
+		s := dlyAccErrAvx2(h, xp, y[i], accumulatedError, x2v)
 		var a [8]float32
 		for l := range a {
 			a[l] = x2v[l] + x2v[8+l]
@@ -417,8 +419,9 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 	var pend dlyPendingAxpy
 	pendWhole := false // the pending update covers h with one x stretch at pendStart
 	pendStart := 0
+	var acc [32]float32
 	for i := range y {
-		var acc [32]float32
+		dlyZeroAcc(&acc)
 		var x2Sum, s float32
 		chunk1 := min(hSize, xSize-xStartIndex)
 		chunk2 := hSize - chunk1
