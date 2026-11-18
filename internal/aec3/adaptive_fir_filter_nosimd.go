@@ -29,12 +29,15 @@ func afirErlBlock(_ Aec3Optimization, h2, erl *[FftLengthBy2Plus1]float32) {
 	afirErlBlockGo(h2, erl)
 }
 
-// afirHasTermKernels is false: the lanes run their per-partition loops.
-const afirHasTermKernels = false
+// afirHasTermKernels reports that afirApplyTerms/afirAdaptTerms are faster
+// than the per-partition loops. Every lane computes the same rounded
+// products and per-bin accumulation order, so one pure-Go kernel serves the
+// NEON, SSE2 and AVX2 lanes.
+const afirHasTermKernels = true
 
-func afirApplyTerms(xs, hs []*FftData, s *FftData) { afirApplyTermsGo(xs, hs, s) }
+func afirApplyTerms(xs, hs []*FftData, s *FftData) { afirApplyTermsFastGo(xs, hs, s) }
 
-func afirAdaptTerms(xs, hs []*FftData, g *FftData) { afirAdaptTermsGo(xs, hs, g) }
+func afirAdaptTerms(xs, hs []*FftData, g *FftData) { afirAdaptTermsFastGo(xs, hs, g) }
 
 // afirHasNeonFreqResp is false: the NEON lane runs afirFreqRespBlock per
 // channel.
@@ -43,3 +46,5 @@ const afirHasNeonFreqResp = false
 func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 	panic("aec3: no NEON frequency response kernel")
 }
+
+func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) { afirMaxAbsUpdateGo(ir, h) }

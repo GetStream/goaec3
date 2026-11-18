@@ -104,25 +104,31 @@ func afirErlBlock(opt Aec3Optimization, h2, erl *[FftLengthBy2Plus1]float32) {
 const afirHasTermKernels = true
 
 // afirApplyTerms is afirApplyTermsGo with the bin loop outside the pair loop:
-// eight bins of S stay in registers while all pairs accumulate into them, in
+// sixteen bins of S stay in registers while all pairs accumulate into them, in
 // pair order, starting from +0.
 func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 	hs = hs[:len(xs)]
-	for k := 0; k < FftLengthBy2; k += 8 {
-		var re0, re1, im0, im1 archsimd.Float32x4
+	for k := 0; k < FftLengthBy2; k += 16 {
+		var re0, re1, re2, re3, im0, im1, im2, im3 archsimd.Float32x4
 		for t, x := range xs {
 			h := hs[t]
-			xr0, xr1 := afirLd8(&x.Re, k)
-			xi0, xi1 := afirLd8(&x.Im, k)
-			hr0, hr1 := afirLd8(&h.Re, k)
-			hi0, hi1 := afirLd8(&h.Im, k)
+			xr0, xr1, xr2, xr3 := afirLd16(&x.Re, k)
+			xi0, xi1, xi2, xi3 := afirLd16(&x.Im, k)
+			hr0, hr1, hr2, hr3 := afirLd16(&h.Re, k)
+			hi0, hi1, hi2, hi3 := afirLd16(&h.Im, k)
 			re0 = re0.Add(xr0.Mul(hr0).Sub(xi0.Mul(hi0)))
 			re1 = re1.Add(xr1.Mul(hr1).Sub(xi1.Mul(hi1)))
+			re2 = re2.Add(xr2.Mul(hr2).Sub(xi2.Mul(hi2)))
+			re3 = re3.Add(xr3.Mul(hr3).Sub(xi3.Mul(hi3)))
 			im0 = im0.Add(xr0.Mul(hi0).Add(xi0.Mul(hr0)))
 			im1 = im1.Add(xr1.Mul(hi1).Add(xi1.Mul(hr1)))
+			im2 = im2.Add(xr2.Mul(hi2).Add(xi2.Mul(hr2)))
+			im3 = im3.Add(xr3.Mul(hi3).Add(xi3.Mul(hr3)))
 		}
 		afirSt8(&s.Re, k, re0, re1)
+		afirSt8(&s.Re, k+8, re2, re3)
 		afirSt8(&s.Im, k, im0, im1)
+		afirSt8(&s.Im, k+8, im2, im3)
 	}
 	const n = FftLengthBy2
 	var re, im float32
@@ -134,26 +140,35 @@ func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 	s.Re[n], s.Im[n] = re, im
 }
 
-// afirAdaptTerms is afirAdaptTermsGo with eight bins of G held in registers
+// afirAdaptTerms is afirAdaptTermsGo with sixteen bins of G held in registers
 // across all pairs.
 func afirAdaptTerms(xs, hs []*FftData, g *FftData) {
 	hs = hs[:len(xs)]
-	for k := 0; k < FftLengthBy2; k += 8 {
-		gr0, gr1 := afirLd8(&g.Re, k)
-		gi0, gi1 := afirLd8(&g.Im, k)
+	for k := 0; k < FftLengthBy2; k += 16 {
+		gr0, gr1, gr2, gr3 := afirLd16(&g.Re, k)
+		gi0, gi1, gi2, gi3 := afirLd16(&g.Im, k)
 		for t, x := range xs {
 			h := hs[t]
-			xr0, xr1 := afirLd8(&x.Re, k)
-			xi0, xi1 := afirLd8(&x.Im, k)
-			hr0, hr1 := afirLd8(&h.Re, k)
-			hi0, hi1 := afirLd8(&h.Im, k)
+			xr0, xr1, xr2, xr3 := afirLd16(&x.Re, k)
+			xi0, xi1, xi2, xi3 := afirLd16(&x.Im, k)
+			hr0, hr1, hr2, hr3 := afirLd16(&h.Re, k)
+			hi0, hi1, hi2, hi3 := afirLd16(&h.Im, k)
 			afirSt8(&h.Re, k, hr0.Add(xr0.Mul(gr0).Add(xi0.Mul(gi0))), hr1.Add(xr1.Mul(gr1).Add(xi1.Mul(gi1))))
+			afirSt8(&h.Re, k+8, hr2.Add(xr2.Mul(gr2).Add(xi2.Mul(gi2))), hr3.Add(xr3.Mul(gr3).Add(xi3.Mul(gi3))))
 			afirSt8(&h.Im, k, hi0.Add(xr0.Mul(gi0).Sub(xi0.Mul(gr0))), hi1.Add(xr1.Mul(gi1).Sub(xi1.Mul(gr1))))
+			afirSt8(&h.Im, k+8, hi2.Add(xr2.Mul(gi2).Sub(xi2.Mul(gr2))), hi3.Add(xr3.Mul(gi3).Sub(xi3.Mul(gr3))))
 		}
 	}
 	for t, x := range xs {
 		afirAdaptBinsGo(x, g, hs[t], FftLengthBy2, FftLengthBy2Plus1)
 	}
+}
+
+// afirLd16 loads bins k..k+15 as four vectors.
+func afirLd16(a *[FftLengthBy2Plus1]float32, k int) (v0, v1, v2, v3 archsimd.Float32x4) {
+	p := (*[16]float32)(a[k : k+16])
+	return archsimd.LoadFloat32x4Array((*[4]float32)(p[:4])), archsimd.LoadFloat32x4Array((*[4]float32)(p[4:8])),
+		archsimd.LoadFloat32x4Array((*[4]float32)(p[8:12])), archsimd.LoadFloat32x4Array((*[4]float32)(p[12:]))
 }
 
 // afirLd8 loads bins k..k+7 as two vectors.
@@ -198,4 +213,15 @@ func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 		}
 	}
 	h2[n] = m
+}
+
+// afirMaxAbsUpdate is afirMaxAbsUpdateGo: the ordered compare of the absolute
+// values is false for a NaN on either side, which keeps ir.
+func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) {
+	for k := 0; k < FftLengthBy2; k += 4 {
+		p := (*[4]float32)(ir[k : k+4])
+		a := archsimd.LoadFloat32x4Array(p)
+		b := archsimd.LoadFloat32x4Array((*[4]float32)(h[k : k+4]))
+		b.IfElse(a.Abs().Less(b.Abs()), a).StoreArray(p)
+	}
 }

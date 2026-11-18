@@ -234,32 +234,48 @@ func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 func afirAdaptTerms(xs, hs []*FftData, g *FftData) {
 	hs = hs[:len(xs)]
 	if afirHasAVX2 {
-		for k := 0; k < FftLengthBy2; k += 8 {
-			gr := archsimd.LoadFloat32x8Array((*[8]float32)(g.Re[k : k+8]))
-			gi := archsimd.LoadFloat32x8Array((*[8]float32)(g.Im[k : k+8]))
+		for k := 0; k < FftLengthBy2; k += 16 {
+			gr0 := archsimd.LoadFloat32x8Array((*[8]float32)(g.Re[k : k+8]))
+			gr1 := archsimd.LoadFloat32x8Array((*[8]float32)(g.Re[k+8 : k+16]))
+			gi0 := archsimd.LoadFloat32x8Array((*[8]float32)(g.Im[k : k+8]))
+			gi1 := archsimd.LoadFloat32x8Array((*[8]float32)(g.Im[k+8 : k+16]))
 			for t, x := range xs {
 				h := hs[t]
-				xr := archsimd.LoadFloat32x8Array((*[8]float32)(x.Re[k : k+8]))
-				xi := archsimd.LoadFloat32x8Array((*[8]float32)(x.Im[k : k+8]))
-				hr := (*[8]float32)(h.Re[k : k+8])
-				hi := (*[8]float32)(h.Im[k : k+8])
-				archsimd.LoadFloat32x8Array(hr).Add(xr.Mul(gr).Add(xi.Mul(gi))).StoreArray(hr)
-				archsimd.LoadFloat32x8Array(hi).Add(xr.Mul(gi).Sub(xi.Mul(gr))).StoreArray(hi)
+				xr0 := archsimd.LoadFloat32x8Array((*[8]float32)(x.Re[k : k+8]))
+				xr1 := archsimd.LoadFloat32x8Array((*[8]float32)(x.Re[k+8 : k+16]))
+				xi0 := archsimd.LoadFloat32x8Array((*[8]float32)(x.Im[k : k+8]))
+				xi1 := archsimd.LoadFloat32x8Array((*[8]float32)(x.Im[k+8 : k+16]))
+				hr0 := (*[8]float32)(h.Re[k : k+8])
+				hr1 := (*[8]float32)(h.Re[k+8 : k+16])
+				hi0 := (*[8]float32)(h.Im[k : k+8])
+				hi1 := (*[8]float32)(h.Im[k+8 : k+16])
+				archsimd.LoadFloat32x8Array(hr0).Add(xr0.Mul(gr0).Add(xi0.Mul(gi0))).StoreArray(hr0)
+				archsimd.LoadFloat32x8Array(hr1).Add(xr1.Mul(gr1).Add(xi1.Mul(gi1))).StoreArray(hr1)
+				archsimd.LoadFloat32x8Array(hi0).Add(xr0.Mul(gi0).Sub(xi0.Mul(gr0))).StoreArray(hi0)
+				archsimd.LoadFloat32x8Array(hi1).Add(xr1.Mul(gi1).Sub(xi1.Mul(gr1))).StoreArray(hi1)
 			}
 		}
 		archsimd.ClearAVXUpperBits()
 	} else {
-		for k := 0; k < FftLengthBy2; k += 4 {
-			gr := archsimd.LoadFloat32x4Array((*[4]float32)(g.Re[k : k+4]))
-			gi := archsimd.LoadFloat32x4Array((*[4]float32)(g.Im[k : k+4]))
+		for k := 0; k < FftLengthBy2; k += 8 {
+			gr0 := archsimd.LoadFloat32x4Array((*[4]float32)(g.Re[k : k+4]))
+			gr1 := archsimd.LoadFloat32x4Array((*[4]float32)(g.Re[k+4 : k+8]))
+			gi0 := archsimd.LoadFloat32x4Array((*[4]float32)(g.Im[k : k+4]))
+			gi1 := archsimd.LoadFloat32x4Array((*[4]float32)(g.Im[k+4 : k+8]))
 			for t, x := range xs {
 				h := hs[t]
-				xr := archsimd.LoadFloat32x4Array((*[4]float32)(x.Re[k : k+4]))
-				xi := archsimd.LoadFloat32x4Array((*[4]float32)(x.Im[k : k+4]))
-				hr := (*[4]float32)(h.Re[k : k+4])
-				hi := (*[4]float32)(h.Im[k : k+4])
-				archsimd.LoadFloat32x4Array(hr).Add(xr.Mul(gr).Add(xi.Mul(gi))).StoreArray(hr)
-				archsimd.LoadFloat32x4Array(hi).Add(xr.Mul(gi).Sub(xi.Mul(gr))).StoreArray(hi)
+				xr0 := archsimd.LoadFloat32x4Array((*[4]float32)(x.Re[k : k+4]))
+				xr1 := archsimd.LoadFloat32x4Array((*[4]float32)(x.Re[k+4 : k+8]))
+				xi0 := archsimd.LoadFloat32x4Array((*[4]float32)(x.Im[k : k+4]))
+				xi1 := archsimd.LoadFloat32x4Array((*[4]float32)(x.Im[k+4 : k+8]))
+				hr0 := (*[4]float32)(h.Re[k : k+4])
+				hr1 := (*[4]float32)(h.Re[k+4 : k+8])
+				hi0 := (*[4]float32)(h.Im[k : k+4])
+				hi1 := (*[4]float32)(h.Im[k+4 : k+8])
+				archsimd.LoadFloat32x4Array(hr0).Add(xr0.Mul(gr0).Add(xi0.Mul(gi0))).StoreArray(hr0)
+				archsimd.LoadFloat32x4Array(hr1).Add(xr1.Mul(gr1).Add(xi1.Mul(gi1))).StoreArray(hr1)
+				archsimd.LoadFloat32x4Array(hi0).Add(xr0.Mul(gi0).Sub(xi0.Mul(gr0))).StoreArray(hi0)
+				archsimd.LoadFloat32x4Array(hi1).Add(xr1.Mul(gi1).Sub(xi1.Mul(gr1))).StoreArray(hi1)
 			}
 		}
 	}
@@ -285,4 +301,19 @@ const afirHasNeonFreqResp = false
 
 func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 	panic("aec3: no NEON frequency response kernel")
+}
+
+// afirMaxAbsUpdate is afirMaxAbsUpdateGo: the ordered compare of the absolute
+// values is false for a NaN on either side, which keeps ir.
+func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) {
+	if !afirHasAVX {
+		afirMaxAbsUpdateGo(ir, h)
+		return
+	}
+	for k := 0; k < FftLengthBy2; k += 4 {
+		p := (*[4]float32)(ir[k : k+4])
+		a := archsimd.LoadFloat32x4Array(p)
+		b := archsimd.LoadFloat32x4Array((*[4]float32)(h[k : k+4]))
+		b.IfElse(a.Abs().Less(b.Abs()), a).StoreArray(p)
+	}
 }

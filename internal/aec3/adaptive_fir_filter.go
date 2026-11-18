@@ -100,7 +100,7 @@ func AdaptPartitions(renderBuffer *RenderBuffer, G *FftData, numPartitions int, 
 	numRenderChannels := len(data[index])
 	for p := 0; p < numPartitions; p++ {
 		for ch := 0; ch < numRenderChannels; ch++ {
-			afirAdaptBinsGo(&data[index][ch], G, &H[p][ch], 0, FftLengthBy2Plus1)
+			afirAdaptAllGo(&data[index][ch], G, &H[p][ch])
 		}
 		if index < len(data)-1 {
 			index++
@@ -182,7 +182,7 @@ func ApplyFilter(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S
 	numRenderChannels := len(data[index])
 	for p := 0; p < numPartitions; p++ {
 		for ch := 0; ch < numRenderChannels; ch++ {
-			afirApplyBinsGo(&data[index][ch], &H[p][ch], S, 0, FftLengthBy2Plus1)
+			afirApplyAllGo(&data[index][ch], &H[p][ch], S)
 		}
 		if index < len(data)-1 {
 			index++
@@ -298,6 +298,74 @@ func afirApplyBinsGo(x, h, s *FftData, from, to int) {
 	for k := from; k < to; k++ {
 		s.Re[k] += float32(x.Re[k]*h.Re[k]) - float32(x.Im[k]*h.Im[k])
 		s.Im[k] += float32(x.Re[k]*h.Im[k]) + float32(x.Im[k]*h.Re[k])
+	}
+}
+
+// afirApplyAllGo is afirApplyBinsGo over all bins. The arrays have one
+// length, so the loop runs without bounds checks.
+func afirApplyAllGo(x, h, s *FftData) {
+	xr, xi, hr, hi := &x.Re, &x.Im, &h.Re, &h.Im
+	sr, si := &s.Re, &s.Im
+	for k := range sr {
+		a, b, c, d := xr[k], xi[k], hr[k], hi[k]
+		sr[k] += float32(a*c) - float32(b*d)
+		si[k] += float32(a*d) + float32(b*c)
+	}
+}
+
+// afirAdaptAllGo is afirAdaptBinsGo over all bins.
+func afirAdaptAllGo(x, g, h *FftData) {
+	xr, xi, gr, gi := &x.Re, &x.Im, &g.Re, &g.Im
+	hr, hi := &h.Re, &h.Im
+	for k := range hr {
+		a, b, c, d := xr[k], xi[k], gr[k], gi[k]
+		hr[k] += float32(a*c) + float32(b*d)
+		hi[k] += float32(a*d) - float32(b*c)
+	}
+}
+
+// afirApplyTermsFastGo is afirApplyTermsGo with the bin loop outside the
+// pair loop: four bins of S stay in locals while all pairs accumulate into
+// them, in pair order, starting from +0.
+func afirApplyTermsFastGo(xs, hs []*FftData, s *FftData) {
+	hs = hs[:len(xs)]
+	for k := 0; k < FftLengthBy2; k += 4 {
+		var r0, r1, r2, r3, i0, i1, i2, i3 float32
+		for t, x := range xs {
+			h := hs[t]
+			xr := (*[4]float32)(x.Re[k : k+4])
+			xi := (*[4]float32)(x.Im[k : k+4])
+			hr := (*[4]float32)(h.Re[k : k+4])
+			hi := (*[4]float32)(h.Im[k : k+4])
+			r0 += float32(xr[0]*hr[0]) - float32(xi[0]*hi[0])
+			i0 += float32(xr[0]*hi[0]) + float32(xi[0]*hr[0])
+			r1 += float32(xr[1]*hr[1]) - float32(xi[1]*hi[1])
+			i1 += float32(xr[1]*hi[1]) + float32(xi[1]*hr[1])
+			r2 += float32(xr[2]*hr[2]) - float32(xi[2]*hi[2])
+			i2 += float32(xr[2]*hi[2]) + float32(xi[2]*hr[2])
+			r3 += float32(xr[3]*hr[3]) - float32(xi[3]*hi[3])
+			i3 += float32(xr[3]*hi[3]) + float32(xi[3]*hr[3])
+		}
+		sr := (*[4]float32)(s.Re[k : k+4])
+		si := (*[4]float32)(s.Im[k : k+4])
+		sr[0], sr[1], sr[2], sr[3] = r0, r1, r2, r3
+		si[0], si[1], si[2], si[3] = i0, i1, i2, i3
+	}
+	const n = FftLengthBy2
+	var re, im float32
+	for t, x := range xs {
+		h := hs[t]
+		re += float32(x.Re[n]*h.Re[n]) - float32(x.Im[n]*h.Im[n])
+		im += float32(x.Re[n]*h.Im[n]) + float32(x.Im[n]*h.Re[n])
+	}
+	s.Re[n], s.Im[n] = re, im
+}
+
+// afirAdaptTermsFastGo is afirAdaptTermsGo with bounds-check-free loops.
+func afirAdaptTermsFastGo(xs, hs []*FftData, g *FftData) {
+	hs = hs[:len(xs)]
+	for t, x := range xs {
+		afirAdaptAllGo(x, g, hs[t])
 	}
 }
 
@@ -491,7 +559,12 @@ func (f *AdaptiveFirFilter) constrainAndUpdateImpulseResponse(impulseResponse *[
 	ir := *impulseResponse
 	var h [FftLength]float32
 	base := f.partitionToConstrain * FftLengthBy2
-	clear(ir[base : base+FftLengthBy2])
+	// The partition of the impulse response is zero-filled and then takes
+	// the first channel as is.
+	irp := (*[FftLengthBy2]float32)(ir[base : base+FftLengthBy2])
+	if f.numRenderChannels == 0 {
+		clear(irp[:])
+	}
 
 	for ch := 0; ch < f.numRenderChannels; ch++ {
 		hp := &f.H[f.partitionToConstrain][ch]
@@ -501,17 +574,23 @@ func (f *AdaptiveFirFilter) constrainAndUpdateImpulseResponse(impulseResponse *[
 		clear(h[FftLengthBy2:])
 
 		if ch == 0 {
-			copy(ir[base:base+FftLengthBy2], h[:FftLengthBy2])
+			*irp = [FftLengthBy2]float32(h[:FftLengthBy2])
 		} else {
-			for k, j := 0, base; k < FftLengthBy2; k, j = k+1, j+1 {
-				if fabsf(ir[j]) < fabsf(h[k]) {
-					ir[j] = h[k]
-				}
-			}
+			afirMaxAbsUpdate(irp, (*[FftLengthBy2]float32)(h[:FftLengthBy2]))
 		}
 		f.fft.Fft(&h, hp)
 	}
 	f.partitionToConstrain = afirNextPartition(f.partitionToConstrain, f.currentSizePartitions)
+}
+
+// afirMaxAbsUpdateGo replaces ir[k] by h[k] where fabsf(ir[k]) < fabsf(h[k])
+// (false when either is a NaN).
+func afirMaxAbsUpdateGo(ir, h *[FftLengthBy2]float32) {
+	for k := range ir {
+		if fabsf(ir[k]) < fabsf(h[k]) {
+			ir[k] = h[k]
+		}
+	}
 }
 
 func (f *AdaptiveFirFilter) constrain() {

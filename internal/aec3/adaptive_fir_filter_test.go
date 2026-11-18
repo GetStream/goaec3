@@ -124,6 +124,94 @@ func TestAfirLanesMatchScalar(t *testing.T) {
 	}
 }
 
+// The bounds-check-free and term-ordered pure-Go kernels against the plain
+// per-bin references.
+func TestAfirFastGoKernels(t *testing.T) {
+	rng := rand.New(rand.NewSource(11))
+	for trial := 0; trial < 300; trial++ {
+		n := rng.Intn(40)
+		xs := make([]*FftData, n)
+		hs := make([]*FftData, n)
+		hw := make([]*FftData, n)
+		for i := range xs {
+			xs[i], hs[i], hw[i] = new(FftData), new(FftData), new(FftData)
+			afirTestRandFft(rng, xs[i], 100)
+			afirTestRandFft(rng, hs[i], 0.1)
+			if trial%5 == 0 {
+				// Signed zeros and non-finite values keep their place.
+				k := rng.Intn(FftLengthBy2Plus1)
+				xs[i].Re[k] = float32(math.Copysign(0, -1))
+				hs[i].Im[rng.Intn(FftLengthBy2Plus1)] = float32(math.Inf(1 - 2*rng.Intn(2)))
+				hs[i].Re[rng.Intn(FftLengthBy2Plus1)] = float32(math.Copysign(0, -1))
+			}
+			*hw[i] = *hs[i]
+		}
+		var G FftData
+		afirTestRandFft(rng, &G, 0.01)
+
+		var got, want FftData
+		got.Re[9], got.Im[64] = 5, 6 // must be overwritten
+		afirApplyTermsGo(xs, hs, &want)
+		afirApplyTermsFastGo(xs, hs, &got)
+		afirEqualFft(t, "apply terms", &got, &want)
+		got.Clear()
+		for i := range xs {
+			afirApplyAllGo(xs[i], hs[i], &got)
+		}
+		afirEqualFft(t, "apply all", &got, &want)
+
+		afirAdaptTermsGo(xs, hw, &G)
+		afirAdaptTermsFastGo(xs, hs, &G)
+		for i := range hs {
+			afirEqualFft(t, "adapt terms", hs[i], hw[i])
+		}
+	}
+}
+
+func TestAfirMaxAbsUpdate(t *testing.T) {
+	rng := rand.New(rand.NewSource(12))
+	for trial := 0; trial < 500; trial++ {
+		var ir, h, want [FftLengthBy2]float32
+		copy(ir[:], kernEdgeVec(rng, FftLengthBy2))
+		copy(h[:], kernEdgeVec(rng, FftLengthBy2))
+		for k := range ir {
+			switch rng.Intn(8) {
+			case 0:
+				h[k] = ir[k]
+			case 1:
+				h[k] = -ir[k]
+			}
+		}
+		want = ir
+		afirMaxAbsUpdateGo(&want, &h)
+		afirMaxAbsUpdate(&ir, &h)
+		for k := range ir {
+			if math.Float32bits(ir[k]) != math.Float32bits(want[k]) {
+				t.Fatalf("trial %d idx %d: got %v (%#x) want %v (%#x)", trial, k, ir[k], math.Float32bits(ir[k]),
+					want[k], math.Float32bits(want[k]))
+			}
+		}
+	}
+}
+
+func BenchmarkAfirMaxAbsUpdate(b *testing.B) {
+	rng := rand.New(rand.NewSource(13))
+	var ir, h [FftLengthBy2]float32
+	for k := range ir {
+		ir[k], h[k] = float32(rng.NormFloat64()), float32(rng.NormFloat64())
+	}
+	b.Run("dispatch", func(b *testing.B) {
+		for b.Loop() {
+			afirMaxAbsUpdate(&ir, &h)
+		}
+	})
+	b.Run("ref", func(b *testing.B) {
+		for b.Loop() {
+			afirMaxAbsUpdateGo(&ir, &h)
+		}
+	})
+}
+
 func afirCopyH(H [][]FftData) [][]FftData {
 	c := make([][]FftData, len(H))
 	for p := range H {
