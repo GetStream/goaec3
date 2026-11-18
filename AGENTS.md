@@ -129,8 +129,9 @@ Steady-state processing is allocation-free. Lock new hot paths with a
   originals.
 - x86 lanes on Apple silicon: `make oracle-src-rosetta` runs the source
   build for x86_64 under Rosetta (`CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch
-  x86_64" CXX="clang++ -arch x86_64"`): the SSE2 lane, and the AVX2 lane with
-  `GOAEC3_FORCE_FMA=1` (Rosetta executes FMA but CPUID does not report it).
+  x86_64" CXX="clang++ -arch x86_64"`): the SSE2 and scalar lanes;
+  `make oracle-src-rosetta-avx2` runs the AVX2 lane with `GOAEC3_FORCE_FMA=1`
+  (Rosetta executes FMA but CPUID does not report it) where Go selects AVX2.
 - `CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch x86_64" CXX="clang++ -arch
   x86_64" GOEXPERIMENT=simd go test -tags ooura_sse2_oracle
   ./internal/webrtcoracle/` (`make oracle-x86-kernels`) — the x86 Ooura FFT

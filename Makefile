@@ -1,5 +1,5 @@
 .PHONY: test test-purego test-simd test-amd64 test-all oracle oracle-src oracle-src-scalar
-.PHONY: oracle-src-rosetta oracle-x86-kernels fetch-webrtc gen-src-oracle lint bench
+.PHONY: oracle-src-rosetta oracle-src-rosetta-avx2 oracle-x86-kernels fetch-webrtc gen-src-oracle lint bench
 
 GO ?= go
 # The C++ reference builds need clang: libwebrtc is built by clang with
@@ -60,13 +60,17 @@ oracle-src-scalar: fetch-webrtc
 	CC=$(CLANG_CC) CXX=$(CLANG_CXX) GOAEC3_EXPECT_LANE=none $(GO) test -timeout $(ORACLE_TIMEOUT) -tags '$(SRC_TAGS) purego' ./internal/webrtcoracle/
 
 # The x86_64 source build under Rosetta 2 on Apple silicon: the SSE2 lane
-# (Go's AVX2 detection turned off) and the AVX2 lane. Rosetta executes FMA
-# without advertising it, so the AVX2 run forces the FMA kernels.
+# (Go's AVX2 detection turned off) and the scalar lane.
 oracle-src-rosetta: fetch-webrtc
 	$(ROSETTA_ENV) $(SIMD) GODEBUG=cpu.avx2=off GOAEC3_EXPECT_LANE=sse2 $(GO) test -timeout $(ORACLE_TIMEOUT) -tags $(SRC_TAGS) ./internal/webrtcoracle/
 	$(ROSETTA_ENV) GODEBUG=cpu.avx2=off GOAEC3_EXPECT_LANE=sse2 $(GO) test -timeout $(ORACLE_TIMEOUT) -tags $(SRC_TAGS) ./internal/webrtcoracle/
-	$(ROSETTA_ENV) $(SIMD) GOAEC3_FORCE_FMA=1 GOAEC3_EXPECT_LANE=avx2 $(GO) test -timeout $(ORACLE_TIMEOUT) -tags $(SRC_TAGS) ./internal/webrtcoracle/
 	$(ROSETTA_ENV) GOAEC3_EXPECT_LANE=none $(GO) test -timeout $(ORACLE_TIMEOUT) -tags '$(SRC_TAGS) purego' ./internal/webrtcoracle/
+
+# The AVX2 lane under Rosetta 2, where Go selects it (Rosetta executes AVX2
+# and FMA without CPUID reporting them, so the FMA kernels are forced). It
+# fails on the lane check when Go's detection does not select AVX2 there.
+oracle-src-rosetta-avx2: fetch-webrtc
+	$(ROSETTA_ENV) $(SIMD) GOAEC3_FORCE_FMA=1 GOAEC3_EXPECT_LANE=avx2 $(GO) test -timeout $(ORACLE_TIMEOUT) -tags $(SRC_TAGS) ./internal/webrtcoracle/
 
 # x86 SSE2/AVX2 Ooura FFT, spectrum and vector-math kernels against their C++
 # sources (under Rosetta 2 on Apple silicon).
