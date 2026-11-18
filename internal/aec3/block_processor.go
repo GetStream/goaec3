@@ -16,7 +16,7 @@ type BlockProcessorEchoRemover interface {
 // data (block_processor.h; this is the BlockProcessorImpl of
 // block_processor.cc). Metrics reporting is not ported.
 type BlockProcessor struct {
-	config                 EchoCanceller3Config
+	config                 *EchoCanceller3Config // shared, never modified
 	captureProperlyStarted bool
 	renderProperlyStarted  bool
 	sampleRateHz           int
@@ -46,6 +46,8 @@ func NewBlockProcessor(config *EchoCanceller3Config, sampleRateHz, numRenderChan
 // NewBlockProcessorWithComponents mirrors the BlockProcessor::Create
 // overload that takes the render delay buffer, the delay controller (nil
 // when the config uses an external delay estimator) and the echo remover.
+// The result keeps a reference to config, which must not change while it
+// is in use (the C++ copies it).
 func NewBlockProcessorWithComponents(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int, renderBuffer *RenderDelayBuffer, delayController *RenderDelayController,
 	echoRemover BlockProcessorEchoRemover) *BlockProcessor {
@@ -54,7 +56,7 @@ func NewBlockProcessorWithComponents(config *EchoCanceller3Config, sampleRateHz,
 		panic("aec3: invalid sample rate for BlockProcessor")
 	}
 	return &BlockProcessor{
-		config:          *config,
+		config:          config,
 		sampleRateHz:    sampleRateHz,
 		renderBuffer:    renderBuffer,
 		delayController: delayController,

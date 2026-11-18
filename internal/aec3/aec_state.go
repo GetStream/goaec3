@@ -165,7 +165,7 @@ func (s *stSaturationDetector) Update(x *Block, saturatedCapture, usableLinearEs
 // AecState mirrors aec_state.h: the state and the conditions for the echo
 // removal functionality. Field trials are at their defaults.
 type AecState struct {
-	config                                      EchoCanceller3Config
+	config                                      *EchoCanceller3Config // shared, never modified
 	numCaptureChannels                          int
 	deactivateInitialStateResetAtEchoPathChange bool
 	fullResetAtEchoPathChange                   bool
@@ -194,15 +194,17 @@ func NewAecState(config *EchoCanceller3Config, numCaptureChannels int) *AecState
 // NewAecStateWithTransparentMode builds an AecState with an explicit
 // transparent mode classifier (nil disables it), which is what the C++
 // selects through field trials.
+// The result keeps a reference to config, which must not change while it
+// is in use (the C++ copies it).
 func NewAecStateWithTransparentMode(config *EchoCanceller3Config, numCaptureChannels int, tm TransparentMode) *AecState {
 	a := &AecState{
-		config:                                  *config,
+		config:                                  config,
 		numCaptureChannels:                      numCaptureChannels,
 		fullResetAtEchoPathChange:               true,
 		subtractorAnalyzerResetAtEchoPathChange: true,
 		transparentState:                        tm,
 	}
-	c := &a.config
+	c := a.config
 	a.initialState = stInitialState{
 		conservativeInitialPhase: c.Filter.ConservativeInitialPhase,
 		initialStateSeconds:      c.Filter.InitialStateSeconds,

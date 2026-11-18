@@ -137,7 +137,7 @@ func newSgGainParameters(lastLfBand, firstHfBand int, tuning *Tuning) sgGainPara
 // SuppressionGain computes the echo suppression gains.
 type SuppressionGain struct {
 	optimization              Aec3Optimization
-	config                    EchoCanceller3Config
+	config                    *EchoCanceller3Config // shared, never modified
 	numCaptureChannels        int
 	stateChangeDurationBlocks int
 	lastGain                  [FftLengthBy2Plus1]float32
@@ -155,12 +155,14 @@ type SuppressionGain struct {
 
 // NewSuppressionGain mirrors the C++ constructor. sampleRateHz is unused, as
 // in the C++.
+// The result keeps a reference to config, which must not change while it
+// is in use (the C++ copies it).
 func NewSuppressionGain(config *EchoCanceller3Config, optimization Aec3Optimization, sampleRateHz int,
 	numCaptureChannels int) *SuppressionGain {
 	_ = sampleRateHz
 	s := &SuppressionGain{
 		optimization:              optimization,
-		config:                    *config,
+		config:                    config,
 		numCaptureChannels:        numCaptureChannels,
 		stateChangeDurationBlocks: config.Filter.ConfigChangeDurationBlocks,
 		lastNearend:               make([][FftLengthBy2Plus1]float32, numCaptureChannels),
@@ -370,7 +372,7 @@ func (s *SuppressionGain) LowerBandGain(lowNoiseRender bool, aecState *AecState,
 		s.nearendSmoothers[ch].Average(suppressorInput[ch][:], nearend[:])
 
 		// Weight echo power in terms of audibility.
-		sgWeightEchoForAudibility(&s.config, &residualEcho[ch], &weightedResidualEcho)
+		sgWeightEchoForAudibility(s.config, &residualEcho[ch], &weightedResidualEcho)
 
 		s.GetMinGain(&weightedResidualEcho, &s.lastNearend[ch], &s.lastEcho[ch], lowNoiseRender, saturatedEcho,
 			&minGain)

@@ -89,7 +89,7 @@ func (m *subFilterMisadjustmentEstimator) Reset() {
 type Subtractor struct {
 	fft                           Aec3Fft
 	optimization                  Aec3Optimization
-	config                        EchoCanceller3Config
+	config                        *EchoCanceller3Config // shared, never modified
 	numCaptureChannels            int
 	useCoarseFilterResetHangover  bool
 	refinedFilters                []*AdaptiveFirFilter
@@ -113,10 +113,12 @@ type Subtractor struct {
 
 // NewSubtractor creates a Subtractor. Field trials are fixed at their
 // defaults, so the coarse filter reset hangover is in use.
+// The result keeps a reference to config, which must not change while it
+// is in use (the C++ copies it).
 func NewSubtractor(config *EchoCanceller3Config, numRenderChannels, numCaptureChannels int, optimization Aec3Optimization) *Subtractor {
 	s := &Subtractor{
 		optimization:                  optimization,
-		config:                        *config,
+		config:                        config,
 		numCaptureChannels:            numCaptureChannels,
 		useCoarseFilterResetHangover:  true,
 		refinedFilters:                make([]*AdaptiveFirFilter, numCaptureChannels),
@@ -129,7 +131,7 @@ func NewSubtractor(config *EchoCanceller3Config, numRenderChannels, numCaptureCh
 		refinedFrequencyResponses:     make([][][FftLengthBy2Plus1]float32, numCaptureChannels),
 		refinedImpulseResponses:       make([][]float32, numCaptureChannels),
 	}
-	c := &s.config
+	c := s.config
 	maxRefinedBlocks := max(c.Filter.RefinedInitial.LengthBlocks, c.Filter.Refined.LengthBlocks)
 	for ch := 0; ch < numCaptureChannels; ch++ {
 		s.refinedFrequencyResponses[ch] = make([][FftLengthBy2Plus1]float32, maxRefinedBlocks)
@@ -147,7 +149,7 @@ func NewSubtractor(config *EchoCanceller3Config, numRenderChannels, numCaptureCh
 
 // HandleEchoPathChange handles echo path changes.
 func (s *Subtractor) HandleEchoPathChange(echoPathVariability EchoPathVariability) {
-	c := &s.config
+	c := s.config
 	if echoPathVariability.DelayChange != DelayAdjustmentNone {
 		for ch := 0; ch < s.numCaptureChannels; ch++ {
 			s.refinedFilters[ch].HandleEchoPathChange()
@@ -170,7 +172,7 @@ func (s *Subtractor) HandleEchoPathChange(echoPathVariability EchoPathVariabilit
 
 // ExitInitialState switches the filters and gains to the normal configs.
 func (s *Subtractor) ExitInitialState() {
-	c := &s.config
+	c := s.config
 	for ch := 0; ch < s.numCaptureChannels; ch++ {
 		s.refinedGains[ch].SetConfig(c.Filter.Refined, false)
 		s.coarseGains[ch].SetConfig(c.Filter.Coarse, false)

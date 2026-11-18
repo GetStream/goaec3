@@ -15,7 +15,7 @@ const (
 // RenderDelayBufferImpl of render_delay_buffer.cc).
 type RenderDelayBuffer struct {
 	optimization                               Aec3Optimization
-	config                                     EchoCanceller3Config
+	config                                     *EchoCanceller3Config // shared, never modified
 	renderLinearAmplitudeGain                  float32
 	downSamplingFactor                         int
 	subBlockSize                               int
@@ -46,10 +46,12 @@ type RenderDelayBuffer struct {
 }
 
 // NewRenderDelayBuffer mirrors RenderDelayBuffer::Create.
+// The result keeps a reference to config, which must not change while it
+// is in use (the C++ copies it).
 func NewRenderDelayBuffer(config *EchoCanceller3Config, sampleRateHz, numRenderChannels int) *RenderDelayBuffer {
 	r := &RenderDelayBuffer{
 		optimization:              DetectOptimization(),
-		config:                    *config,
+		config:                    config,
 		renderLinearAmplitudeGain: Exp10f(config.RenderLevels.RenderPowerGainDb / 20),
 		downSamplingFactor:        config.Delay.DownSamplingFactor,
 		maxObservedJitter:         1,

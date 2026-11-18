@@ -11,7 +11,7 @@ type EchoControlMetrics struct {
 
 // EchoRemover removes the echo from the capture signal.
 type EchoRemover struct {
-	config                          EchoCanceller3Config
+	config                          *EchoCanceller3Config // shared, never modified
 	fft                             Aec3Fft
 	optimization                    Aec3Optimization
 	sampleRateHz                    int
@@ -58,13 +58,15 @@ func NewEchoRemover(config *EchoCanceller3Config, sampleRateHz, numRenderChannel
 
 // NewEchoRemoverWithOptimization creates an EchoRemover that runs the given
 // optimization lane instead of DetectOptimization().
+// The result keeps a reference to config, which must not change while it
+// is in use (the C++ copies it).
 func NewEchoRemoverWithOptimization(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int, optimization Aec3Optimization) *EchoRemover {
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate")
 	}
 	e := &EchoRemover{
-		config:                          *config,
+		config:                          config,
 		optimization:                    optimization,
 		sampleRateHz:                    sampleRateHz,
 		numRenderChannels:               numRenderChannels,
@@ -86,7 +88,7 @@ func NewEchoRemoverWithOptimization(config *EchoCanceller3Config, sampleRateHz, 
 		highBandComfortNoise:            make([]FftData, numCaptureChannels),
 		subtractorOutput:                make([]SubtractorOutput, numCaptureChannels),
 	}
-	cfg := &e.config
+	cfg := e.config
 	e.useCoarseFilterOutput = cfg.Filter.EnableCoarseFilterOutputUsage
 	e.subtractor = NewSubtractor(cfg, numRenderChannels, numCaptureChannels, optimization)
 	e.suppressionGain = NewSuppressionGain(cfg, optimization, sampleRateHz, numCaptureChannels)
