@@ -2,16 +2,18 @@ name: bench
 
 # Time per 10 ms frame of the Go public API against libwebrtc's
 # EchoCanceller3 built from the pinned sources (webrtc_src_oracle), per lane,
-# on GitHub-hosted x86_64 (AVX2 + FMA) and arm64 runners. Each job prints its
-# table and a CPU profile of the Go side to the job summary and uploads the
-# raw output, the profile and the test binary; the summary job collects every
-# lane into one table.
+# on GitHub-hosted x86_64 (AVX2 + FMA) and arm64 runners. Hosted runners
+# differ in CPU from job to job, so every job also builds the merge base with
+# main and alternates base and head runs on the same machine; the summary
+# reports the Go/C++ ratio and the head/base ratio of that job, the CPU
+# model, the internal/aec3 kernel benchmarks of both, and a CPU profile of
+# the Go side. The lane is checked bit-exact on the runner before timing.
 
 on:
   workflow_dispatch:
     inputs:
       count:
-        description: "benchmark -count"
+        description: "benchmark rounds (each runs base and head once)"
         default: "6"
       benchtime:
         description: "benchmark -benchtime"
@@ -59,6 +61,8 @@ jobs:
       BENCHTIME: ${{ inputs.benchtime || '2000x' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -77,8 +81,7 @@ jobs:
         run: |
           cat >"$RUNNER_TEMP/table.awk" <<'AWK'
           # Reads go test -bench output of BenchmarkEc3VsLibwebrtc and prints
-          # one row per case: medians in µs and the Go/C++ ratio, as a
-          # markdown row, or as CSV (os,lane,case,go,cpp,ratio) with csv=1.
+          # "case go_median_us cpp_median_us" per case, in input order.
           function median(s,   a, n, i, j, t) {
             n = split(s, a, " ")
             for (i = 2; i <= n; i++) for (j = i; j > 1 && a[j-1] + 0 > a[j] + 0; j--) { t = a[j]; a[j] = a[j-1]; a[j-1] = t }
@@ -91,9 +94,8 @@ jobs:
           }
           END {
             for (i = 1; i <= nc; i++) {
-              c = order[i]; g = median(v[c, "go"]) / 1000; w = median(v[c, "libwebrtc"]) / 1000
-              if (csv) printf "%s,%s,%s,%.1f,%.1f,%.2f\n", os, lane, c, g, w, g / w
-              else printf "| %s | %.1f | %.1f | %.2f |\n", c, g, w, g / w
+              c = order[i]
+              printf "%s %.1f %.1f\n", c, median(v[c, "go"]) / 1000, median(v[c, "libwebrtc"]) / 1000
             }
           }
           AWK
@@ -102,19 +104,60 @@ jobs:
           lscpu | tee cpu.txt
           model=$(lscpu | sed -n 's/^Model name: *//p' | head -1)
           echo "CPU_MODEL=${model:-unknown}" >>"$GITHUB_ENV"
-      - name: Build the benchmark binary
-        run: go test -c -o bench.test -tags webrtc_src_oracle ./internal/webrtcoracle/
+      - name: Base revision
+        run: |
+          base=$(git merge-base HEAD origin/main)
+          if [ "$base" = "$(git rev-parse HEAD)" ]; then
+            echo "BASE=" >>"$GITHUB_ENV"
+          else
+            echo "BASE=$base" >>"$GITHUB_ENV"
+            git worktree add --detach "$RUNNER_TEMP/base" "$base"
+            ln -s "$PWD/tmp_check" "$RUNNER_TEMP/base/tmp_check"
+          fi
+      - name: Build the benchmark binaries
+        run: |
+          go test -c -o bench.test -tags webrtc_src_oracle ./internal/webrtcoracle/
+          go test -c -o kern.test ./internal/aec3/
+          if [ -n "$BASE" ]; then
+            (cd "$RUNNER_TEMP/base" &&
+              go test -c -o "$GITHUB_WORKSPACE/base.test" -tags webrtc_src_oracle ./internal/webrtcoracle/ &&
+              go test -c -o "$GITHUB_WORKSPACE/basekern.test" ./internal/aec3/)
+          fi
       # The numbers below count only if this lane is bit-exact on this
-      # runner: the kernel-against-reference tests and the oracle parity
-      # tests of the benchmarked binary.
+      # runner: the unit and kernel-against-reference tests and the oracle
+      # parity tests of the benchmarked binary.
       - name: Parity
         run: |
-          go test -count=1 ./internal/...
+          go test -count=1 ./...
           ./bench.test -test.count 1 -test.timeout 40m
       - name: Benchmark
         run: |
-          ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc' \
-            -test.benchtime "$BENCHTIME" -test.count "$COUNT" | tee bench.txt
+          : >bench.txt
+          : >base.txt
+          for i in $(seq "$COUNT"); do
+            if [ -n "$BASE" ]; then
+              ./base.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc' \
+                -test.benchtime "$BENCHTIME" -test.count 1 | tee -a base.txt
+            fi
+            ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc' \
+              -test.benchtime "$BENCHTIME" -test.count 1 | tee -a bench.txt
+          done
+      - name: Kernel benchmarks
+        run: |
+          kb='BenchmarkMatchedFilterCore$|BenchmarkMatchedFilterCoreUpdating$|BenchmarkAfir|BenchmarkKern$|BenchmarkFmaf$'
+          : >kern.txt
+          : >basekern.txt
+          for i in $(seq 5); do
+            if [ -n "$BASE" ]; then
+              (cd internal/aec3 && ../../basekern.test -test.run '^$' -test.bench "$kb" -test.count 1) | tee -a basekern.txt
+            fi
+            (cd internal/aec3 && ../../kern.test -test.run '^$' -test.bench "$kb" -test.count 1) | tee -a kern.txt
+          done
+          if [ -n "$BASE" ]; then
+            go run golang.org/x/perf/cmd/benchstat@v0.0.0-20250813145418-2f7363a06fe1 basekern.txt kern.txt | tee kernstat.txt
+          else
+            go run golang.org/x/perf/cmd/benchstat@v0.0.0-20250813145418-2f7363a06fe1 kern.txt | tee kernstat.txt
+          fi
       - name: Profile
         run: |
           ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc/.*/go' \
@@ -122,15 +165,26 @@ jobs:
           go tool pprof -top -nodecount=40 -focus='goaec3' bench.test cpu.pprof | tee pprof.txt
       - name: Summary
         run: |
+          awk -f "$RUNNER_TEMP/table.awk" bench.txt | LC_ALL=C sort >head.rows
+          if [ -n "$BASE" ]; then awk -f "$RUNNER_TEMP/table.awk" base.txt | LC_ALL=C sort >base.rows; else cp head.rows base.rows; fi
+          LC_ALL=C join head.rows base.rows | awk -v os="${{ matrix.os }}" -v lane="${{ matrix.name }}" -v cpu="$CPU_MODEL" \
+            '{ printf "%s,%s,%s,%s,%.1f,%.1f,%.2f,%.1f,%.2f\n", os, lane, cpu, $1, $2, $3, $2 / $3, $4, $2 / $4 }' >rows.csv
           {
             echo "### ${{ matrix.name }} on ${{ matrix.os }}"
             echo
             echo "CPU: $CPU_MODEL. Go ${GO_VERSION}, GOEXPERIMENT=${GOEXPERIMENT:-(none)}, GODEBUG=${GODEBUG:-(none)}."
-            echo "Median of $COUNT runs, µs per 10 ms frame."
+            echo "Base: ${BASE:-(head is the merge base)}. Median of $COUNT alternating rounds, µs per 10 ms frame."
             echo
-            echo "| Case | goaec3 | libwebrtc (C++) | Go / C++ |"
-            echo "| --- | --- | --- | --- |"
-            awk -f "$RUNNER_TEMP/table.awk" bench.txt
+            echo "| Case | goaec3 | libwebrtc (C++) | Go / C++ | goaec3 base | head / base |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            awk -F, '{ printf "| %s | %s | %s | %s | %s | %s |\n", $4, $5, $6, $7, $8, $9 }' rows.csv
+            echo
+            echo "<details><summary>Kernel benchmarks (internal/aec3, base vs head)</summary>"
+            echo
+            echo '```'
+            cat kernstat.txt
+            echo '```'
+            echo "</details>"
             echo
             echo "<details><summary>Profile (Go side)</summary>"
             echo
@@ -139,12 +193,15 @@ jobs:
             echo '```'
             echo "</details>"
           } >>"$GITHUB_STEP_SUMMARY"
-          awk -v lane="${{ matrix.name }}" -v os="${{ matrix.os }}" -v csv=1 -f "$RUNNER_TEMP/table.awk" bench.txt >rows.csv
       - uses: actions/upload-artifact@v4
         with:
           name: bench-${{ matrix.os }}-${{ matrix.name }}
           path: |
             bench.txt
+            base.txt
+            kern.txt
+            basekern.txt
+            kernstat.txt
             cpu.txt
             cpu.pprof
             pprof.txt
@@ -163,10 +220,12 @@ jobs:
       - name: Table
         run: |
           {
-            echo "### goaec3 vs libwebrtc, µs per 10 ms frame (median)"
+            echo "### goaec3 vs libwebrtc, µs per 10 ms frame (median, per job)"
             echo
-            echo "| Runner | Lane | Case | goaec3 | libwebrtc (C++) | Go / C++ |"
-            echo "| --- | --- | --- | --- | --- | --- |"
-            cat results/*/rows.csv | sort -t, -k1,1 -k2,2 -k3,3 |
-              awk -F, '{ printf "| %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6 }'
+            echo "Each row comes from one job on one machine; compare ratios, not µs, across rows."
+            echo
+            echo "| Runner | Lane | CPU | Case | goaec3 | libwebrtc (C++) | Go / C++ | goaec3 base | head / base |"
+            echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+            cat results/*/rows.csv | sort -t, -k1,1 -k2,2 -k4,4 |
+              awk -F, '{ printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7, $8, $9 }'
           } >>"$GITHUB_STEP_SUMMARY"
