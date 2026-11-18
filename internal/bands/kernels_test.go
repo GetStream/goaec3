@@ -111,6 +111,65 @@ func TestThreeBandFilterBankKernel(t *testing.T) {
 	}
 }
 
+// TestThreeBandFilterBankSignedZeros runs frames of signed zeros, sparse
+// samples and samples near the float32 limits, where a dropped or reordered
+// term of a band or output sum would show as a zero of the wrong sign, an
+// infinity or a NaN.
+func TestThreeBandFilterBankSignedZeros(t *testing.T) {
+	negZero := float32(math.Copysign(0, -1))
+	gen := []func(rng *rand.Rand) float32{
+		func(*rand.Rand) float32 { return negZero },
+		func(rng *rand.Rand) float32 { return []float32{0, negZero}[rng.Intn(2)] },
+		func(rng *rand.Rand) float32 {
+			if rng.Intn(9) == 0 {
+				return float32(rng.NormFloat64()) * 1000
+			}
+			return []float32{0, negZero}[rng.Intn(2)]
+		},
+		func(rng *rand.Rand) float32 {
+			return []float32{math.MaxFloat32, -math.MaxFloat32, 1e38, -1e38, 0, negZero, 3e37}[rng.Intn(7)]
+		},
+		func(rng *rand.Rand) float32 {
+			return []float32{1e-45, -1e-45, 1e-40, -1e-40, 0, negZero, 1e-38}[rng.Intn(7)]
+		},
+	}
+	for gi, g := range gen {
+		rng := rand.New(rand.NewSource(int64(100 + gi)))
+		var fast ThreeBandFilterBank
+		var ref threeBandFilterBankRef
+		var fb, rb [NumBands][SplitBandSize]float32
+		for frame := 0; frame < 60; frame++ {
+			// Later frames switch generators so the state left by one
+			// meets the input of another.
+			cur := g
+			if frame >= 40 {
+				cur = gen[(gi+frame)%len(gen)]
+			}
+			var in [FullBandSize]float32
+			for i := range in {
+				in[i] = cur(rng)
+			}
+			fo := [NumBands][]float32{fb[0][:], fb[1][:], fb[2][:]}
+			ro := [NumBands][]float32{rb[0][:], rb[1][:], rb[2][:]}
+			fast.Analysis(&in, &fo)
+			ref.analysis(&in, &ro)
+			for b := range fb {
+				bsCheck(t, "analysis", fb[b][:], rb[b][:])
+			}
+			for b := range rb {
+				for i := range rb[b] {
+					rb[b][i] = cur(rng)
+				}
+			}
+			var fout, rout [FullBandSize]float32
+			fi := [NumBands][]float32{rb[0][:], rb[1][:], rb[2][:]}
+			fast.Synthesis(&fi, &fout)
+			ref.synthesis(&fi, &rout)
+			bsCheck(t, "synthesis", fout[:], rout[:])
+		}
+	}
+}
+
 func BenchmarkThreeBandFilterBankAnalysis(b *testing.B) {
 	rng := rand.New(rand.NewSource(1))
 	var in [FullBandSize]float32

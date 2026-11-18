@@ -59,6 +59,27 @@ var bsDctModulation = [NumNonZeroFilters][bsDctSize]float32{
 	{bsSqrt3, 0, -bsSqrt3},
 }
 
+// The fast filter banks keep each filter input as a history buffer:
+// MemorySize samples of state followed by the SplitBandSize new samples.
+const bsHistSize = MemorySize + SplitBandSize
+
+// bsSchedule lists the non-zero filters in the reference loop order
+// (downsampling/upsampling index outer, inShift inner).
+var bsSchedule = [NumNonZeroFilters]struct{ phase, inShift, filter int }{
+	{0, 0, 0}, {0, 2, 5},
+	{1, 0, 1}, {1, 1, 3}, {1, 2, 6}, {1, 3, 8},
+	{2, 0, 2}, {2, 1, 4}, {2, 2, 7}, {2, 3, 9},
+}
+
+// bsNumSynthesisInputs is the number of distinct modulated synthesis inputs:
+// filters with the same bsDctModulation row share one.
+const bsNumSynthesisInputs = 6
+
+// bsSynthesisInput maps a filter to its modulated input:
+// 0: {2,2,2}  1: {-2,-2,-2}  2: {s,0,-s}  3: {-s,0,s}  4: {1,-2,1}
+// 5: {-1,2,-1}, with s = bsSqrt3.
+var bsSynthesisInput = [NumNonZeroFilters]int{0, 2, 4, 5, 3, 1, 3, 5, 4, 2}
+
 // bsFilterCore filters in with filter using a shift by inShift, taking into
 // account the previous state.
 func bsFilterCore(filter *[FilterSize]float32, in *[SplitBandSize]float32, inShift int,

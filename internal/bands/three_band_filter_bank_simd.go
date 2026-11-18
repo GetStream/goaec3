@@ -26,27 +26,14 @@ import "simd/archsimd"
 // input or state holds a NaN or an infinity therefore runs the reference,
 // which reproduces the C++ operand order, on the same state.
 
-const bsHistSize = MemorySize + SplitBandSize
-
-// bsSchedule lists the non-zero filters in the reference loop order
-// (downsampling/upsampling index outer, inShift inner).
-var bsSchedule = [NumNonZeroFilters]struct{ phase, inShift, filter int }{
-	{0, 0, 0}, {0, 2, 5},
-	{1, 0, 1}, {1, 1, 3}, {1, 2, 6}, {1, 3, 8},
-	{2, 0, 2}, {2, 1, 4}, {2, 2, 7}, {2, 3, 9},
-}
-
 // ThreeBandFilterBank splits a 48 kHz frame into three 16 kHz bands and
 // merges them back. The prototype low-pass filter has half bandwidth, so a
 // DCT shifts it to the center frequencies [1/12, 3/12, 5/12].
 type ThreeBandFilterBank struct {
 	// analysisHist[phase] is the filter input for downsampling index phase.
 	analysisHist [bsSubSampling][bsHistSize]float32
-	// synthesisHist[filter] is the modulated input of filter.
-	synthesisHist [NumNonZeroFilters][bsHistSize]float32
-	// synthesisOut[phase] is the upsampled output at phase, before
-	// interleaving.
-	synthesisOut [bsSubSampling][SplitBandSize]float32
+	// synthesisHist[i] is modulated input i (see bsSynthesisInput).
+	synthesisHist [bsNumSynthesisInputs][bsHistSize]float32
 
 	// ref runs when the CPU lacks the archsimd features (amd64 without AVX).
 	ref threeBandFilterBankRef
@@ -84,17 +71,18 @@ func (f *ThreeBandFilterBank) Synthesis(in *[NumBands][]float32, out *[FullBandS
 		f.synthesisRef(in, out)
 		return
 	}
-	bsSynthesisSIMD(&f.synthesisHist, &f.synthesisOut, in0, in1, in2, out)
+	bsSynthesisSIMD(&f.synthesisHist, in0, in1, in2, out)
 }
 
 // synthesisRef runs the reference on the state held in synthesisHist.
 func (f *ThreeBandFilterBank) synthesisRef(in *[NumBands][]float32, out *[FullBandSize]float32) {
-	for fi := range f.synthesisHist {
-		copy(f.ref.stateSynthesis[fi][:], f.synthesisHist[fi][:MemorySize])
+	for fi, i := range bsSynthesisInput {
+		copy(f.ref.stateSynthesis[fi][:], f.synthesisHist[i][:MemorySize])
 	}
 	f.ref.synthesis(in, out)
-	for fi := range f.synthesisHist {
-		copy(f.synthesisHist[fi][:MemorySize], f.ref.stateSynthesis[fi][:])
+	// Filters that share an input end with the same state.
+	for fi, i := range bsSynthesisInput {
+		copy(f.synthesisHist[i][:MemorySize], f.ref.stateSynthesis[fi][:])
 	}
 }
 
@@ -132,7 +120,7 @@ func bsAnalysisFinite(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSiz
 
 // bsSynthesisFinite reports whether the synthesis input and state are
 // finite.
-func bsSynthesisFinite(hist *[NumNonZeroFilters][bsHistSize]float32, in0, in1, in2 *[SplitBandSize]float32) bool {
+func bsSynthesisFinite(hist *[bsNumSynthesisInputs][bsHistSize]float32, in0, in1, in2 *[SplitBandSize]float32) bool {
 	var acc archsimd.Float32x4
 	for fi := range hist {
 		acc = bsFiniteState(acc, &hist[fi])
@@ -145,22 +133,40 @@ func bsSynthesisFinite(hist *[NumNonZeroFilters][bsHistSize]float32, in0, in1, i
 	return bsFiniteResult(acc)
 }
 
-// bsCore4 is bsFilterCore for out[k:k+4], reading the history at
-// b = MemorySize + k - inShift through the window w = h[b-12 : b+4].
-func bsCore4(w *[16]float32, h0, h1, h2, h3 archsimd.Float32x4) archsimd.Float32x4 {
+// bsCoeffs holds the broadcast coefficients of one filter.
+type bsCoeffs struct{ c0, c1, c2, c3 archsimd.Float32x4 }
+
+func bsBroadcastCoeffs(filter int) bsCoeffs {
+	c := &bsFilterCoeffs[filter]
+	return bsCoeffs{archsimd.BroadcastFloat32x4(c[0]), archsimd.BroadcastFloat32x4(c[1]),
+		archsimd.BroadcastFloat32x4(c[2]), archsimd.BroadcastFloat32x4(c[3])}
+}
+
+// bsTap4 is bsFilterCore for out[k:k+4]: w is the history window
+// h[k : k+19] and c the coefficients of a filter with shift inShift.
+func bsTap4(w *[19]float32, inShift int, c *bsCoeffs) archsimd.Float32x4 {
 	var acc archsimd.Float32x4
-	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[12:16])).Mul(h0))
-	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[8:12])).Mul(h1))
-	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[4:8])).Mul(h2))
-	return acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[0:4])).Mul(h3))
+	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[15-inShift : 19-inShift])).Mul(c.c0))
+	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[11-inShift : 15-inShift])).Mul(c.c1))
+	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[7-inShift : 11-inShift])).Mul(c.c2))
+	return acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[3-inShift : 7-inShift])).Mul(c.c3))
 }
 
-// bsWindow returns the 16 history samples bsCore4 reads for out[k:k+4].
-func bsWindow(h *[bsHistSize]float32, base, k int) *[16]float32 {
-	b := base + k - 12
-	return (*[16]float32)(h[b : b+16])
-}
-
+// bsAnalysisSIMD filters and bands sample-major: every filter of four output
+// samples is evaluated, in the reference filter order, before the next four,
+// so the band sums stay in registers. The modulation by bsDctModulation is
+// written out per filter.
+//
+// For finite operands these rewrites are exact:
+//   - m*v for m in {1, -1} is v and -v; (-m)*v is -(m*v); a + (-b) is a - b.
+//   - Equal products are computed once.
+//   - A term 0*v is +-0, and adding it leaves a sum unchanged unless the sum
+//     is -0. The sums start as 0 + p (never -0) and a sum of two values is
+//     -0 only when both are -0, so the term is dropped.
+//
+// With finite input and state every analysis filter output is finite (the
+// taps of a filter sum to less than one in magnitude), and the synthesis
+// modulation only rewrites operations on the finite band samples.
 func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]float32,
 	out0, out1, out2 *[SplitBandSize]float32) {
 	// Downsample: phase d takes in[(bsSubSampling-1) - d + bsSubSampling*k].
@@ -172,38 +178,63 @@ func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 		h2[MemorySize+k] = x[0]
 	}
 
-	for i, e := range bsSchedule {
-		h := &hist[e.phase]
-		c := &bsFilterCoeffs[e.filter]
-		c0 := archsimd.BroadcastFloat32x4(c[0])
-		c1 := archsimd.BroadcastFloat32x4(c[1])
-		c2 := archsimd.BroadcastFloat32x4(c[2])
-		c3 := archsimd.BroadcastFloat32x4(c[3])
-		m := &bsDctModulation[e.filter]
-		m0 := archsimd.BroadcastFloat32x4(m[0])
-		m1 := archsimd.BroadcastFloat32x4(m[1])
-		m2 := archsimd.BroadcastFloat32x4(m[2])
-		base := MemorySize - e.inShift
-		if i == 0 {
-			// The bands start at zero: 0 + m*v.
-			var zero archsimd.Float32x4
-			for k := 0; k < SplitBandSize; k += 4 {
-				v := bsCore4(bsWindow(h, base, k), c0, c1, c2, c3)
-				zero.Add(m0.Mul(v)).StoreArray((*[4]float32)(out0[k : k+4]))
-				zero.Add(m1.Mul(v)).StoreArray((*[4]float32)(out1[k : k+4]))
-				zero.Add(m2.Mul(v)).StoreArray((*[4]float32)(out2[k : k+4]))
-			}
-			continue
-		}
-		for k := 0; k < SplitBandSize; k += 4 {
-			v := bsCore4(bsWindow(h, base, k), c0, c1, c2, c3)
-			o0 := (*[4]float32)(out0[k : k+4])
-			o1 := (*[4]float32)(out1[k : k+4])
-			o2 := (*[4]float32)(out2[k : k+4])
-			archsimd.LoadFloat32x4Array(o0).Add(m0.Mul(v)).StoreArray(o0)
-			archsimd.LoadFloat32x4Array(o1).Add(m1.Mul(v)).StoreArray(o1)
-			archsimd.LoadFloat32x4Array(o2).Add(m2.Mul(v)).StoreArray(o2)
-		}
+	var c [NumNonZeroFilters]bsCoeffs
+	for i := range c {
+		c[i] = bsBroadcastCoeffs(i)
+	}
+	two := archsimd.BroadcastFloat32x4(2)
+	sqrt3 := archsimd.BroadcastFloat32x4(bsSqrt3)
+	var zero archsimd.Float32x4
+	for k := 0; k < SplitBandSize; k += 4 {
+		w0 := (*[19]float32)(h0[k : k+19])
+		w1 := (*[19]float32)(h1[k : k+19])
+		w2 := (*[19]float32)(h2[k : k+19])
+
+		// Phase 0: filters 0 {2,2,2} and 5 {-2,-2,-2}.
+		t := two.Mul(bsTap4(w0, 0, &c[0]))
+		o0 := zero.Add(t)
+		o1 := o0
+		o2 := o0
+		t = two.Mul(bsTap4(w0, 2, &c[5]))
+		o0 = o0.Sub(t)
+		o1 = o1.Sub(t)
+		o2 = o2.Sub(t)
+
+		// Phase 1: filters 1 {s,0,-s}, 3 {-1,2,-1}, 6 {-s,0,s}, 8 {1,-2,1}.
+		t = sqrt3.Mul(bsTap4(w1, 0, &c[1]))
+		o0 = o0.Add(t)
+		o2 = o2.Sub(t)
+		v := bsTap4(w1, 1, &c[3])
+		o0 = o0.Sub(v)
+		o1 = o1.Add(two.Mul(v))
+		o2 = o2.Sub(v)
+		t = sqrt3.Mul(bsTap4(w1, 2, &c[6]))
+		o0 = o0.Sub(t)
+		o2 = o2.Add(t)
+		v = bsTap4(w1, 3, &c[8])
+		o0 = o0.Add(v)
+		o1 = o1.Sub(two.Mul(v))
+		o2 = o2.Add(v)
+
+		// Phase 2: filters 2 {1,-2,1}, 4 {-s,0,s}, 7 {-1,2,-1}, 9 {s,0,-s}.
+		v = bsTap4(w2, 0, &c[2])
+		o0 = o0.Add(v)
+		o1 = o1.Sub(two.Mul(v))
+		o2 = o2.Add(v)
+		t = sqrt3.Mul(bsTap4(w2, 1, &c[4]))
+		o0 = o0.Sub(t)
+		o2 = o2.Add(t)
+		v = bsTap4(w2, 2, &c[7])
+		o0 = o0.Sub(v)
+		o1 = o1.Add(two.Mul(v))
+		o2 = o2.Sub(v)
+		t = sqrt3.Mul(bsTap4(w2, 3, &c[9]))
+		o0 = o0.Add(t)
+		o2 = o2.Sub(t)
+
+		o0.StoreArray((*[4]float32)(out0[k : k+4]))
+		o1.StoreArray((*[4]float32)(out1[k : k+4]))
+		o2.StoreArray((*[4]float32)(out2[k : k+4]))
 	}
 
 	for d := range hist {
@@ -211,61 +242,71 @@ func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 	}
 }
 
-func bsSynthesisSIMD(hist *[NumNonZeroFilters][bsHistSize]float32, tmp *[bsSubSampling][SplitBandSize]float32,
+func bsSynthesisSIMD(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 	in0, in1, in2 *[SplitBandSize]float32, out *[FullBandSize]float32) {
-	// Modulate: filter input is ((0 + m0*b0) + m1*b1) + m2*b2.
-	for fi := range hist {
-		h := &hist[fi]
-		m := &bsDctModulation[fi]
-		m0 := archsimd.BroadcastFloat32x4(m[0])
-		m1 := archsimd.BroadcastFloat32x4(m[1])
-		m2 := archsimd.BroadcastFloat32x4(m[2])
-		var zero archsimd.Float32x4
-		for k := 0; k < SplitBandSize; k += 4 {
-			x := zero.Add(m0.Mul(archsimd.LoadFloat32x4Array((*[4]float32)(in0[k : k+4]))))
-			x = x.Add(m1.Mul(archsimd.LoadFloat32x4Array((*[4]float32)(in1[k : k+4]))))
-			x = x.Add(m2.Mul(archsimd.LoadFloat32x4Array((*[4]float32)(in2[k : k+4]))))
-			x.StoreArray((*[4]float32)(h[MemorySize+k : MemorySize+k+4]))
-		}
+	// Modulate: the filter input is ((0 + m0*b0) + m1*b1) + m2*b2.
+	g0, g1, g2, g3, g4, g5 := &hist[0], &hist[1], &hist[2], &hist[3], &hist[4], &hist[5]
+	two := archsimd.BroadcastFloat32x4(2)
+	sqrt3 := archsimd.BroadcastFloat32x4(bsSqrt3)
+	var zero archsimd.Float32x4
+	for k := 0; k < SplitBandSize; k += 4 {
+		b0 := archsimd.LoadFloat32x4Array((*[4]float32)(in0[k : k+4]))
+		b1 := archsimd.LoadFloat32x4Array((*[4]float32)(in1[k : k+4]))
+		b2 := archsimd.LoadFloat32x4Array((*[4]float32)(in2[k : k+4]))
+		p0, p1, p2 := two.Mul(b0), two.Mul(b1), two.Mul(b2)
+		q0, q2 := sqrt3.Mul(b0), sqrt3.Mul(b2)
+		zero.Add(p0).Add(p1).Add(p2).StoreArray((*[4]float32)(g0[MemorySize+k : MemorySize+k+4]))
+		zero.Sub(p0).Sub(p1).Sub(p2).StoreArray((*[4]float32)(g1[MemorySize+k : MemorySize+k+4]))
+		zero.Add(q0).Sub(q2).StoreArray((*[4]float32)(g2[MemorySize+k : MemorySize+k+4]))
+		zero.Sub(q0).Add(q2).StoreArray((*[4]float32)(g3[MemorySize+k : MemorySize+k+4]))
+		zero.Add(b0).Sub(p1).Add(b2).StoreArray((*[4]float32)(g4[MemorySize+k : MemorySize+k+4]))
+		zero.Sub(b0).Add(p1).Sub(b2).StoreArray((*[4]float32)(g5[MemorySize+k : MemorySize+k+4]))
 	}
 
-	// Filter and scale. Each phase's outputs start at zero and accumulate
-	// upsamplingScaling * v over the phase's filters in inShift order.
+	// Filter, scale and upsample: phase d lands at out[d + bsSubSampling*k]
+	// as the sum of upsamplingScaling * v over the phase's filters in inShift
+	// order, starting from zero.
+	var c [NumNonZeroFilters]bsCoeffs
+	for i := range c {
+		c[i] = bsBroadcastCoeffs(i)
+	}
 	scale := archsimd.BroadcastFloat32x4(bsSubSampling)
-	for i, e := range bsSchedule {
-		h := &hist[e.filter]
-		c := &bsFilterCoeffs[e.filter]
-		c0 := archsimd.BroadcastFloat32x4(c[0])
-		c1 := archsimd.BroadcastFloat32x4(c[1])
-		c2 := archsimd.BroadcastFloat32x4(c[2])
-		c3 := archsimd.BroadcastFloat32x4(c[3])
-		base := MemorySize - e.inShift
-		t := &tmp[e.phase]
-		if i == 0 || bsSchedule[i-1].phase != e.phase {
-			var zero archsimd.Float32x4
-			for k := 0; k < SplitBandSize; k += 4 {
-				v := bsCore4(bsWindow(h, base, k), c0, c1, c2, c3)
-				zero.Add(scale.Mul(v)).StoreArray((*[4]float32)(t[k : k+4]))
-			}
-			continue
-		}
-		for k := 0; k < SplitBandSize; k += 4 {
-			v := bsCore4(bsWindow(h, base, k), c0, c1, c2, c3)
-			o := (*[4]float32)(t[k : k+4])
-			archsimd.LoadFloat32x4Array(o).Add(scale.Mul(v)).StoreArray(o)
-		}
+	for k := 0; k < SplitBandSize; k += 4 {
+		w0 := (*[19]float32)(g0[k : k+19])
+		w1 := (*[19]float32)(g1[k : k+19])
+		w2 := (*[19]float32)(g2[k : k+19])
+		w3 := (*[19]float32)(g3[k : k+19])
+		w4 := (*[19]float32)(g4[k : k+19])
+		w5 := (*[19]float32)(g5[k : k+19])
+
+		// Phase 0: filters 0 and 5.
+		o0 := zero.Add(scale.Mul(bsTap4(w0, 0, &c[0])))
+		o0 = o0.Add(scale.Mul(bsTap4(w1, 2, &c[5])))
+
+		// Phase 1: filters 1, 3, 6 and 8.
+		o1 := zero.Add(scale.Mul(bsTap4(w2, 0, &c[1])))
+		o1 = o1.Add(scale.Mul(bsTap4(w5, 1, &c[3])))
+		o1 = o1.Add(scale.Mul(bsTap4(w3, 2, &c[6])))
+		o1 = o1.Add(scale.Mul(bsTap4(w4, 3, &c[8])))
+
+		// Phase 2: filters 2, 4, 7 and 9.
+		o2 := zero.Add(scale.Mul(bsTap4(w4, 0, &c[2])))
+		o2 = o2.Add(scale.Mul(bsTap4(w3, 1, &c[4])))
+		o2 = o2.Add(scale.Mul(bsTap4(w5, 2, &c[7])))
+		o2 = o2.Add(scale.Mul(bsTap4(w2, 3, &c[9])))
+
+		var t0, t1, t2 [4]float32
+		o0.StoreArray(&t0)
+		o1.StoreArray(&t1)
+		o2.StoreArray(&t2)
+		y := (*[12]float32)(out[3*k : 3*k+12])
+		y[0], y[1], y[2] = t0[0], t1[0], t2[0]
+		y[3], y[4], y[5] = t0[1], t1[1], t2[1]
+		y[6], y[7], y[8] = t0[2], t1[2], t2[2]
+		y[9], y[10], y[11] = t0[3], t1[3], t2[3]
 	}
 
-	// Upsample: phase d lands at out[d + bsSubSampling*k].
-	t0, t1, t2 := &tmp[0], &tmp[1], &tmp[2]
-	for k := 0; k < SplitBandSize; k++ {
-		y := (*[3]float32)(out[3*k : 3*k+3])
-		y[0] = t0[k]
-		y[1] = t1[k]
-		y[2] = t2[k]
-	}
-
-	for fi := range hist {
-		copy(hist[fi][:MemorySize], hist[fi][SplitBandSize:])
+	for i := range hist {
+		copy(hist[i][:MemorySize], hist[i][SplitBandSize:])
 	}
 }
