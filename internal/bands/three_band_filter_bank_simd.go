@@ -146,13 +146,19 @@ func bsSynthesisFinite(hist *[NumNonZeroFilters][bsHistSize]float32, in0, in1, i
 }
 
 // bsCore4 is bsFilterCore for out[k:k+4], reading the history at
-// b = MemorySize + k - inShift.
-func bsCore4(h *[bsHistSize]float32, b int, h0, h1, h2, h3 archsimd.Float32x4) archsimd.Float32x4 {
+// b = MemorySize + k - inShift through the window w = h[b-12 : b+4].
+func bsCore4(w *[16]float32, h0, h1, h2, h3 archsimd.Float32x4) archsimd.Float32x4 {
 	var acc archsimd.Float32x4
-	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(h[b : b+4])).Mul(h0))
-	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(h[b-4 : b])).Mul(h1))
-	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(h[b-8 : b-4])).Mul(h2))
-	return acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(h[b-12 : b-8])).Mul(h3))
+	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[12:16])).Mul(h0))
+	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[8:12])).Mul(h1))
+	acc = acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[4:8])).Mul(h2))
+	return acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[0:4])).Mul(h3))
+}
+
+// bsWindow returns the 16 history samples bsCore4 reads for out[k:k+4].
+func bsWindow(h *[bsHistSize]float32, base, k int) *[16]float32 {
+	b := base + k - 12
+	return (*[16]float32)(h[b : b+16])
 }
 
 func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]float32,
@@ -182,7 +188,7 @@ func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 			// The bands start at zero: 0 + m*v.
 			var zero archsimd.Float32x4
 			for k := 0; k < SplitBandSize; k += 4 {
-				v := bsCore4(h, base+k, c0, c1, c2, c3)
+				v := bsCore4(bsWindow(h, base, k), c0, c1, c2, c3)
 				zero.Add(m0.Mul(v)).StoreArray((*[4]float32)(out0[k : k+4]))
 				zero.Add(m1.Mul(v)).StoreArray((*[4]float32)(out1[k : k+4]))
 				zero.Add(m2.Mul(v)).StoreArray((*[4]float32)(out2[k : k+4]))
@@ -190,7 +196,7 @@ func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 			continue
 		}
 		for k := 0; k < SplitBandSize; k += 4 {
-			v := bsCore4(h, base+k, c0, c1, c2, c3)
+			v := bsCore4(bsWindow(h, base, k), c0, c1, c2, c3)
 			o0 := (*[4]float32)(out0[k : k+4])
 			o1 := (*[4]float32)(out1[k : k+4])
 			o2 := (*[4]float32)(out2[k : k+4])
@@ -238,13 +244,13 @@ func bsSynthesisSIMD(hist *[NumNonZeroFilters][bsHistSize]float32, tmp *[bsSubSa
 		if i == 0 || bsSchedule[i-1].phase != e.phase {
 			var zero archsimd.Float32x4
 			for k := 0; k < SplitBandSize; k += 4 {
-				v := bsCore4(h, base+k, c0, c1, c2, c3)
+				v := bsCore4(bsWindow(h, base, k), c0, c1, c2, c3)
 				zero.Add(scale.Mul(v)).StoreArray((*[4]float32)(t[k : k+4]))
 			}
 			continue
 		}
 		for k := 0; k < SplitBandSize; k += 4 {
-			v := bsCore4(h, base+k, c0, c1, c2, c3)
+			v := bsCore4(bsWindow(h, base, k), c0, c1, c2, c3)
 			o := (*[4]float32)(t[k : k+4])
 			archsimd.LoadFloat32x4Array(o).Add(scale.Mul(v)).StoreArray(o)
 		}
