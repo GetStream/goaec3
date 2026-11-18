@@ -17,11 +17,7 @@ func kernScale(x []float32, a float32, z []float32) {
 	z = z[:len(x)]
 	j := 0
 	if kernHasAVX2 {
-		av := archsimd.BroadcastFloat32x8(a)
-		for ; j+8 <= len(x); j += 8 {
-			archsimd.LoadFloat32x8(x[j:]).Mul(av).Store(z[j:])
-		}
-		archsimd.ClearAVXUpperBits()
+		j = kernScale256(x, a, z)
 	}
 	if kernHasAVX {
 		av := archsimd.BroadcastFloat32x4(a)
@@ -213,13 +209,7 @@ func kernMinMax(x []float32) (mn, mx float32, ok bool) {
 func kernClamp(x []float32, lo, hi float32) {
 	j := 0
 	if kernHasAVX2 {
-		lv, hv := archsimd.BroadcastFloat32x8(lo), archsimd.BroadcastFloat32x8(hi)
-		for ; j+8 <= len(x); j += 8 {
-			v := archsimd.LoadFloat32x8(x[j:])
-			v = lv.IfElse(v.Less(lv), v)
-			hv.IfElse(hv.Less(v), v).Store(x[j:])
-		}
-		archsimd.ClearAVXUpperBits()
+		j = kernClamp256(x, lo, hi)
 	}
 	if kernHasAVX {
 		lv, hv := archsimd.BroadcastFloat32x4(lo), archsimd.BroadcastFloat32x4(hi)
@@ -232,4 +222,35 @@ func kernClamp(x []float32, lo, hi float32) {
 	for ; j < len(x); j++ {
 		x[j] = stdMin(stdMax(x[j], lo), hi)
 	}
+}
+
+// kernScale256 and kernClamp256 are the 256-bit loops of kernScale and
+// kernClamp; they return the number of elements done. They do not inline:
+// a float32 live across ClearAVXUpperBits is spilled with a 4-byte store
+// and restored with a 16-byte load, which the CPU cannot forward from that
+// store, and the callers' scalar tails use a, lo and hi.
+//
+//go:noinline
+func kernScale256(x []float32, a float32, z []float32) int {
+	z = z[:len(x)]
+	av := archsimd.BroadcastFloat32x8(a)
+	j := 0
+	for ; j+8 <= len(x); j += 8 {
+		archsimd.LoadFloat32x8(x[j:]).Mul(av).Store(z[j:])
+	}
+	archsimd.ClearAVXUpperBits()
+	return j
+}
+
+//go:noinline
+func kernClamp256(x []float32, lo, hi float32) int {
+	lv, hv := archsimd.BroadcastFloat32x8(lo), archsimd.BroadcastFloat32x8(hi)
+	j := 0
+	for ; j+8 <= len(x); j += 8 {
+		v := archsimd.LoadFloat32x8(x[j:])
+		v = lv.IfElse(v.Less(lv), v)
+		hv.IfElse(hv.Less(v), v).Store(x[j:])
+	}
+	archsimd.ClearAVXUpperBits()
+	return j
 }

@@ -284,6 +284,8 @@ func dlyAccErrAvx2(h, x []float32, y float32, accErr []float32, x2 *[16]float32)
 	var out [4]float32
 	sv.StoreArray(&out)
 	archsimd.ClearAVXUpperBits()
+	// out[0] is read with a 16-byte load from the 16-byte store at the
+	// same address, which forwards.
 	return out[0]
 }
 
@@ -312,6 +314,11 @@ var dlyPeakSimd = dlyUseAvx
 // kernels load them as 256-bit vectors, and a load cannot be forwarded from
 // the two narrower stores a Go zero value is written with: it would wait
 // for them to reach the cache at the start of every capture sample.
+//
+// It does not inline, so its ClearAVXUpperBits does not make the caller's
+// float32 values cross a VZEROUPPER (see dlyReduceAvx2Lanes).
+//
+//go:noinline
 func dlyZeroAcc(acc *[32]float32) {
 	if !dlyUseAvx {
 		*acc = [32]float32{}
@@ -353,10 +360,10 @@ func dlyReduceSse2(acc *[16]float32, s, x2Sum float32) (float32, float32) {
 	if !dlyUseAvx {
 		return dlyReduceSse2Ref(acc, s, x2Sum)
 	}
-	var r [4]float32
-	dlyHsumSse2(dlyLd4((*[4]float32)(acc[0:4])), dlyLd4((*[4]float32)(acc[4:8])),
-		dlyLd4((*[4]float32)(acc[8:12])), dlyLd4((*[4]float32)(acc[12:16]))).StoreArray(&r)
-	return s + r[1], x2Sum + r[0]
+	t := dlyHsumSse2(dlyLd4((*[4]float32)(acc[0:4])), dlyLd4((*[4]float32)(acc[4:8])),
+		dlyLd4((*[4]float32)(acc[8:12])), dlyLd4((*[4]float32)(acc[12:16])))
+	r0, r1 := t.GetElem(0), t.GetElem(1)
+	return s + r1, x2Sum + r0
 }
 
 func dlyReduceAvx2(acc *[32]float32, s, x2Sum float32) (float32, float32) {
@@ -364,10 +371,22 @@ func dlyReduceAvx2(acc *[32]float32, s, x2Sum float32) (float32, float32) {
 		return dlyReduceAvx2Ref(acc, s, x2Sum)
 	}
 	var r [4]float32
-	dlyHsumAvx2(dlyLd8((*[8]float32)(acc[0:8])), dlyLd8((*[8]float32)(acc[8:16])),
-		dlyLd8((*[8]float32)(acc[16:24])), dlyLd8((*[8]float32)(acc[24:32]))).StoreArray(&r)
-	archsimd.ClearAVXUpperBits()
+	dlyReduceAvx2Lanes(acc, &r)
 	return s + r[1], x2Sum + r[0]
+}
+
+// dlyReduceAvx2Lanes stores dlyHsumAvx2 of the accumulators in r.
+//
+// The 256-bit kernels that produce a float32 store it to the caller's
+// memory and return nothing: a float32 live across ClearAVXUpperBits is
+// spilled with a 4-byte store and restored with a 16-byte load, which the
+// CPU cannot forward from that store.
+//
+//go:noinline
+func dlyReduceAvx2Lanes(acc *[32]float32, r *[4]float32) {
+	dlyHsumAvx2(dlyLd8((*[8]float32)(acc[0:8])), dlyLd8((*[8]float32)(acc[8:16])),
+		dlyLd8((*[8]float32)(acc[16:24])), dlyLd8((*[8]float32)(acc[24:32]))).StoreArray(r)
+	archsimd.ClearAVXUpperBits()
 }
 
 // The Sum kernels run a dot product (or update and dot product) over all
@@ -391,9 +410,9 @@ func dlyDotSse2Sum(h, x []float32) (s, x2Sum float32) {
 		sv = sv.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(xk))
 		s4 = s4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(xk4))
 	}
-	var r [4]float32
-	dlyHsumSse2(sv, s4, x2, x24).StoreArray(&r)
-	return 0 + r[1], 0 + r[0]
+	t := dlyHsumSse2(sv, s4, x2, x24)
+	r0, r1 := t.GetElem(0), t.GetElem(1)
+	return 0 + r1, 0 + r0
 }
 
 func dlyAxpyDotSse2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
@@ -420,15 +439,25 @@ func dlyAxpyDotSse2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
 		sv = sv.Add(hk.Mul(xk))
 		s4 = s4.Add(hk4.Mul(xk4))
 	}
-	var r [4]float32
-	dlyHsumSse2(sv, s4, x2, x24).StoreArray(&r)
-	return 0 + r[1], 0 + r[0]
+	t := dlyHsumSse2(sv, s4, x2, x24)
+	r0, r1 := t.GetElem(0), t.GetElem(1)
+	return 0 + r1, 0 + r0
 }
 
 func dlyDotAvx2Sum(h, x []float32) (s, x2Sum float32) {
 	if !dlyUseFma {
 		return dlyDotAvx2SumRef(h, x)
 	}
+	var r [4]float32
+	dlyDotAvx2SumLanes(h, x, &r)
+	return 0 + r[1], 0 + r[0]
+}
+
+// dlyDotAvx2SumLanes stores the reduced lane sums of dlyDotAvx2Sum in r
+// (see dlyReduceAvx2Lanes).
+//
+//go:noinline
+func dlyDotAvx2SumLanes(h, x []float32, r *[4]float32) {
 	n := len(h)
 	x = x[:n:n]
 	var sv, s8, x2, x28 archsimd.Float32x8
@@ -442,16 +471,24 @@ func dlyDotAvx2Sum(h, x []float32) (s, x2Sum float32) {
 		x2 = xk.MulAdd(xk, x2)
 		x28 = xk8.MulAdd(xk8, x28)
 	}
-	var r [4]float32
-	dlyHsumAvx2(sv, s8, x2, x28).StoreArray(&r)
+	dlyHsumAvx2(sv, s8, x2, x28).StoreArray(r)
 	archsimd.ClearAVXUpperBits()
-	return 0 + r[1], 0 + r[0]
 }
 
 func dlyAxpyFmaDotAvx2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
 	if !dlyUseFma {
 		return dlyAxpyFmaDotAvx2SumRef(h, xa, xb, alpha)
 	}
+	var r [4]float32
+	dlyAxpyFmaDotAvx2SumLanes(h, xa, xb, alpha, &r)
+	return 0 + r[1], 0 + r[0]
+}
+
+// dlyAxpyFmaDotAvx2SumLanes stores the reduced lane sums of
+// dlyAxpyFmaDotAvx2Sum in r (see dlyReduceAvx2Lanes).
+//
+//go:noinline
+func dlyAxpyFmaDotAvx2SumLanes(h, xa, xb []float32, alpha float32, r *[4]float32) {
 	n := len(h)
 	xa = xa[:n:n]
 	xb = xb[:n:n]
@@ -472,10 +509,8 @@ func dlyAxpyFmaDotAvx2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32)
 		x2 = xk.MulAdd(xk, x2)
 		x28 = xk8.MulAdd(xk8, x28)
 	}
-	var r [4]float32
-	dlyHsumAvx2(sv, s8, x2, x28).StoreArray(&r)
+	dlyHsumAvx2(sv, s8, x2, x28).StoreArray(r)
 	archsimd.ClearAVXUpperBits()
-	return 0 + r[1], 0 + r[0]
 }
 
 // dlyPeakLanes256 is dlyPeakLanes128 with two 256-bit vectors per 16
