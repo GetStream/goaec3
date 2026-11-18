@@ -15,10 +15,49 @@ func dlyGetDownSamplingBlockSizeLog2(downSamplingFactor int) int {
 	return 0
 }
 
+// dlyHistogramMax tracks the first maximum (std::max_element) of a lag
+// histogram whose bins change by one count at a time: a bin that grows can
+// only take over the maximum, and the histogram is rescanned only when the
+// maximum bin shrinks.
+type dlyHistogramMax struct {
+	best int
+}
+
+// update records histogram[removed]-- (unless removed < 0) followed by
+// histogram[added]++, both already applied to histogram.
+func (m *dlyHistogramMax) update(histogram []int32, removed, added int) {
+	if removed == added {
+		return
+	}
+	if removed == m.best {
+		m.best = dlyArgMax(histogram)
+		return
+	}
+	if v, b := histogram[added], histogram[m.best]; v > b || (v == b && added < m.best) {
+		m.best = added
+	}
+}
+
+// dlyArgMax returns the index of the first maximum of v (std::max_element).
+func dlyArgMax(v []int32) int {
+	best := 0
+	if len(v) == 0 {
+		return best
+	}
+	bestValue := v[0]
+	for i := 1; i < len(v); i++ {
+		if v[i] > bestValue {
+			best, bestValue = i, v[i]
+		}
+	}
+	return best
+}
+
 type dlyPreEchoLagAggregator struct {
 	blockSizeLog2      int
-	histogramData      [250]int
-	histogram          []int
+	histogramData      [250]int32
+	histogram          []int32
+	histogramMax       dlyHistogramMax
 	histogramDataIndex int
 	preEchoCandidate   int
 	numberUpdates      int
@@ -27,7 +66,7 @@ type dlyPreEchoLagAggregator struct {
 func newDlyPreEchoLagAggregator(maxFilterLag, downSamplingFactor int) *dlyPreEchoLagAggregator {
 	a := &dlyPreEchoLagAggregator{
 		blockSizeLog2: dlyGetDownSamplingBlockSizeLog2(downSamplingFactor),
-		histogram:     make([]int, ((maxFilterLag+1)*downSamplingFactor)>>BlockSizeLog2),
+		histogram:     make([]int32, ((maxFilterLag+1)*downSamplingFactor)>>BlockSizeLog2),
 	}
 	a.Reset()
 	return a
@@ -38,18 +77,9 @@ func (a *dlyPreEchoLagAggregator) Reset() {
 	for i := range a.histogramData {
 		a.histogramData[i] = dlyPreEchoHistogramDataNotUpdated
 	}
+	a.histogramMax.best = 0
 	a.histogramDataIndex = 0
 	a.preEchoCandidate = 0
-}
-
-func dlyArgMax(v []int) int {
-	best := 0
-	for i := 1; i < len(v); i++ {
-		if v[i] > v[best] {
-			best = i
-		}
-	}
-	return best
 }
 
 func (a *dlyPreEchoLagAggregator) Aggregate(preEchoLag int) {
@@ -57,11 +87,13 @@ func (a *dlyPreEchoLagAggregator) Aggregate(preEchoLag int) {
 	preEchoBlockSize = min(max(preEchoBlockSize, 0), len(a.histogram)-1)
 	// Remove the oldest point from the histogram, it ignores the initial
 	// points where no updates have been done to the histogramData array.
-	if a.histogramData[a.histogramDataIndex] != dlyPreEchoHistogramDataNotUpdated {
-		a.histogram[a.histogramData[a.histogramDataIndex]]--
+	removed := int(a.histogramData[a.histogramDataIndex])
+	if removed != dlyPreEchoHistogramDataNotUpdated {
+		a.histogram[removed]--
 	}
-	a.histogramData[a.histogramDataIndex] = preEchoBlockSize
+	a.histogramData[a.histogramDataIndex] = int32(preEchoBlockSize)
 	a.histogram[preEchoBlockSize]++
+	a.histogramMax.update(a.histogram, removed, preEchoBlockSize)
 	a.histogramDataIndex = (a.histogramDataIndex + 1) % len(a.histogramData)
 	preEchoCandidateBlockSize := 0
 	if a.numberUpdates < NumBlocksPerSecond*2 {
@@ -78,35 +110,42 @@ func (a *dlyPreEchoLagAggregator) Aggregate(preEchoLag int) {
 			penalizationPerDelay *= 0.7
 		}
 	} else {
-		preEchoCandidateBlockSize = dlyArgMax(a.histogram)
+		preEchoCandidateBlockSize = a.histogramMax.best
 	}
 	a.preEchoCandidate = preEchoCandidateBlockSize << a.blockSizeLog2
 }
 
 type dlyHighestPeakAggregator struct {
-	histogram          []int
-	histogramData      [250]int
+	histogram          []int32
+	histogramData      [250]int32
+	histogramMax       dlyHistogramMax
 	histogramDataIndex int
 	candidate          int
 }
 
 func (a *dlyHighestPeakAggregator) init(maxFilterLag int) {
-	a.histogram = make([]int, maxFilterLag+1)
+	a.histogram = make([]int32, maxFilterLag+1)
+	a.histogramMax.best = 0
 	a.candidate = -1
 }
 
+// Reset clears the histogram; the candidate keeps its value until the next
+// Aggregate, as in the C++.
 func (a *dlyHighestPeakAggregator) Reset() {
 	clear(a.histogram)
-	a.histogramData = [250]int{}
+	a.histogramData = [250]int32{}
+	a.histogramMax.best = 0
 	a.histogramDataIndex = 0
 }
 
 func (a *dlyHighestPeakAggregator) Aggregate(lag int) {
-	a.histogram[a.histogramData[a.histogramDataIndex]]--
-	a.histogramData[a.histogramDataIndex] = lag
+	removed := int(a.histogramData[a.histogramDataIndex])
+	a.histogram[removed]--
+	a.histogramData[a.histogramDataIndex] = int32(lag)
 	a.histogram[lag]++
+	a.histogramMax.update(a.histogram, removed, lag)
 	a.histogramDataIndex = (a.histogramDataIndex + 1) % len(a.histogramData)
-	a.candidate = dlyArgMax(a.histogram)
+	a.candidate = a.histogramMax.best
 }
 
 // MatchedFilterLagAggregator aggregates lag estimates produced by the
@@ -161,9 +200,9 @@ func (a *MatchedFilterLagAggregator) Aggregate(lagEstimate MatchedFilterLagEstim
 		a.highestPeakAggregator.Aggregate(max(0, lagEstimate.Lag-a.headroom))
 		histogram := a.highestPeakAggregator.histogram
 		candidate := a.highestPeakAggregator.candidate
-		a.significantCandidateFound = a.significantCandidateFound || histogram[candidate] > a.thresholdsConverged
-		if histogram[candidate] > a.thresholdsConverged ||
-			(histogram[candidate] > a.thresholdsInitial && !a.significantCandidateFound) {
+		a.significantCandidateFound = a.significantCandidateFound || int(histogram[candidate]) > a.thresholdsConverged
+		if int(histogram[candidate]) > a.thresholdsConverged ||
+			(int(histogram[candidate]) > a.thresholdsInitial && !a.significantCandidateFound) {
 			quality := DelayQualityCoarse
 			if a.significantCandidateFound {
 				quality = DelayQualityRefined
