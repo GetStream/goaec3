@@ -20,7 +20,7 @@ mirrors, and a live C++ oracle proves the match (see
 go get github.com/GetStream/goaec3
 ```
 
-Requires Go 1.27.4 or newer. Build with `GOEXPERIMENT=simd` to enable the SIMD
+Requires Go 1.27 or newer (CI uses 1.27.4). Build with `GOEXPERIMENT=simd` to enable the SIMD
 kernels; without it goaec3 runs the same lanes in pure Go, bit-exact but slower.
 
 ## Quick start

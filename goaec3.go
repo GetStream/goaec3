@@ -18,6 +18,8 @@ package goaec3
 
 import (
 	"errors"
+	"fmt"
+	"sync/atomic"
 
 	"github.com/GetStream/goaec3/internal/aec3"
 	"github.com/GetStream/goaec3/internal/bands"
@@ -61,6 +63,11 @@ var (
 	// ErrFrameLength is returned when a channel does not hold exactly one
 	// 10 ms frame.
 	ErrFrameLength = errors.New("goaec3: channel does not hold one 10 ms frame")
+	// ErrConfig is returned by New and NewWithMultichannelConfig for a config
+	// that is outside its legal ranges (Config.Validate would change it), that
+	// libwebrtc itself cannot run, or, for NewWithMultichannelConfig, a pair
+	// of configs that disagree on the settings both must share.
+	ErrConfig = errors.New("goaec3: invalid config")
 	// ErrLinearOutputDisabled is returned by ProcessCaptureWithLinearOutput
 	// when Filter.ExportLinearAecOutput is not set in the config.
 	ErrLinearOutputDisabled = errors.New("goaec3: linear output requires Filter.ExportLinearAecOutput")
@@ -134,7 +141,7 @@ type EchoCanceller struct {
 	numRenderChannels  int
 	numCaptureChannels int
 	exportLinearOutput bool
-	echoPathGainChange bool
+	echoPathGainChange atomic.Bool
 
 	render  ec3SideBuffers
 	capture ec3SideBuffers
@@ -142,8 +149,10 @@ type EchoCanceller struct {
 }
 
 // New creates an echo canceller for sampleRateHz (16000, 32000 or 48000)
-// with the given number of render and capture channels. The config is used
-// as given; call Config.Validate first to clamp it into its legal ranges.
+// with the given number of render and capture channels. The config must be
+// valid: New returns ErrConfig if Config.Validate would change it (call
+// Validate first to clamp a config into its legal ranges) or if libwebrtc
+// cannot run it.
 func New(cfg Config, sampleRateHz, numRenderChannels, numCaptureChannels int) (*EchoCanceller, error) {
 	return newEchoCanceller(&cfg, nil, sampleRateHz, numRenderChannels, numCaptureChannels)
 }
@@ -165,6 +174,17 @@ func newEchoCanceller(cfg, multichannelCfg *Config, sampleRateHz, numRenderChann
 	}
 	if numRenderChannels < 1 || numCaptureChannels < 1 {
 		return nil, ErrNumChannels
+	}
+	if err := ec3CheckConfig(cfg); err != nil {
+		return nil, err
+	}
+	if multichannelCfg != nil {
+		if err := ec3CheckConfig(multichannelCfg); err != nil {
+			return nil, fmt.Errorf("multichannel config: %w", err)
+		}
+		if err := ec3CheckCompatible(cfg, multichannelCfg); err != nil {
+			return nil, err
+		}
 	}
 	e := &EchoCanceller{
 		ec:                 aec3.NewEchoCanceller3(cfg, multichannelCfg, sampleRateHz, numRenderChannels, numCaptureChannels),
@@ -244,14 +264,54 @@ func (e *EchoCanceller) ProcessCaptureWithLinearOutput(capture, linearOutput [][
 	return nil
 }
 
+// ec3CheckConfig rejects configs that Validate would change, and the valid
+// configs libwebrtc cannot run: no matched filters (it dereferences an empty
+// filter bank), a refined filter shorter than 9 blocks (the reverb decay
+// estimator sizes a vector with length-9 < 0) and a subband nearend region
+// reaching bin 65 (read past the end of the 65-bin spectrum). Negative
+// Buffering fields have no C++ equivalent (size_t there) and are rejected.
+func ec3CheckConfig(cfg *Config) error {
+	v := *cfg
+	if !v.Validate() {
+		return fmt.Errorf("%w: outside the legal ranges (use Config.Validate to clamp it)", ErrConfig)
+	}
+	switch {
+	case cfg.Delay.NumFilters == 0:
+		return fmt.Errorf("%w: Delay.NumFilters must be at least 1", ErrConfig)
+	case cfg.Filter.Refined.LengthBlocks < 9:
+		return fmt.Errorf("%w: Filter.Refined.LengthBlocks must be at least 9", ErrConfig)
+	case cfg.Suppressor.UseSubbandNearendDetection &&
+		(cfg.Suppressor.SubbandNearendDetection.Subband1.High >= aec3.FftLengthBy2Plus1 ||
+			cfg.Suppressor.SubbandNearendDetection.Subband2.High >= aec3.FftLengthBy2Plus1):
+		return fmt.Errorf("%w: SubbandNearendDetection regions must end below bin %d", ErrConfig, aec3.FftLengthBy2Plus1)
+	case cfg.Buffering.ExcessRenderDetectionIntervalBlocks < 0 || cfg.Buffering.MaxAllowedExcessRenderBlocks < 0:
+		return fmt.Errorf("%w: Buffering fields must not be negative", ErrConfig)
+	}
+	return nil
+}
+
+// ec3CheckCompatible mirrors CompatibleConfigs in config_selector.cc: the
+// settings fixed at construction must be equal in both configs.
+func ec3CheckCompatible(a, b *Config) error {
+	if a.Delay.FixedCaptureDelaySamples != b.Delay.FixedCaptureDelaySamples ||
+		a.Filter.ExportLinearAecOutput != b.Filter.ExportLinearAecOutput ||
+		a.Filter.HighPassFilterEchoReference != b.Filter.HighPassFilterEchoReference ||
+		a.MultiChannel.DetectStereoContent != b.MultiChannel.DetectStereoContent ||
+		a.MultiChannel.StereoDetectionTimeoutThresholdSeconds != b.MultiChannel.StereoDetectionTimeoutThresholdSeconds {
+		return fmt.Errorf("%w: the configs must agree on Delay.FixedCaptureDelaySamples, Filter.ExportLinearAecOutput, "+
+			"Filter.HighPassFilterEchoReference, MultiChannel.DetectStereoContent and "+
+			"MultiChannel.StereoDetectionTimeoutThresholdSeconds", ErrConfig)
+	}
+	return nil
+}
+
 func (e *EchoCanceller) processCapture(capture, linear [][]float32) {
 	for ch, x := range capture {
 		bands.FloatToFloatS16Slice(x, e.capture.full[ch])
 	}
 	e.ec.AnalyzeCapture(e.capture.full)
 	e.capture.splitIntoFrequencyBands()
-	levelChange := e.echoPathGainChange
-	e.echoPathGainChange = false
+	levelChange := e.echoPathGainChange.Swap(false)
 	e.ec.ProcessCapture(e.capture.split, linear, levelChange)
 	e.capture.mergeFrequencyBands()
 	for ch, x := range e.capture.full {
@@ -260,8 +320,9 @@ func (e *EchoCanceller) processCapture(capture, linear [][]float32) {
 }
 
 // NotifyEchoPathGainChange flags a change of the echo path gain, such as an
-// analog microphone gain change, for the next capture frame.
-func (e *EchoCanceller) NotifyEchoPathGainChange() { e.echoPathGainChange = true }
+// analog microphone gain change, for the next capture frame. It may be called
+// from any goroutine.
+func (e *EchoCanceller) NotifyEchoPathGainChange() { e.echoPathGainChange.Store(true) }
 
 // SetAudioBufferDelay provides an external estimate of the audio buffer
 // delay in milliseconds. With Delay.UseExternalDelayEstimator set in the
