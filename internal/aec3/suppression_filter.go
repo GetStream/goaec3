@@ -97,18 +97,8 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 
 		// Clamp output of all bands.
 		for b := 0; b < numBands; b++ {
-			// Equal to supSafeClamp on every non-NaN sample; a NaN stays NaN.
+			// SafeClamp(x, -32768.f, 32767.f); see kernClamp.
 			kernClamp(e.View(b, ch), -32768, 32767)
 		}
 	}
-}
-
-func supSafeClamp(x, lo, hi float32) float32 {
-	if x < lo {
-		return lo
-	}
-	if hi < x {
-		return hi
-	}
-	return x
 }

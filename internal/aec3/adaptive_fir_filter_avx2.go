@@ -22,14 +22,12 @@ func ApplyFilterAvx2(renderBuffer *RenderBuffer, numPartitions int, H [][]FftDat
 
 // afirFreqRespBlockAvx2Go is the pure-Go reference of the AVX2 64-bin
 // frequency-response block: re2 = re*re; re2 = fma(im, im, re2);
-// H2 = max(H2, re2).
+// H2 = _mm256_max_ps(H2, re2).
 func afirFreqRespBlockAvx2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 	for j := 0; j < FftLengthBy2; j++ {
 		re2 := float32(h.Re[j] * h.Re[j])
 		v := afirFmaf32(h.Im[j], h.Im[j], re2)
-		if !(h2[j] > v) {
-			h2[j] = v
-		}
+		h2[j] = sseMax(h2[j], v)
 	}
 }
 

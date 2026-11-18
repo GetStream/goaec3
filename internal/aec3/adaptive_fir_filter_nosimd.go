@@ -13,11 +13,16 @@ func afirAdaptBlock(_ Aec3Optimization, x, g, h *FftData) {
 }
 
 func afirFreqRespBlock(opt Aec3Optimization, h *FftData, h2 *[FftLengthBy2Plus1]float32) {
-	if opt == OptAvx2 {
+	switch opt {
+	case OptNeon:
+		afirFreqRespBlockNeonGo(h, h2)
+	case OptSse2:
+		afirFreqRespBlockSse2Go(h, h2)
+	case OptAvx2:
 		afirFreqRespBlockAvx2Go(h, h2)
-		return
+	default:
+		afirFreqRespBinsGo(h, h2, 0, FftLengthBy2)
 	}
-	afirFreqRespBinsGo(h, h2, 0, FftLengthBy2)
 }
 
 func afirErlBlock(_ Aec3Optimization, h2, erl *[FftLengthBy2Plus1]float32) {

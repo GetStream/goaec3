@@ -9,9 +9,9 @@ import "simd/archsimd"
 // commutative, so the clamps are written as compare-and-select: a NaN fails
 // both compares and passes through, as with Go's min/max, and the following
 // multiply or int conversion sees the same value as the scalar reference.
-// The scalar float-to-int16 conversion truncates to int32 (NaN becomes
-// 0x80000000) and keeps the low 16 bits, so NaN gives 0; the kernel zeroes
-// NaN lanes before converting. After the clamp every value fits int16, so
+// A NaN sample converts to -32768 in the vector body (bsNaNS16Vector) and
+// to 0 in the scalar remainder, like the compiled C++ loop
+// (floatS16ToS16SliceRef). After the clamp every value fits int16, so
 // the saturating pack is exact.
 
 // bsClamp4 is max(min(v, hi), lo) for the finite bounds hi > lo.
@@ -36,9 +36,10 @@ func FloatS16ToS16Slice(src []float32, dest []int16) {
 	for ; i+8 <= n; i += 8 {
 		a := bsClamp4(archsimd.LoadFloat32x4Array((*[4]float32)(src[i:i+4])), hi, lo)
 		b := bsClamp4(archsimd.LoadFloat32x4Array((*[4]float32)(src[i+4:i+8])), hi, lo)
-		// v + copysign(0.5, v), with NaN lanes zeroed.
-		a = a.Add(a.AsUint32x4().And(sign).Or(half).AsFloat32x4()).Masked(a.Equal(a))
-		b = b.Add(b.AsUint32x4().And(sign).Or(half).AsFloat32x4()).Masked(b.Equal(b))
+		// v + copysign(0.5, v); a NaN lane converts to 0x80000000 and
+		// saturates to -32768, as in the vectorized C++ loop.
+		a = a.Add(a.AsUint32x4().And(sign).Or(half).AsFloat32x4())
+		b = b.Add(b.AsUint32x4().And(sign).Or(half).AsFloat32x4())
 		a.ConvertToInt32().SaturateToInt16Concat(b.ConvertToInt32()).StoreArray((*[8]int16)(dest[i : i+8]))
 	}
 	floatS16ToS16SliceRef(src[i:], dest[i:])

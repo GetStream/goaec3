@@ -132,6 +132,28 @@ const kernMinMaxFast = false
 // kernMinMax defers to the caller's loop (MINPS/MAXPS do not propagate NaN).
 func kernMinMax(x []float32) (mn, mx float32, ok bool) { return 0, 0, false }
 
-// kernClamp is the reference: MINPS/MAXPS differ from Go's min/max on NaN
-// and signed zeros.
-func kernClamp(x []float32, lo, hi float32) { kernClampGeneric(x, lo, hi) }
+// kernClamp is kernClampGeneric, std::min(std::max(x, lo), hi), as compares
+// and selects: MINPS/MAXPS return their second operand on NaN and equal
+// zeros, and archsimd does not fix which operand that is.
+func kernClamp(x []float32, lo, hi float32) {
+	j := 0
+	if kernHasAVX2 {
+		lv, hv := archsimd.BroadcastFloat32x8(lo), archsimd.BroadcastFloat32x8(hi)
+		for ; j+8 <= len(x); j += 8 {
+			v := archsimd.LoadFloat32x8(x[j:])
+			v = lv.IfElse(v.Less(lv), v)
+			hv.IfElse(hv.Less(v), v).Store(x[j:])
+		}
+	}
+	if kernHasAVX {
+		lv, hv := archsimd.BroadcastFloat32x4(lo), archsimd.BroadcastFloat32x4(hi)
+		for ; j+4 <= len(x); j += 4 {
+			v := archsimd.LoadFloat32x4(x[j:])
+			v = lv.IfElse(v.Less(lv), v)
+			hv.IfElse(hv.Less(v), v).Store(x[j:])
+		}
+	}
+	for ; j < len(x); j++ {
+		x[j] = stdMin(stdMax(x[j], lo), hi)
+	}
+}

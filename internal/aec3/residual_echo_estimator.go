@@ -103,13 +103,13 @@ func (r *ResidualEchoEstimator) Estimate(aecState *AecState, renderBuffer *Rende
 				em := &r.config.EchoModel
 				for k := 0; k < FftLengthBy2Plus1; k++ {
 					if em.NoiseGatePower > X2[k] {
-						X2[k] = stMaxf(0, X2[k]-float32(em.NoiseGateSlope*(em.NoiseGatePower-X2[k])))
+						X2[k] = stdMax(0, X2[k]-float32(em.NoiseGateSlope*(em.NoiseGatePower-X2[k])))
 					}
 				}
 			}
 			for k := 0; k < FftLengthBy2Plus1; k++ {
 				X2[k] -= float32(r.config.EchoModel.StationaryGateSlope * r.X2NoiseFloor[k])
-				X2[k] = stMaxf(0, X2[k])
+				X2[k] = stdMax(0, X2[k])
 			}
 			stNonLinearEstimate(echoPathGain, &X2, R2)
 			stNonLinearEstimate(echoPathGain, &X2, R2Unbounded)
@@ -177,7 +177,7 @@ func (r *ResidualEchoEstimator) updateRenderNoisePower(renderBuffer *RenderBuffe
 			r.X2NoiseFloorCounter[k] = 0
 		} else {
 			if r.X2NoiseFloorCounter[k] >= r.config.EchoModel.NoiseFloorHold {
-				r.X2NoiseFloor[k] = stMaxf(r.X2NoiseFloor[k]*1.1, r.config.EchoModel.MinNoiseFloorPower)
+				r.X2NoiseFloor[k] = stdMax(r.X2NoiseFloor[k]*1.1, r.config.EchoModel.MinNoiseFloorPower)
 			} else {
 				r.X2NoiseFloorCounter[k]++
 			}

@@ -374,18 +374,6 @@ func fzDefined(cfg *aec3.EchoCanceller3Config) bool {
 	return cfg.Delay.DefaultDelay < fzRenderDelayBufferSize(cfg)
 }
 
-// fzPendingFix reports configs that hit the open finding of
-// TestEc3KnownFailureUpperBandsGainNaN: a NaN band energy or anti-howling
-// gain in SuppressionGain::UpperBandsGain, where std::min/std::max drop a
-// NaN second argument and the builtin min/max of the port return NaN. A
-// zero AntiHowlingActivationThreshold produces sqrtf(0 / 0); a render power
-// gain beyond ~200 dB overflows the render power to Inf and the band
-// energies to NaN. Remove once fixed.
-func fzPendingFix(cfg *aec3.EchoCanceller3Config) bool {
-	return cfg.Suppressor.HighBandsSuppression.AntiHowlingActivationThreshold == 0 ||
-		!(cfg.RenderLevels.RenderPowerGainDb <= 200)
-}
-
 // fzExternalDelay tracks the RenderDelayBuffer block counters in external
 // delay mode. AlignFromExternalDelay applies the total delay
 // render_call_counter - capture_call_counter + external_delay - headroom
@@ -537,8 +525,7 @@ func fzDecode(data []byte) (fzProgram, bool) {
 		fzCapResources(&p.mc)
 		fzAgree(&p.mc, &p.cfg)
 	}
-	if !fzDefined(&p.cfg) || (p.useMC && !fzDefined(&p.mc)) || fzPendingFix(&p.cfg) ||
-		(p.useMC && fzPendingFix(&p.mc)) {
+	if !fzDefined(&p.cfg) || (p.useMC && !fzDefined(&p.mc)) {
 		return p, false
 	}
 
@@ -807,7 +794,7 @@ func fzRandomConfig(rng *rand.Rand, i, count int) aec3.EchoCanceller3Config {
 		}
 		cfg.Validate()
 		fzCapResources(&cfg)
-		if fzDefined(&cfg) && !fzPendingFix(&cfg) {
+		if fzDefined(&cfg) {
 			return cfg
 		}
 	}
@@ -989,27 +976,15 @@ func TestEc3NaNInputParity(t *testing.T) {
 	}
 }
 
-// TestEc3KnownFailureUpperBandsGainNaN: SuppressionGain::UpperBandsGain
+// TestEc3UpperBandsGainNaN: SuppressionGain::UpperBandsGain
 // (suppression_gain.cc) combines band energies and gains with std::max and
-// std::min, which return their first argument when the second is NaN; the
-// port uses the builtin max/min (suppression_gain.go, upperBandsGain), which
-// return NaN when any argument is NaN. With a zero anti-howling activation
-// threshold (the lower Validate bound) the anti-howling gain is
-// sqrtf(0 / 0) on silent bands, and with a render power gain of 300 dB the
-// band energies overflow to NaN: the port then outputs NaN or different
-// samples from the first processed capture frame at 32 and 48 kHz while
-// libwebrtc stays finite. Fix: replace those builtin calls with helpers that
-// keep the std::min/std::max operand order, e.g.
-//
-//	func stdMax(a, b float32) float32 { if a < b { return b }; return a }
-//	func stdMin(a, b float32) float32 { if b < a { return b }; return a }
-//
-// (and audit the other float min/max calls that mirror scalar
-// std::min/std::max for a possible NaN second operand).
-func TestEc3KnownFailureUpperBandsGainNaN(t *testing.T) {
-	if os.Getenv("GOAEC3_RUN_KNOWN_FAILURES") == "" {
-		t.Skip("open finding: builtin min/max vs std::min/std::max NaN semantics in UpperBandsGain")
-	}
+// std::min, which return their first argument when the second is NaN. With
+// a zero anti-howling activation threshold (the lower Validate bound) the
+// anti-howling gain is sqrtf(0 / 0) on silent bands, and with a render power
+// gain of 300 dB the band energies overflow to NaN; libwebrtc stays finite
+// at 32 and 48 kHz and the port must match it bit for bit.
+// TestEc3NaNMinMaxParity covers more rates, configs and inputs.
+func TestEc3UpperBandsGainNaN(t *testing.T) {
 	cases := map[string]func(*aec3.EchoCanceller3Config){
 		"anti-howling threshold 0": func(c *aec3.EchoCanceller3Config) {
 			c.Suppressor.HighBandsSuppression.AntiHowlingActivationThreshold = 0

@@ -115,3 +115,99 @@ func FastApproxLog2f(in float32) float32 {
 func Log2TodB(inLog2 float32) float32 {
 	return float32(3.0102999566398121 * float64(inLog2))
 }
+
+// Float minimum, maximum, clamp and absolute value with the exact semantics
+// of the C++ expressions they port. Go's builtin min/max return NaN when any
+// argument is NaN and order the zeros (min(-0, +0) = -0, max(-0, +0) = +0).
+// std::min and std::max are single comparisons that return the first
+// argument unless the second one compares smaller (larger): a NaN second
+// argument is dropped, a NaN first argument is kept, and equal arguments
+// (-0 and +0) give the first. The SIMD lanes have their own semantics: NEON
+// vminq_f32/vmaxq_f32 are Go's builtin min/max (NaN propagates; they differ
+// from Go only in which NaN payload they return), and SSE2/AVX2
+// _mm_max_ps(a, b) is sseMax.
+
+// stdMin is std::min(a, b) on floats: b < a ? b : a.
+func stdMin(a, b float32) float32 {
+	if b < a {
+		return b
+	}
+	return a
+}
+
+// stdMax is std::max(a, b) on floats: a < b ? b : a.
+func stdMax(a, b float32) float32 {
+	if a < b {
+		return b
+	}
+	return a
+}
+
+// stSafeClamp is webrtc::SafeClamp on floats:
+// x <= lo ? lo : x >= hi ? hi : x.
+func stSafeClamp(x, lo, hi float32) float32 {
+	if x <= lo {
+		return lo
+	}
+	if x >= hi {
+		return hi
+	}
+	return x
+}
+
+// sseMax is _mm_max_ps(a, b) and _mm256_max_ps(a, b) per lane:
+// a > b ? a : b, which gives b when either is NaN or both are zero.
+func sseMax(a, b float32) float32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// fabsf is fabsf and std::fabs: x with the sign bit cleared.
+func fabsf(x float32) float32 {
+	return math.Float32frombits(math.Float32bits(x) &^ (1 << 31))
+}
+
+// stdMinmaxElement returns the values at the iterators std::minmax_element
+// returns for x (len(x) > 0), with the pairwise algorithm of libc++. Without
+// NaN that is the first minimum and the last maximum; with NaN the result
+// depends on the pairing, which this follows comparison for comparison.
+func stdMinmaxElement(x []float32) (mn, mx float32) {
+	mn, mx = x[0], x[0]
+	if len(x) == 1 {
+		return mn, mx
+	}
+	if x[1] < mn {
+		mn = x[1]
+	} else {
+		mx = x[1]
+	}
+	i := 2
+	for ; i+1 < len(x); i += 2 {
+		a, b := x[i], x[i+1]
+		if b < a {
+			if b < mn {
+				mn = b
+			}
+			if !(a < mx) {
+				mx = a
+			}
+		} else {
+			if a < mn {
+				mn = a
+			}
+			if !(b < mx) {
+				mx = b
+			}
+		}
+	}
+	if i < len(x) {
+		if a := x[i]; a < mn {
+			mn = a
+		} else if !(a < mx) {
+			mx = a
+		}
+	}
+	return mn, mx
+}

@@ -294,6 +294,7 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 
 		s.coarseFilter[ch].Adapt(renderBuffer, G)
 
+		// SafeClamp(a, -32768.f, 32767.f); see kernClamp.
 		kernClamp(eRefined[:], -32768, 32767)
 	}
 }

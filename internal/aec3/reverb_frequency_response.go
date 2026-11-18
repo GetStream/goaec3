@@ -50,6 +50,6 @@ func (r *ReverbFrequencyResponse) update(frequencyResponse [][FftLengthBy2Plus1]
 	}
 	for k := 1; k < FftLengthBy2; k++ {
 		avgNeighbour := 0.5 * (r.tailResponse[k-1] + r.tailResponse[k+1])
-		r.tailResponse[k] = stMaxf(r.tailResponse[k], avgNeighbour)
+		r.tailResponse[k] = stdMax(r.tailResponse[k], avgNeighbour)
 	}
 }

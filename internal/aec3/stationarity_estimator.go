@@ -80,7 +80,7 @@ func (n *stNoiseSpectrum) updateBandBySmoothing(powerBand, powerBandNoise, alpha
 		powerBandNoiseUpdated += float32(alphaInc * (powerBand - powerBandNoise))
 	} else {
 		powerBandNoiseUpdated += float32(alpha * (powerBand - powerBandNoise))
-		powerBandNoiseUpdated = stMaxf(powerBandNoiseUpdated, stMinNoisePower)
+		powerBandNoiseUpdated = stdMax(powerBandNoiseUpdated, stMinNoisePower)
 	}
 	return powerBandNoiseUpdated
 }

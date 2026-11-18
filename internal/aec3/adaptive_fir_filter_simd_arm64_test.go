@@ -25,7 +25,7 @@ func TestAfirSimdKernelsArm64(t *testing.T) {
 		afirEqualFft(t, "adapt", &g, &w)
 		g2, w2 := s.Re, s.Re
 		afirFreqRespBlockNEON(&h, &g2)
-		afirFreqRespBinsGo(&h, &w2, 0, FftLengthBy2)
+		afirFreqRespBlockNeonGo(&h, &w2)
 		afirEqualArr(t, "fr", g2[:], w2[:])
 		g2, w2 = s.Re, s.Re
 		afirErlBlockNEON(&h.Re, &g2)

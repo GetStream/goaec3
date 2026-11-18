@@ -277,13 +277,10 @@ func CreateDefaultMultichannelConfig() EchoCanceller3Config {
 	return c
 }
 
+// limitF is Limit(float*, min, max) of echo_canceller3_config.cc: SafeClamp
+// (so a -0 at a +0 bound becomes +0), then min for a non-finite value.
 func limitF(v *float32, lo, hi float32) bool {
-	c := *v
-	if c < lo {
-		c = lo
-	} else if c > hi {
-		c = hi
-	}
+	c := stSafeClamp(*v, lo, hi)
 	if math.IsNaN(float64(c)) || math.IsInf(float64(c), 0) {
 		c = lo
 	}
@@ -353,7 +350,7 @@ func (c *EchoCanceller3Config) Validate() bool {
 	and(limitF(&c.Erle.MaxL, 1, 100000))
 	and(limitF(&c.Erle.MaxH, 1, 100000))
 	if c.Erle.Min > c.Erle.MaxL || c.Erle.Min > c.Erle.MaxH {
-		c.Erle.Min = min(c.Erle.MaxL, c.Erle.MaxH)
+		c.Erle.Min = stdMin(c.Erle.MaxL, c.Erle.MaxH)
 		res = false
 	}
 	and(limitI(&c.Erle.NumSections, 1, c.Filter.Refined.LengthBlocks))

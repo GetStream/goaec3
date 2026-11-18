@@ -81,6 +81,8 @@ func afirFreqRespBlock(opt Aec3Optimization, h *FftData, h2 *[FftLengthBy2Plus1]
 	switch opt {
 	case OptNeon:
 		afirFreqRespBlockNEON(h, h2)
+	case OptSse2:
+		afirFreqRespBlockSse2Go(h, h2)
 	case OptAvx2:
 		afirFreqRespBlockAvx2Go(h, h2)
 	default:

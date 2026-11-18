@@ -56,7 +56,8 @@ func afirFreqRespBlockSSE2(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 		im := archsimd.LoadFloat32x4Array((*[4]float32)(h.Im[j : j+4]))
 		p := (*[4]float32)(h2[j : j+4])
 		n := re.Mul(re).Add(im.Mul(im))
-		archsimd.LoadFloat32x4Array(p).Max(n).StoreArray(p)
+		a := archsimd.LoadFloat32x4Array(p)
+		a.IfElse(a.Greater(n), n).StoreArray(p) // _mm_max_ps(a, n) = a > n ? a : n
 	}
 }
 
@@ -104,7 +105,8 @@ func afirFreqRespBlockAVX2(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 		im := archsimd.LoadFloat32x8Array((*[8]float32)(h.Im[j : j+8]))
 		p := (*[8]float32)(h2[j : j+8])
 		n := im.MulAdd(im, re.Mul(re))
-		archsimd.LoadFloat32x8Array(p).Max(n).StoreArray(p)
+		a := archsimd.LoadFloat32x8Array(p)
+		a.IfElse(a.Greater(n), n).StoreArray(p) // _mm256_max_ps(a, n) = a > n ? a : n
 	}
 }
 
@@ -145,6 +147,10 @@ func afirFreqRespBlock(opt Aec3Optimization, h *FftData, h2 *[FftLengthBy2Plus1]
 		afirFreqRespBlockAVX2(h, h2)
 	case opt == OptAvx2:
 		afirFreqRespBlockAvx2Go(h, h2)
+	case opt == OptSse2:
+		afirFreqRespBlockSse2Go(h, h2)
+	case opt == OptNeon:
+		afirFreqRespBlockNeonGo(h, h2)
 	default:
 		afirFreqRespBinsGo(h, h2, 0, FftLengthBy2)
 	}

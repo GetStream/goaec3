@@ -22,7 +22,7 @@ func (s *SubtractorOutputAnalyzer) Update(subtractorOutput []SubtractorOutput) (
 		refinedFilterConverged := e2Refined < 0.5*y2 && y2 > convergenceThreshold
 		coarseFilterConvergedStrict := e2Coarse < 0.05*y2 && y2 > convergenceThreshold
 		coarseFilterConvergedRelaxed := e2Coarse < 0.3*y2 && y2 > convergenceThresholdLowLevel
-		minE2 := stMinf(e2Refined, e2Coarse)
+		minE2 := stdMin(e2Refined, e2Coarse)
 		filterDiverged := minE2 > 1.5*y2 && y2 > 30*30*BlockSize
 		s.filtersConverged[ch] = refinedFilterConverged || coarseFilterConvergedStrict
 		anyFilterConverged = anyFilterConverged || s.filtersConverged[ch]

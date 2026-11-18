@@ -12,7 +12,7 @@ import "math"
 // of the high-pass filter on the lower-frequency gain influencing the overall
 // achieved gain.
 func sgLimitLowFrequencyGains(gain *[FftLengthBy2Plus1]float32) {
-	v := min(gain[1], gain[2])
+	v := stdMin(gain[1], gain[2])
 	gain[0] = v
 	gain[1] = v
 }
@@ -23,7 +23,7 @@ func sgLimitHighFrequencyGains(conservativeHfSuppression bool, gain *[FftLengthB
 	const firstBandToLimit = (64 * 2000) / 8000
 	minUpperGain := gain[firstBandToLimit]
 	for k := firstBandToLimit + 1; k < FftLengthBy2Plus1; k++ {
-		gain[k] = min(gain[k], minUpperGain)
+		gain[k] = stdMin(gain[k], minUpperGain)
 	}
 	gain[FftLengthBy2] = gain[FftLengthBy2Minus1]
 
@@ -38,7 +38,7 @@ func sgLimitHighFrequencyGains(conservativeHfSuppression bool, gain *[FftLengthB
 		}
 		hfGainBound := sum * oneByBandsInSum
 		for k := upperAccurateBandPlus1; k < FftLengthBy2Plus1; k++ {
-			gain[k] = min(gain[k], hfGainBound)
+			gain[k] = stdMin(gain[k], hfGainBound)
 		}
 	}
 }
@@ -93,7 +93,7 @@ func (d *sgLowNoiseRenderDetector) Detect(render *Block) bool {
 		for _, x := range render.View(0, ch) {
 			x2 := float32(x * x)
 			x2Sum += x2
-			x2Max = max(x2Max, x2)
+			x2Max = stdMax(x2Max, x2)
 		}
 	}
 	x2Sum = x2Sum / float32(render.NumChannels())
@@ -257,18 +257,18 @@ func (s *SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][F
 
 	// Always attenuate the upper bands when there is saturated echo.
 	if saturatedEcho {
-		return min(0.001, gainBelow8Khz)
+		return stdMin(0.001, gainBelow8Khz)
 	}
 
 	// Compute the upper and lower band energies.
 	var lowBandEnergy float32
 	for ch := 0; ch < numRenderChannels; ch++ {
-		lowBandEnergy = max(lowBandEnergy, sgSumOfSquares(render.View(0, ch)))
+		lowBandEnergy = stdMax(lowBandEnergy, sgSumOfSquares(render.View(0, ch)))
 	}
 	var highBandEnergy float32
 	for k := 1; k < render.NumBands(); k++ {
 		for ch := 0; ch < numRenderChannels; ch++ {
-			highBandEnergy = max(highBandEnergy, sgSumOfSquares(render.View(k, ch)))
+			highBandEnergy = stdMax(highBandEnergy, sgSumOfSquares(render.View(k, ch)))
 		}
 	}
 
@@ -278,7 +278,7 @@ func (s *SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][F
 	hb := &s.config.Suppressor.HighBandsSuppression
 	var antiHowlingGain float32
 	activationThreshold := BlockSize * hb.AntiHowlingActivationThreshold
-	if highBandEnergy < max(lowBandEnergy, activationThreshold) {
+	if highBandEnergy < stdMax(lowBandEnergy, activationThreshold) {
 		antiHowlingGain = 1
 	} else {
 		// In all other cases, bound the gain for upper frequencies.
@@ -299,7 +299,7 @@ func (s *SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][F
 	}
 
 	// Choose the gain as the minimum of the lower and upper gains.
-	return min(min(gainBelow8Khz, antiHowlingGain), gainBound)
+	return stdMin(stdMin(gainBelow8Khz, antiHowlingGain), gainBound)
 }
 
 func (s *SuppressionGain) params() *sgGainParameters {
@@ -337,8 +337,8 @@ func (s *SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho
 			// Make sure the gains of the low frequencies do not decrease too
 			// quickly after strong nearend.
 			if lastNearend[k] > lastEcho[k] || k <= sup.LastPermanentLfSmoothingBand {
-				minGain[k] = max(minGain[k], s.lastGain[k]*dec)
-				minGain[k] = min(minGain[k], 1)
+				minGain[k] = stdMax(minGain[k], s.lastGain[k]*dec)
+				minGain[k] = stdMin(minGain[k], 1)
 			}
 		}
 	}
@@ -349,7 +349,7 @@ func (s *SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho
 func (s *SuppressionGain) GetMaxGain(maxGain *[FftLengthBy2Plus1]float32) {
 	inc := s.params().maxIncFactor
 	floor := s.config.Suppressor.FloorFirstIncrease
-	// maxGain = min(max(lastGain*inc, floor), 1).
+	// maxGain = std::min(std::max(lastGain*inc, floor), 1.f).
 	kernScale(s.lastGain[:], inc, maxGain[:])
 	kernClamp(maxGain[:], floor, 1)
 }
@@ -378,9 +378,9 @@ func (s *SuppressionGain) LowerBandGain(lowNoiseRender bool, aecState *AecState,
 		s.GainToNoAudibleEcho(&nearend, &weightedResidualEcho, &comfortNoise[0], &G)
 
 		// Clamp gains.
-		kernMinGo(G[:], maxGain[:], G[:])
-		kernMaxGo(G[:], minGain[:], G[:])
-		kernMinGo(gain[:], G[:], gain[:])
+		kernStdMin(G[:], maxGain[:], G[:])
+		kernStdMax(G[:], minGain[:], G[:])
+		kernStdMin(gain[:], G[:], gain[:])
 
 		// Store data required for the gain computation of the next block.
 		s.lastNearend[ch] = nearend

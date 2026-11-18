@@ -77,7 +77,7 @@ func sumOfSquares(x []float32) float32 {
 
 func maxAbsOf(x []float32) float32 {
 	if mn, mx, ok := kernMinMax(x); ok {
-		return max(mx, -mn)
+		return stdMax(mx, -mn)
 	}
 	mx, mn := x[0], x[0]
 	for _, v := range x[1:] {
@@ -88,7 +88,7 @@ func maxAbsOf(x []float32) float32 {
 			mn = v
 		}
 	}
-	return max(mx, -mn)
+	return stdMax(mx, -mn)
 }
 
 func (s *SubtractorOutput) ComputeMetrics(y []float32) {

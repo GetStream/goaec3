@@ -73,7 +73,7 @@ func (e *ErlEstimator) Update(convergedFilters []bool, renderSpectra, captureSpe
 			if newErl < e.erl[k] {
 				e.holdCounters[k-1] = 1000
 				e.erl[k] += float32(0.1 * (newErl - e.erl[k]))
-				e.erl[k] = stMaxf(e.erl[k], stMinErl)
+				e.erl[k] = stdMax(e.erl[k], stMinErl)
 			}
 		}
 	}
@@ -82,7 +82,7 @@ func (e *ErlEstimator) Update(convergedFilters []bool, renderSpectra, captureSpe
 	}
 	for i, a := range e.holdCounters {
 		if a <= 0 {
-			e.erl[i+1] = stMinf(stMaxErl, 2*e.erl[i+1])
+			e.erl[i+1] = stdMin(stMaxErl, 2*e.erl[i+1])
 		}
 	}
 	e.erl[0] = e.erl[1]
@@ -95,11 +95,11 @@ func (e *ErlEstimator) Update(convergedFilters []bool, renderSpectra, captureSpe
 		if newErl < e.erlTimeDomain {
 			e.holdCounterTimeDomain = 1000
 			e.erlTimeDomain += float32(0.1 * (newErl - e.erlTimeDomain))
-			e.erlTimeDomain = stMaxf(e.erlTimeDomain, stMinErl)
+			e.erlTimeDomain = stdMax(e.erlTimeDomain, stMinErl)
 		}
 	}
 	e.holdCounterTimeDomain--
 	if e.holdCounterTimeDomain <= 0 {
-		e.erlTimeDomain = stMinf(stMaxErl, 2*e.erlTimeDomain)
+		e.erlTimeDomain = stdMin(stMaxErl, 2*e.erlTimeDomain)
 	}
 }

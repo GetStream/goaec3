@@ -62,21 +62,21 @@ func (d *stConsistentFilterDetector) Detect(filterToAnalyze []float32, region Fi
 	filterFloorAccum := d.filterFloorAccum
 	filterSecondaryPeak := d.filterSecondaryPeak
 	for k := region.StartSample; k < min(region.EndSample+1, d.filterFloorLowLimit); k++ {
-		absH := stAbsf(filterToAnalyze[k])
+		absH := fabsf(filterToAnalyze[k])
 		filterFloorAccum += absH
-		filterSecondaryPeak = stMaxf(filterSecondaryPeak, absH)
+		filterSecondaryPeak = stdMax(filterSecondaryPeak, absH)
 	}
 	for k := max(d.filterFloorHighLimit, region.StartSample); k <= region.EndSample; k++ {
-		absH := stAbsf(filterToAnalyze[k])
+		absH := fabsf(filterToAnalyze[k])
 		filterFloorAccum += absH
-		filterSecondaryPeak = stMaxf(filterSecondaryPeak, absH)
+		filterSecondaryPeak = stdMax(filterSecondaryPeak, absH)
 	}
 	d.filterFloorAccum = filterFloorAccum
 	d.filterSecondaryPeak = filterSecondaryPeak
 
 	if region.EndSample == n-1 {
 		filterFloor := d.filterFloorAccum / float32(uint64(d.filterFloorLowLimit+n-d.filterFloorHighLimit))
-		absPeak := stAbsf(filterToAnalyze[peakIndex])
+		absPeak := fabsf(filterToAnalyze[peakIndex])
 		d.significantPeak = absPeak > 10*filterFloor && absPeak > 2*d.filterSecondaryPeak
 	}
 
@@ -175,7 +175,7 @@ func (f *FilterAnalyzer) Update(filtersTimeDomain [][]float32, renderBuffer *Ren
 	for ch := 1; ch < len(filtersTimeDomain); ch++ {
 		stCh := &f.filterAnalysisStates[ch]
 		anyFilterConsistent = anyFilterConsistent || stCh.consistentEstimate
-		maxEchoPathGain = stMaxf(maxEchoPathGain, stCh.gain)
+		maxEchoPathGain = stdMax(maxEchoPathGain, stCh.gain)
 		f.minFilterDelayBlocks = min(f.minFilterDelayBlocks, f.filterDelaysBlocks[ch])
 	}
 	return
@@ -213,14 +213,14 @@ func (f *FilterAnalyzer) analyzeRegion(filtersTimeDomain [][]float32, renderBuff
 func (f *FilterAnalyzer) updateFilterGain(filterTimeDomain []float32, st *stFilterAnalysisState) {
 	sufficientTimeToConverge := f.blocksSinceReset > 5*NumBlocksPerSecond
 	if sufficientTimeToConverge && st.consistentEstimate {
-		st.gain = stAbsf(filterTimeDomain[st.peakIndex])
+		st.gain = fabsf(filterTimeDomain[st.peakIndex])
 	} else {
 		if st.gain != 0 {
-			st.gain = stMaxf(st.gain, stAbsf(filterTimeDomain[st.peakIndex]))
+			st.gain = stdMax(st.gain, fabsf(filterTimeDomain[st.peakIndex]))
 		}
 	}
 	if f.boundedErl && st.gain != 0 {
-		st.gain = stMaxf(st.gain, 0.01)
+		st.gain = stdMax(st.gain, 0.01)
 	}
 }
 

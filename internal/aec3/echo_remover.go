@@ -196,7 +196,7 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 		if e.aecState.UsableLinearEstimate() {
 			// E2 is bound by Y2.
 			for ch := 0; ch < nch; ch++ {
-				kernMinGo(e.E2[ch][:], e.Y2[ch][:], e.E2[ch][:])
+				kernStdMin(e.E2[ch][:], e.Y2[ch][:], e.E2[ch][:])
 			}
 		}
 		nearendSpectrum := e.Y2

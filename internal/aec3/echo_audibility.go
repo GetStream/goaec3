@@ -82,18 +82,10 @@ func (e *EchoAudibility) isRenderTooLow(blockBuffer *BlockBuffer) bool {
 		for idx := e.renderBlockWritePrev; idx != renderBlockWriteCurrent; idx = blockBuffer.IncIndex(idx) {
 			var maxAbsOverChannels float32
 			for ch := 0; ch < numRenderChannels; ch++ {
-				block := blockBuffer.Buffer[idx].View(0, ch)
-				mn, mx := block[0], block[0]
-				for _, v := range block[1:] {
-					if v < mn {
-						mn = v
-					}
-					if v >= mx {
-						mx = v
-					}
-				}
-				maxAbsChannel := stMaxf(stAbsf(mn), stAbsf(mx))
-				maxAbsOverChannels = stMaxf(maxAbsOverChannels, maxAbsChannel)
+				// std::max(std::fabs(*r.first), std::fabs(*r.second)) with
+				// r = std::minmax_element(block).
+				maxAbsChannel := afirMaxAbsMinMax(blockBuffer.Buffer[idx].View(0, ch))
+				maxAbsOverChannels = stdMax(maxAbsOverChannels, maxAbsChannel)
 			}
 			if maxAbsOverChannels < 10 {
 				tooLow = true

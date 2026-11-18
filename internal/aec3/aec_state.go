@@ -7,43 +7,6 @@ type LinearFilterQuality struct {
 	Ok    bool
 }
 
-// stMaxf is std::max on floats (returns a unless a < b).
-func stMaxf(a, b float32) float32 {
-	if a < b {
-		return b
-	}
-	return a
-}
-
-// stMinf is std::min on floats (returns a unless b < a).
-func stMinf(a, b float32) float32 {
-	if b < a {
-		return b
-	}
-	return a
-}
-
-// stSafeClamp is webrtc::SafeClamp on floats.
-func stSafeClamp(x, lo, hi float32) float32 {
-	if x <= lo {
-		return lo
-	}
-	if x >= hi {
-		return hi
-	}
-	return x
-}
-
-func stAbsf(x float32) float32 {
-	if x < 0 {
-		return -x
-	}
-	if x == 0 {
-		return 0
-	}
-	return x
-}
-
 // stAccumulate is std::accumulate(..., 0.f): a sequential float sum.
 func stAccumulate(x []float32) float32 {
 	var acc float32
@@ -190,7 +153,7 @@ func (s *stSaturationDetector) Update(x *Block, saturatedCapture, usableLinearEs
 		var maxSample float32
 		for ch := 0; ch < x.NumChannels(); ch++ {
 			for _, sample := range x.View(0, ch) {
-				maxSample = stMaxf(maxSample, stAbsf(sample))
+				maxSample = stdMax(maxSample, fabsf(sample))
 			}
 		}
 		const margin float32 = 10

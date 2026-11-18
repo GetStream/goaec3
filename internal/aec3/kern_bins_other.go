@@ -12,11 +12,9 @@ func kernOneMinusSq(x, z []float32) { kernOneMinusSqGeneric(x, z) }
 
 func kernDiffPower(yr, er, yi, ei, z []float32) { kernDiffPowerGeneric(yr, er, yi, ei, z) }
 
-func kernMinGo(x, y, z []float32) { kernMinGoGeneric(x, y, z) }
+func kernStdMin(x, y, z []float32) { kernStdMinGeneric(x, y, z) }
 
-func kernMaxGo(x, y, z []float32) { kernMaxGoGeneric(x, y, z) }
-
-func kernMaxScalarGo(x []float32, a float32) { kernMaxScalarGoGeneric(x, a) }
+func kernStdMaxScalar(x []float32, a float32) { kernStdMaxScalarGeneric(x, a) }
 
 func kernSmooth(s, y []float32, c float32) { kernSmoothGeneric(s, y, c) }
 

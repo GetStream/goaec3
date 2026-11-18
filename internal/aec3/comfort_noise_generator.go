@@ -128,9 +128,9 @@ func (c *ComfortNoiseGenerator) Compute(saturatedCapture bool,
 		}
 
 		for ch := 0; ch < c.numCaptureChannels; ch++ {
-			kernMaxScalarGo(c.n2[ch][:], c.noiseFloor)
+			kernStdMaxScalar(c.n2[ch][:], c.noiseFloor)
 			if c.n2Initial != nil {
-				kernMaxScalarGo(c.n2Initial[ch][:], c.noiseFloor)
+				kernStdMaxScalar(c.n2Initial[ch][:], c.noiseFloor)
 			}
 		}
 	}

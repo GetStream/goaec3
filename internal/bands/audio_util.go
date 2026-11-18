@@ -15,6 +15,11 @@ func S16ToFloat(v int16) float32 {
 	return float32(v) * scaling
 }
 
+// The clamps below are std::min(v, hi) then std::max(v, lo) in the C++.
+// With nonzero bounds Go's min/max give the same results: no tie between
+// zeros is possible, and a NaN v gives NaN either way (std::min/std::max
+// return v itself; the bound is never NaN).
+
 // FloatS16ToS16 clamps and rounds a FloatS16 sample to int16.
 func FloatS16ToS16(v float32) int16 {
 	v = min(v, 32767)
@@ -56,10 +61,22 @@ func bsCopysignHalf(v float32) float32 {
 // (audio_util_simd_*.go). The ...Ref functions are the scalar spec: every
 // kernel is elementwise and bit-identical to them.
 
+// floatS16ToS16SliceRef is the FloatS16ToS16(const float*, size_t, int16_t*)
+// loop of audio_util.cc. Converting NaN to int16 is undefined in C++, so the
+// result for a NaN sample is what the compiled loop does: clang vectorizes
+// it eight samples at a time, the scalar remainder converts through int32
+// and keeps the low 16 bits (NaN gives 0 on x86 and arm64), and the vector
+// body gives bsNaNS16Vector (x86: cvttps2dq gives 0x80000000, which
+// packssdw saturates to -32768; arm64: fcvtzs gives 0).
 func floatS16ToS16SliceRef(src []float32, dest []int16) {
 	dest = dest[:len(src)]
+	vec := len(src) &^ 7
 	for i, v := range src {
-		dest[i] = FloatS16ToS16(v)
+		d := FloatS16ToS16(v)
+		if v != v && i < vec {
+			d = bsNaNS16Vector
+		}
+		dest[i] = d
 	}
 }
 

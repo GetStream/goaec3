@@ -36,7 +36,7 @@ func TestAfirSimdKernelsAmd64(t *testing.T) {
 		}
 		ks := []kern{
 			{"sse2", afirApplyBlockSSE2, afirAdaptBlockSSE2, afirFreqRespBlockSSE2,
-				func(h *FftData, h2 *[FftLengthBy2Plus1]float32) { afirFreqRespBinsGo(h, h2, 0, FftLengthBy2) }, afirErlBlockSSE2, false},
+				afirFreqRespBlockSse2Go, afirErlBlockSSE2, false},
 			{"avx2", afirApplyBlockAVX2, afirAdaptBlockAVX2, afirFreqRespBlockAVX2, afirFreqRespBlockAvx2Go, afirErlBlockAVX2, true},
 		}
 		for _, k := range ks {

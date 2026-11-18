@@ -34,7 +34,7 @@ func (r *RenderSignalAnalyzer) identifySmallNarrowBandRegions(renderBuffer *Rend
 	for ch := range X2 {
 		x := &X2[ch]
 		for k := 1; k < FftLengthBy2; k++ {
-			if x[k] > 3*max(x[k-1], x[k+1]) {
+			if x[k] > 3*stdMax(x[k-1], x[k+1]) {
 				channelCounters[k-1]++
 			}
 		}
@@ -73,16 +73,16 @@ func (r *RenderSignalAnalyzer) identifyStrongNarrowBandComponent(renderBuffer *R
 		// Compute the level around the peak.
 		var nonPeakPower float32
 		for k := max(0, peakBin-14); k < peakBin-4; k++ {
-			nonPeakPower = max(X2Latest[k], nonPeakPower)
+			nonPeakPower = stdMax(X2Latest[k], nonPeakPower)
 		}
 		for k := peakBin + 5; k < min(peakBin+15, FftLengthBy2Plus1); k++ {
-			nonPeakPower = max(X2Latest[k], nonPeakPower)
+			nonPeakPower = stdMax(X2Latest[k], nonPeakPower)
 		}
 
 		// Assess the render signal strength.
 		maxAbs := afirMaxAbsMinMax(xLatest.View(0, channel))
 		if xLatest.NumBands() > 1 {
-			maxAbs = max(maxAbs, afirMaxAbsMinMax(xLatest.View(1, channel)))
+			maxAbs = stdMax(maxAbs, afirMaxAbsMinMax(xLatest.View(1, channel)))
 		}
 
 		// Detect whether the spectral peak has as strong narrowband nature.
@@ -98,21 +98,14 @@ func (r *RenderSignalAnalyzer) identifyStrongNarrowBandComponent(renderBuffer *R
 	}
 }
 
-// afirMaxAbsMinMax is max(|min|, |max|) of x via std::minmax_element.
+// afirMaxAbsMinMax is std::max(fabs(*r.first), fabs(*r.second)) with
+// r = std::minmax_element(x).
 func afirMaxAbsMinMax(x []float32) float32 {
-	if mn, mx, ok := kernMinMax(x); ok {
-		return max(afirAbs(mn), afirAbs(mx))
+	mn, mx, ok := kernMinMax(x)
+	if !ok {
+		mn, mx = stdMinmaxElement(x)
 	}
-	mn, mx := x[0], x[0]
-	for _, v := range x[1:] {
-		if v < mn {
-			mn = v
-		}
-		if !(v < mx) {
-			mx = v
-		}
-	}
-	return max(afirAbs(mn), afirAbs(mx))
+	return stdMax(fabsf(mn), fabsf(mx))
 }
 
 // PoorSignalExcitation reports whether the render signal is poorly exciting.

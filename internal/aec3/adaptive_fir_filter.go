@@ -62,13 +62,34 @@ func afirComputeFrequencyResponseSimd(opt Aec3Optimization, numPartitions int, H
 	}
 }
 
-// afirFreqRespBinsGo is the scalar max-accumulation of |H|^2 over [from, to).
+// afirFreqRespBinsGo is the scalar max-accumulation of |H|^2 over [from, to):
+// H2 = std::max(H2, tmp).
 func afirFreqRespBinsGo(h *FftData, h2 *[FftLengthBy2Plus1]float32, from, to int) {
 	for j := from; j < to; j++ {
 		tmp := float32(h.Re[j]*h.Re[j]) + float32(h.Im[j]*h.Im[j])
 		if h2[j] < tmp {
 			h2[j] = tmp
 		}
+	}
+}
+
+// afirFreqRespBlockNeonGo is the pure-Go reference of the NEON 64-bin
+// frequency-response block: H2 = vmaxq_f32(H2, vmlaq_f32(re*re, im, im)).
+// vmaxq_f32 is Go's max (a NaN in either operand gives NaN).
+func afirFreqRespBlockNeonGo(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
+	for j := 0; j < FftLengthBy2; j++ {
+		tmp := float32(h.Re[j]*h.Re[j]) + float32(h.Im[j]*h.Im[j])
+		h2[j] = max(h2[j], tmp)
+	}
+}
+
+// afirFreqRespBlockSse2Go is the pure-Go reference of the SSE2 64-bin
+// frequency-response block: H2 = _mm_max_ps(H2, re*re + im*im), which keeps
+// H2 only when H2 > tmp (a NaN in either operand gives tmp).
+func afirFreqRespBlockSse2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
+	for j := 0; j < FftLengthBy2; j++ {
+		tmp := float32(h.Re[j]*h.Re[j]) + float32(h.Im[j]*h.Im[j])
+		h2[j] = sseMax(h2[j], tmp)
 	}
 }
 
@@ -482,7 +503,7 @@ func (f *AdaptiveFirFilter) constrainAndUpdateImpulseResponse(impulseResponse *[
 			copy(ir[base:base+FftLengthBy2], h[:FftLengthBy2])
 		} else {
 			for k, j := 0, base; k < FftLengthBy2; k, j = k+1, j+1 {
-				if afirAbs(ir[j]) < afirAbs(h[k]) {
+				if fabsf(ir[j]) < fabsf(h[k]) {
 					ir[j] = h[k]
 				}
 			}
@@ -490,13 +511,6 @@ func (f *AdaptiveFirFilter) constrainAndUpdateImpulseResponse(impulseResponse *[
 		f.fft.Fft(&h, hp)
 	}
 	f.partitionToConstrain = afirNextPartition(f.partitionToConstrain, f.currentSizePartitions)
-}
-
-func afirAbs(x float32) float32 {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
 
 func (f *AdaptiveFirFilter) constrain() {

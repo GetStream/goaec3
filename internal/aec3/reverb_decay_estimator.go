@@ -19,7 +19,7 @@ func stBlockAverage(v []float32, blockIndex int) float32 {
 }
 
 func stAnalyzeBlockGain(h2 *[FftLengthBy2]float32, floorGain float32, previousGain *float32) (blockAdapting, decayingGain bool) {
-	gain := stMaxf(stBlockAverage(h2[:], 0), 1e-32)
+	gain := stdMax(stBlockAverage(h2[:], 0), 1e-32)
 	blockAdapting = *previousGain > 1.1*gain || *previousGain < 0.9*gain
 	decayingGain = gain > floorGain
 	*previousGain = gain
@@ -239,7 +239,7 @@ func (r *ReverbDecayEstimator) Update(filter []float32, filterQuality LinearFilt
 	if filterQuality.Ok {
 		newSmoothing = filterQuality.Value * 0.2
 	}
-	r.smoothingConstant = stMaxf(newSmoothing, r.smoothingConstant)
+	r.smoothingConstant = stdMax(newSmoothing, r.smoothingConstant)
 	if r.smoothingConstant == 0 {
 		return
 	}
@@ -277,9 +277,9 @@ func (r *ReverbDecayEstimator) estimateDecay(h []float32, peakBlock int) {
 			decay := Exp2f(r.lateReverbDecayEstimator.Estimate() * FftLengthBy2)
 			const maxDecay = 0.95
 			const minDecay = 0.02
-			decay = stMaxf(0.97*r.decay, decay)
-			decay = stMinf(decay, maxDecay)
-			decay = stMaxf(decay, minDecay)
+			decay = stdMax(0.97*r.decay, decay)
+			decay = stdMin(decay, maxDecay)
+			decay = stdMax(decay, minDecay)
 			r.decay += float32(r.smoothingConstant * (decay - r.decay))
 		}
 		r.lateReverbDecayEstimator.Reset(sizeLateReverb * FftLengthBy2)

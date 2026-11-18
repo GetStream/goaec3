@@ -166,7 +166,7 @@ func (s *SubbandErleEstimator) decreaseErlePerBandForLowRenderSignals() {
 			s.holdCounters[ch][k]--
 			if s.holdCounters[ch][k] <= stBlocksForOnsetDetection-stBlocksToHoldErle {
 				if s.erleOnsetCompensated[ch][k] > s.erleDuringOnsets[ch][k] {
-					s.erleOnsetCompensated[ch][k] = stMaxf(s.erleDuringOnsets[ch][k], 0.97*s.erleOnsetCompensated[ch][k])
+					s.erleOnsetCompensated[ch][k] = stdMax(s.erleDuringOnsets[ch][k], 0.97*s.erleOnsetCompensated[ch][k])
 				}
 				if s.holdCounters[ch][k] <= 0 {
 					s.comingOnset[ch][k] = true

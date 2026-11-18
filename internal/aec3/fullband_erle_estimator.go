@@ -60,10 +60,10 @@ func (e *stErleInstantaneous) GetQualityEstimate() LinearFilterQuality {
 	if e.erleLog2.Ok {
 		value := e.instQualityEstimate
 		if e.clampInstQualityToZero {
-			value = stMaxf(0, value)
+			value = stdMax(0, value)
 		}
 		if e.clampInstQualityToOne {
-			value = stMinf(1, value)
+			value = stdMin(1, value)
 		}
 		return LinearFilterQuality{Value: value, Ok: true}
 	}
@@ -72,9 +72,9 @@ func (e *stErleInstantaneous) GetQualityEstimate() LinearFilterQuality {
 
 func (e *stErleInstantaneous) updateMaxMin() {
 	e.maxErleLog2 -= 0.0004
-	e.maxErleLog2 = stMaxf(e.maxErleLog2, e.erleLog2.Value)
+	e.maxErleLog2 = stdMax(e.maxErleLog2, e.erleLog2.Value)
 	e.minErleLog2 += 0.0004
-	e.minErleLog2 = stMinf(e.minErleLog2, e.erleLog2.Value)
+	e.minErleLog2 = stdMin(e.minErleLog2, e.erleLog2.Value)
 }
 
 func (e *stErleInstantaneous) updateQualityEstimate() {
@@ -143,7 +143,7 @@ func (f *FullBandErleEstimator) Update(X2 []float32, Y2, E2 [][FftLengthBy2Plus1
 				if f.instantaneousErle[ch].Update(Y2Sum, E2Sum) {
 					f.holdCountersInstantaneousErle[ch] = stBlocksToHoldErle
 					f.erleTimeDomainLog2[ch] += float32(0.05 * (f.instantaneousErle[ch].erleLog2.Value - f.erleTimeDomainLog2[ch]))
-					f.erleTimeDomainLog2[ch] = stMaxf(f.erleTimeDomainLog2[ch], f.minErleLog2)
+					f.erleTimeDomainLog2[ch] = stdMax(f.erleTimeDomainLog2[ch], f.minErleLog2)
 				}
 			}
 		}
@@ -159,7 +159,7 @@ func (f *FullBandErleEstimator) Update(X2 []float32, Y2, E2 [][FftLengthBy2Plus1
 func (f *FullBandErleEstimator) FullbandErleLog2() float32 {
 	minErle := f.erleTimeDomainLog2[0]
 	for ch := 1; ch < len(f.erleTimeDomainLog2); ch++ {
-		minErle = stMinf(minErle, f.erleTimeDomainLog2[ch])
+		minErle = stdMin(minErle, f.erleTimeDomainLog2[ch])
 	}
 	return minErle
 }

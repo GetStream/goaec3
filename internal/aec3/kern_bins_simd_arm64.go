@@ -114,7 +114,8 @@ const kernMinMaxFast = true
 
 // kernMinMax returns the minimum and maximum of x with ok = true when they
 // are exact for every compare-loop formulation (first or last occurrence,
-// strict or non-strict comparisons): FMIN/FMAX give the same extreme values
+// strict or non-strict comparisons, std::min_element/std::max_element and
+// the pairwise std::minmax_element): FMIN/FMAX give the same extreme values
 // as such loops unless a NaN is present (FMIN/FMAX propagate it, the loops
 // skip or pick it by position) or an extreme is zero (the loops pick -0 or
 // +0 by position). Those cases return ok = false and the caller runs its
@@ -141,20 +142,26 @@ func kernMinMax(x []float32) (mn, mx float32, ok bool) {
 	return 0, 0, false
 }
 
-// kernClamp uses FMAX/FMIN, which match Go's max/min exactly (NaN
-// propagates, max(-0, +0) = +0, min(-0, +0) = -0).
+// vStdMin is std::min(a, b) per lane: b < a ? b : a. FMIN differs from it
+// on NaN and on equal zeros, so it is a compare and a select.
+func vStdMin(a, b f32x4) f32x4 { return b.IfElse(b.Less(a), a) }
+
+// vStdMax is std::max(a, b) per lane: a < b ? b : a.
+func vStdMax(a, b f32x4) f32x4 { return b.IfElse(a.Less(b), a) }
+
+// kernClamp is kernClampGeneric: std::min(std::max(x, lo), hi).
 func kernClamp(x []float32, lo, hi float32) {
 	lv, hv := archsimd.BroadcastFloat32x4(lo), archsimd.BroadcastFloat32x4(hi)
 	j := 0
 	for ; j+8 <= len(x); j += 8 {
-		archsimd.LoadFloat32x4(x[j:]).Max(lv).Min(hv).Store(x[j:])
-		archsimd.LoadFloat32x4(x[j+4:]).Max(lv).Min(hv).Store(x[j+4:])
+		vStdMin(vStdMax(archsimd.LoadFloat32x4(x[j:]), lv), hv).Store(x[j:])
+		vStdMin(vStdMax(archsimd.LoadFloat32x4(x[j+4:]), lv), hv).Store(x[j+4:])
 	}
 	for ; j+4 <= len(x); j += 4 {
-		archsimd.LoadFloat32x4(x[j:]).Max(lv).Min(hv).Store(x[j:])
+		vStdMin(vStdMax(archsimd.LoadFloat32x4(x[j:]), lv), hv).Store(x[j:])
 	}
 	for ; j < len(x); j++ {
-		x[j] = min(max(x[j], lo), hi)
+		x[j] = stdMin(stdMax(x[j], lo), hi)
 	}
 }
 
@@ -213,38 +220,26 @@ func kernDiffPower(yr, er, yi, ei, z []float32) {
 	}
 }
 
-func kernMinGo(x, y, z []float32) {
+func kernStdMin(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
-		archsimd.LoadFloat32x4(x[j:]).Min(archsimd.LoadFloat32x4(y[j:])).Store(z[j:])
+		vStdMin(archsimd.LoadFloat32x4(x[j:]), archsimd.LoadFloat32x4(y[j:])).Store(z[j:])
 	}
 	for ; j < len(x); j++ {
-		z[j] = min(x[j], y[j])
+		z[j] = stdMin(x[j], y[j])
 	}
 }
 
-func kernMaxGo(x, y, z []float32) {
-	y = y[:len(x)]
-	z = z[:len(x)]
-	j := 0
-	for ; j+4 <= len(x); j += 4 {
-		archsimd.LoadFloat32x4(x[j:]).Max(archsimd.LoadFloat32x4(y[j:])).Store(z[j:])
-	}
-	for ; j < len(x); j++ {
-		z[j] = max(x[j], y[j])
-	}
-}
-
-func kernMaxScalarGo(x []float32, a float32) {
+func kernStdMaxScalar(x []float32, a float32) {
 	av := archsimd.BroadcastFloat32x4(a)
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
-		archsimd.LoadFloat32x4(x[j:]).Max(av).Store(x[j:])
+		vStdMax(archsimd.LoadFloat32x4(x[j:]), av).Store(x[j:])
 	}
 	for ; j < len(x); j++ {
-		x[j] = max(x[j], a)
+		x[j] = stdMax(x[j], a)
 	}
 }
 
@@ -263,7 +258,7 @@ func kernSmooth(s, y []float32, c float32) {
 }
 
 // kernNoAudibleEcho evaluates both branches per lane and selects; Div is
-// IEEE division and FMAX is Go's max.
+// IEEE division.
 func kernNoAudibleEcho(nearend, echo, masker, enrT, enrS, emrT, gain *[FftLengthBy2Plus1]float32) {
 	one := archsimd.BroadcastFloat32x4(1)
 	for k := 0; k < FftLengthBy2; k += 4 {
@@ -273,7 +268,7 @@ func kernNoAudibleEcho(nearend, echo, masker, enrT, enrS, emrT, gain *[FftLength
 		et := archsimd.LoadFloat32x4Array((*[4]float32)(enrT[k : k+4]))
 		es := archsimd.LoadFloat32x4Array((*[4]float32)(enrS[k : k+4]))
 		mt := archsimd.LoadFloat32x4Array((*[4]float32)(emrT[k : k+4]))
-		g := es.Sub(enr).Div(es.Sub(et)).Max(mt.Div(emr))
+		g := vStdMax(es.Sub(enr).Div(es.Sub(et)), mt.Div(emr))
 		g.IfElse(enr.Greater(et).And(emr.Greater(mt)), one).StoreArray((*[4]float32)(gain[k : k+4]))
 	}
 	const n = FftLengthBy2
@@ -286,7 +281,7 @@ func kernNoAudibleEchoBin(nearend, echo, masker, enrT, enrS, emrT, gain *[FftLen
 	g := float32(1)
 	if enr > enrT[k] && emr > emrT[k] {
 		g = (enrS[k] - enr) / (enrS[k] - enrT[k])
-		g = max(g, emrT[k]/emr)
+		g = stdMax(g, emrT[k]/emr)
 	}
 	gain[k] = g
 }
@@ -297,7 +292,7 @@ func kernMinGain(w *[FftLengthBy2Plus1]float32, minEchoPower float32, minGain *[
 	mp := archsimd.BroadcastFloat32x4(minEchoPower)
 	for k := 0; k < FftLengthBy2; k += 4 {
 		wv := archsimd.LoadFloat32x4Array((*[4]float32)(w[k : k+4]))
-		mp.Div(wv).IfElse(wv.Greater(zero), one).Min(one).StoreArray((*[4]float32)(minGain[k : k+4]))
+		vStdMin(mp.Div(wv).IfElse(wv.Greater(zero), one), one).StoreArray((*[4]float32)(minGain[k : k+4]))
 	}
 	const n = FftLengthBy2
 	if w[n] > 0 {
@@ -305,7 +300,7 @@ func kernMinGain(w *[FftLengthBy2Plus1]float32, minEchoPower float32, minGain *[
 	} else {
 		minGain[n] = 1
 	}
-	minGain[n] = min(minGain[n], 1)
+	minGain[n] = stdMin(minGain[n], 1)
 }
 
 func kernWeigh(threshold, normalizer float32, echo, weightedEcho []float32) {
@@ -318,7 +313,7 @@ func kernWeigh(threshold, normalizer float32, echo, weightedEcho []float32) {
 	for ; j+4 <= len(echo); j += 4 {
 		e := archsimd.LoadFloat32x4(echo[j:])
 		tmp := th.Sub(e).Mul(nv)
-		w := e.Mul(zero.Max(one.Sub(tmp.Mul(tmp))))
+		w := e.Mul(vStdMax(zero, one.Sub(tmp.Mul(tmp))))
 		w.IfElse(e.Less(th), e).Store(weightedEcho[j:])
 	}
 	kernWeighGeneric(threshold, normalizer, echo[j:], weightedEcho[j:])
@@ -413,12 +408,10 @@ func kernStdMax(x, y, z []float32) {
 	z = z[:len(x)]
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
-		a := archsimd.LoadFloat32x4(x[j:])
-		b := archsimd.LoadFloat32x4(y[j:])
-		b.IfElse(a.Less(b), a).Store(z[j:])
+		vStdMax(archsimd.LoadFloat32x4(x[j:]), archsimd.LoadFloat32x4(y[j:])).Store(z[j:])
 	}
 	for ; j < len(x); j++ {
-		z[j] = stMaxf(x[j], y[j])
+		z[j] = stdMax(x[j], y[j])
 	}
 }
 
@@ -460,7 +453,7 @@ func kernRefinedHError(mu, X2, hError *[FftLengthBy2Plus1]float32) {
 	hError[k] -= float32(float32(float32(0.5*mu[k])*X2[k]) * hError[k])
 }
 
-// kernRefinedLeak selects the leakage per lane; FMAX/FMIN are Go's max/min.
+// kernRefinedLeak selects the leakage per lane.
 func kernRefinedLeak(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []float32, disallowLeakageDiverged bool,
 	leakageConverged, leakageDiverged, errorFloor, errorCeil float32, hError *[FftLengthBy2Plus1]float32) {
 	e := (*[FftLengthBy2Plus1]float32)(erl)
@@ -474,7 +467,7 @@ func kernRefinedLeak(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []floa
 			l = lc.IfElse(kernLd4(E2Refined, k).LessEqual(kernLd4(E2Coarse, k)), ld)
 		}
 		h := kernLd4(hError, k).Add(l.Mul(kernLd4(e, k)))
-		kernSt4(hError, k, h.Max(fl).Min(ce))
+		kernSt4(hError, k, vStdMin(vStdMax(h, fl), ce))
 	}
 	const k = FftLengthBy2
 	if E2Refined[k] <= E2Coarse[k] || disallowLeakageDiverged {
@@ -482,8 +475,8 @@ func kernRefinedLeak(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []floa
 	} else {
 		hError[k] += float32(leakageDiverged * e[k])
 	}
-	hError[k] = max(hError[k], errorFloor)
-	hError[k] = min(hError[k], errorCeil)
+	hError[k] = stdMax(hError[k], errorFloor)
+	hError[k] = stdMin(hError[k], errorCeil)
 }
 
 func kernCoarseMu(X2 *[FftLengthBy2Plus1]float32, gate, rate float32, mu *[FftLengthBy2Plus1]float32) {

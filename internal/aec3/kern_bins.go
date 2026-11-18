@@ -81,19 +81,19 @@ func kernMinMaxGeneric(x []float32) (mn, mx float32) {
 	return mn, mx
 }
 
-// kernClampGeneric sets x = min(max(x, lo), hi) element-wise with Go's
-// min/max (NaN propagates; max prefers +0, min prefers -0). For lo < hi
-// nonzero this equals the compare-based clamp (x < lo ? lo : hi < x ? hi : x)
-// on every non-NaN input and returns NaN for NaN.
+// kernClampGeneric sets x = std::min(std::max(x, lo), hi) element-wise
+// (SuppressionGain::GetMaxGain). For nonzero bounds lo < hi this is also
+// SafeClamp(x, lo, hi) on every input (a value equal to a bound is that
+// bound, and NaN passes through both), as the subtractor and the
+// suppression filter use it.
 func kernClampGeneric(x []float32, lo, hi float32) {
 	for i, v := range x {
-		x[i] = min(max(v, lo), hi)
+		x[i] = stdMin(stdMax(v, lo), hi)
 	}
 }
 
-// The helpers below have archsimd kernels on arm64 only (FMIN/FMAX match
-// Go's min/max there, MINPS/MAXPS on amd64 do not); other builds run these
-// references (kern_bins_other.go).
+// The helpers below have archsimd kernels on arm64 only; other builds run
+// these references (kern_bins_other.go).
 
 // kernMulAdd2Generic sets z = float32(a*b) + float32(c*d) element-wise.
 func kernMulAdd2Generic(a, b, c, d, z []float32) {
@@ -132,28 +132,20 @@ func kernDiffPowerGeneric(yr, er, yi, ei, z []float32) {
 	}
 }
 
-// kernMinGoGeneric sets z = min(x, y) element-wise (Go min).
-func kernMinGoGeneric(x, y, z []float32) {
+// kernStdMinGeneric sets z = std::min(x, y) = (y < x ? y : x) element-wise.
+func kernStdMinGeneric(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
 	for i, v := range x {
-		z[i] = min(v, y[i])
+		z[i] = stdMin(v, y[i])
 	}
 }
 
-// kernMaxGoGeneric sets z = max(x, y) element-wise (Go max).
-func kernMaxGoGeneric(x, y, z []float32) {
-	y = y[:len(x)]
-	z = z[:len(x)]
+// kernStdMaxScalarGeneric sets x = std::max(x, a) = (x < a ? a : x)
+// element-wise.
+func kernStdMaxScalarGeneric(x []float32, a float32) {
 	for i, v := range x {
-		z[i] = max(v, y[i])
-	}
-}
-
-// kernMaxScalarGoGeneric sets x = max(x, a) element-wise (Go max).
-func kernMaxScalarGoGeneric(x []float32, a float32) {
-	for i, v := range x {
-		x[i] = max(v, a)
+		x[i] = stdMax(v, a)
 	}
 }
 
@@ -174,13 +166,13 @@ func kernNoAudibleEchoGeneric(nearend, echo, masker, enrT, enrS, emrT, gain *[Ff
 		g := float32(1)
 		if enr > enrT[k] && emr > emrT[k] {
 			g = (enrS[k] - enr) / (enrS[k] - enrT[k])
-			g = max(g, emrT[k]/emr)
+			g = stdMax(g, emrT[k]/emr)
 		}
 		gain[k] = g
 	}
 }
 
-// kernMinGainGeneric sets minGain = min(w > 0 ? minEchoPower/w : 1, 1).
+// kernMinGainGeneric sets minGain = std::min(w > 0 ? minEchoPower/w : 1, 1).
 func kernMinGainGeneric(w *[FftLengthBy2Plus1]float32, minEchoPower float32, minGain *[FftLengthBy2Plus1]float32) {
 	for k := range minGain {
 		if w[k] > 0 {
@@ -188,17 +180,18 @@ func kernMinGainGeneric(w *[FftLengthBy2Plus1]float32, minEchoPower float32, min
 		} else {
 			minGain[k] = 1
 		}
-		minGain[k] = min(minGain[k], 1)
+		minGain[k] = stdMin(minGain[k], 1)
 	}
 }
 
-// kernWeighGeneric is the loop of sgWeigh over echo/weightedEcho.
+// kernWeighGeneric is the loop of sgWeigh over echo/weightedEcho:
+// echo * std::max(0.f, 1.f - tmp * tmp), where a NaN tmp gives a factor of 0.
 func kernWeighGeneric(threshold, normalizer float32, echo, weightedEcho []float32) {
 	weightedEcho = weightedEcho[:len(echo)]
 	for k, e := range echo {
 		if e < threshold {
 			tmp := float32((threshold - e) * normalizer)
-			weightedEcho[k] = float32(e * max(0, 1-float32(tmp*tmp)))
+			weightedEcho[k] = float32(e * stdMax(0, 1-float32(tmp*tmp)))
 		} else {
 			weightedEcho[k] = e
 		}
@@ -265,7 +258,7 @@ func kernStdMaxGeneric(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
 	for i, v := range x {
-		z[i] = stMaxf(v, y[i])
+		z[i] = stdMax(v, y[i])
 	}
 }
 
@@ -300,8 +293,8 @@ func kernRefinedLeakGeneric(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl
 		} else {
 			hError[k] += float32(leakageDiverged * erl[k])
 		}
-		hError[k] = max(hError[k], errorFloor)
-		hError[k] = min(hError[k], errorCeil)
+		hError[k] = stdMax(hError[k], errorFloor)
+		hError[k] = stdMin(hError[k], errorCeil)
 	}
 }
 

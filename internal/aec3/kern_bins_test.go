@@ -60,8 +60,8 @@ func TestKernBinsElementwise(t *testing.T) {
 				kernCheckExact(t, "Clamp", got, want)
 				if lim[0] < lim[1] && lim[0] != 0 && lim[1] != 0 {
 					for i, v := range x {
-						if v == v && !kernSameBits(want[i], supSafeClamp(v, lim[0], lim[1])) {
-							t.Fatalf("Clamp vs supSafeClamp(%v) = %v, %v", v, want[i], supSafeClamp(v, lim[0], lim[1]))
+						if v == v && !kernSameBits(want[i], stSafeClamp(v, lim[0], lim[1])) {
+							t.Fatalf("Clamp vs SafeClamp(%v) = %v, %v", v, want[i], stSafeClamp(v, lim[0], lim[1]))
 						}
 					}
 				}
@@ -79,12 +79,9 @@ func TestKernBinsElementwise(t *testing.T) {
 			kernOneMinusSq(x, got)
 			kernOneMinusSqGeneric(x, want)
 			kernCheckExact(t, "OneMinusSq", got, want)
-			kernMinGo(x, y, got)
-			kernMinGoGeneric(x, y, want)
-			kernCheckExact(t, "MinGo", got, want)
-			kernMaxGo(x, y, got)
-			kernMaxGoGeneric(x, y, want)
-			kernCheckExact(t, "MaxGo", got, want)
+			kernStdMin(x, y, got)
+			kernStdMinGeneric(x, y, want)
+			kernCheckExact(t, "StdMin", got, want)
 			copy(got, c)
 			copy(want, c)
 			kernAxpy(x, a, got)
@@ -92,9 +89,9 @@ func TestKernBinsElementwise(t *testing.T) {
 			kernCheckExact(t, "Axpy", got, want)
 			copy(got, c)
 			copy(want, c)
-			kernMaxScalarGo(got, a)
-			kernMaxScalarGoGeneric(want, a)
-			kernCheckExact(t, "MaxScalarGo", got, want)
+			kernStdMaxScalar(got, a)
+			kernStdMaxScalarGeneric(want, a)
+			kernCheckExact(t, "StdMaxScalar", got, want)
 			copy(got, c)
 			copy(want, c)
 			kernSmooth(got, x, a)
@@ -288,9 +285,8 @@ func BenchmarkKernBins(b *testing.B) {
 	bench("Axpy", func() { kernAxpy(x, 0.5, z) }, func() { kernAxpyGeneric(x, 0.5, z) })
 	bench("OneMinusSq", func() { kernOneMinusSq(x, z) }, func() { kernOneMinusSqGeneric(x, z) })
 	bench("DiffPower", func() { kernDiffPower(x, y, y, x, z) }, func() { kernDiffPowerGeneric(x, y, y, x, z) })
-	bench("MinGo", func() { kernMinGo(x, y, z) }, func() { kernMinGoGeneric(x, y, z) })
-	bench("MaxGo", func() { kernMaxGo(x, y, z) }, func() { kernMaxGoGeneric(x, y, z) })
-	bench("MaxScalarGo", func() { kernMaxScalarGo(z, 0.1) }, func() { kernMaxScalarGoGeneric(z, 0.1) })
+	bench("StdMin", func() { kernStdMin(x, y, z) }, func() { kernStdMinGeneric(x, y, z) })
+	bench("StdMaxScalar", func() { kernStdMaxScalar(z, 0.1) }, func() { kernStdMaxScalarGeneric(z, 0.1) })
 	bench("Clamp", func() { kernClamp(z, -1, 1) }, func() { kernClampGeneric(z, -1, 1) })
 	bench("Smooth", func() { kernSmooth(z, x, 0.1) }, func() { kernSmoothGeneric(z, x, 0.1) })
 	bench("Div", func() { kernDiv(x, y, z) }, func() { kernDivGeneric(x, y, z) })

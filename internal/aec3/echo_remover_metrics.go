@@ -13,15 +13,15 @@ type DbMetric struct {
 // Update accumulates value into the metric.
 func (m *DbMetric) Update(value float32) {
 	m.SumValue += value
-	m.FloorValue = min(m.FloorValue, value)
-	m.CeilValue = max(m.CeilValue, value)
+	m.FloorValue = stdMin(m.FloorValue, value)
+	m.CeilValue = stdMax(m.CeilValue, value)
 }
 
 // UpdateInstant replaces the sum with value and updates floor and ceiling.
 func (m *DbMetric) UpdateInstant(value float32) {
 	m.SumValue = value
-	m.FloorValue = min(m.FloorValue, value)
-	m.CeilValue = max(m.CeilValue, value)
+	m.FloorValue = stdMin(m.FloorValue, value)
+	m.CeilValue = stdMax(m.CeilValue, value)
 }
 
 // EchoRemoverMetrics handles the metrics collection for the echo remover.
@@ -91,5 +91,5 @@ func TransformDbMetricForReporting(negate bool, minValue, maxValue, offset, scal
 	if negate {
 		newValue = -newValue
 	}
-	return int(min(max(newValue, minValue), maxValue))
+	return int(stSafeClamp(newValue, minValue, maxValue))
 }
