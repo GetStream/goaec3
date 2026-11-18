@@ -70,7 +70,7 @@ oracle-src-rosetta: fetch-webrtc
 # and FMA without CPUID reporting them, so the FMA kernels are forced). It
 # fails on the lane check when Go's detection does not select AVX2 there.
 oracle-src-rosetta-avx2: fetch-webrtc
-	$(ROSETTA_ENV) $(SIMD) GOAEC3_FORCE_FMA=1 GOAEC3_EXPECT_LANE=avx2 $(GO) test -timeout $(ORACLE_TIMEOUT) -tags $(SRC_TAGS) ./internal/webrtcoracle/
+	$(ROSETTA_ENV) $(SIMD) GOAEC3_FORCE_FMA=1 GOAEC3_FORCE_LANE=avx2 GOAEC3_EXPECT_LANE=avx2 $(GO) test -timeout $(ORACLE_TIMEOUT) -tags $(SRC_TAGS) ./internal/webrtcoracle/
 
 # x86 SSE2/AVX2 Ooura FFT, spectrum and vector-math kernels against their C++
 # sources (under Rosetta 2 on Apple silicon).

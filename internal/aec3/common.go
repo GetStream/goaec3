@@ -11,6 +11,7 @@ package aec3
 
 import (
 	"math"
+	"os"
 )
 
 // Aec3Optimization selects the kernel family, as in aec3_common.h.
@@ -65,10 +66,19 @@ func GetRenderDelayBufferSize(downSamplingFactor, numMatchedFilters, filterLengt
 // DetectOptimization mirrors aec3_common.cc: AVX2, else SSE2 on amd64; NEON
 // on arm64 (libwebrtc's arm64 build always has NEON); OptNone elsewhere. The
 // purego build always reports OptNone (the scalar C reference lane).
+//
+// GOAEC3_FORCE_LANE=none|sse2|avx2|neon overrides the detected lane for
+// testing (for example the AVX2 lane under Rosetta, which hides AVX/BMI2 from
+// CPUID). A lane the architecture cannot run is ignored. The purego build
+// ignores the override.
 func DetectOptimization() Aec3Optimization {
-	switch {
-	case purego:
+	if purego {
 		return OptNone
+	}
+	if opt, ok := forcedLane(); ok {
+		return opt
+	}
+	switch {
 	case isAMD64 && hasAVX2():
 		return OptAvx2
 	case isAMD64:
@@ -77,6 +87,20 @@ func DetectOptimization() Aec3Optimization {
 		return OptNeon
 	}
 	return OptNone
+}
+
+func forcedLane() (Aec3Optimization, bool) {
+	switch os.Getenv("GOAEC3_FORCE_LANE") {
+	case "none":
+		return OptNone, true
+	case "sse2":
+		return OptSse2, isAMD64
+	case "avx2":
+		return OptAvx2, isAMD64
+	case "neon":
+		return OptNeon, isARM64
+	}
+	return OptNone, false
 }
 
 // FastApproxLog2f reinterprets the float bits as an integer and rescales.
