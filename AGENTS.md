@@ -52,6 +52,10 @@ write changelog narrative.
   does.
 - No hand-written assembly. Kernels are archsimd; a kernel archsimd cannot
   express stays pure Go. Gate x86 kernels with `archsimd.X86.AVX2()` etc.
+- End every 256-bit archsimd section with `archsimd.ClearAVXUpperBits()`
+  (VZEROUPPER). Go's scalar float code is legacy-SSE encoded, so a dirty upper
+  YMM state makes every later scalar float op pay the AVX→SSE transition
+  penalty: on Intel this made the AVX2 lane 16× slower per frame.
 - CPU detection (`DetectOptimization`): one routine for builds with and
   without `GOEXPERIMENT=simd`, `golang.org/x/sys/cpu` with libwebrtc's kAVX2
   condition (AVX, OSXSAVE/YMM, AVX2, BMI2), so both builds pick the same lane
