@@ -1,0 +1,165 @@
+name: bench
+
+# Time per 10 ms frame of the Go public API against libwebrtc's
+# EchoCanceller3 built from the pinned sources (webrtc_src_oracle), per lane,
+# on GitHub-hosted x86_64 (AVX2 + FMA) and arm64 runners. Each job prints its
+# table and a CPU profile of the Go side to the job summary and uploads the
+# raw output, the profile and the test binary; the summary job collects every
+# lane into one table.
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "benchmark -count"
+        default: "6"
+      benchtime:
+        description: "benchmark -benchtime"
+        default: "2000x"
+  push:
+    branches: ["perf/**"]
+    paths-ignore: ["**.md"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.27.4"
+  # GOAMD64=v1 keeps AVX2 switchable through GODEBUG=cpu.avx2=off.
+  GOAMD64: v1
+  GOTOOLCHAIN: local
+
+jobs:
+  bench:
+    name: bench (${{ matrix.os }}, ${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 runners have AVX2 and FMA.
+          - { os: ubuntu-latest, name: avx2-simd, lane: avx2, experiment: simd }
+          - { os: ubuntu-latest, name: sse2-simd, lane: sse2, experiment: simd, godebug: cpu.avx2=off }
+          - { os: ubuntu-latest, name: avx2, lane: avx2 }
+          - { os: ubuntu-latest, name: sse2, lane: sse2, godebug: cpu.avx2=off }
+          - { os: ubuntu-24.04-arm, name: neon-simd, lane: neon, experiment: simd }
+          - { os: ubuntu-24.04-arm, name: neon, lane: neon }
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: clang
+      CXX: clang++
+      GOEXPERIMENT: ${{ matrix.experiment }}
+      GODEBUG: ${{ matrix.godebug }}
+      # TestMain fails the binary unless Go and the C++ build run this lane.
+      GOAEC3_EXPECT_LANE: ${{ matrix.lane }}
+      COUNT: ${{ inputs.count || '6' }}
+      BENCHTIME: ${{ inputs.benchtime || '2000x' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Cache WebRTC sources
+        uses: actions/cache@v4
+        with:
+          path: tmp_check/webrtc-m141
+          key: webrtc-m141-${{ hashFiles('scripts/fetch-webrtc.sh') }}
+      - name: Fetch WebRTC sources
+        run: bash scripts/fetch-webrtc.sh
+      - name: clang
+        run: |
+          command -v clang >/dev/null || { sudo apt-get update && sudo apt-get install -y clang; }
+          clang --version
+      - name: Table script
+        run: |
+          cat >"$RUNNER_TEMP/table.awk" <<'AWK'
+          # Reads go test -bench output of BenchmarkEc3VsLibwebrtc and prints
+          # one row per case: medians in µs and the Go/C++ ratio, as a
+          # markdown row, or as CSV (os,lane,case,go,cpp,ratio) with csv=1.
+          function median(s,   a, n, i, j, t) {
+            n = split(s, a, " ")
+            for (i = 2; i <= n; i++) for (j = i; j > 1 && a[j-1] + 0 > a[j] + 0; j--) { t = a[j]; a[j] = a[j-1]; a[j-1] = t }
+            return n % 2 ? a[(n+1)/2] : (a[n/2] + a[n/2+1]) / 2
+          }
+          $1 ~ /^BenchmarkEc3VsLibwebrtc\// && $4 == "ns/op" {
+            split($1, p, "/"); c = p[2]; impl = p[3]; sub(/-[0-9]+$/, "", impl)
+            if (!(c in seen)) { seen[c] = 1; order[++nc] = c }
+            v[c, impl] = v[c, impl] " " $3
+          }
+          END {
+            for (i = 1; i <= nc; i++) {
+              c = order[i]; g = median(v[c, "go"]) / 1000; w = median(v[c, "libwebrtc"]) / 1000
+              if (csv) printf "%s,%s,%s,%.1f,%.1f,%.2f\n", os, lane, c, g, w, g / w
+              else printf "| %s | %.1f | %.1f | %.2f |\n", c, g, w, g / w
+            }
+          }
+          AWK
+      - name: CPU
+        run: |
+          lscpu | tee cpu.txt
+          model=$(lscpu | sed -n 's/^Model name: *//p' | head -1)
+          echo "CPU_MODEL=${model:-unknown}" >>"$GITHUB_ENV"
+      - name: Build the benchmark binary
+        run: go test -c -o bench.test -tags webrtc_src_oracle ./internal/webrtcoracle/
+      - name: Benchmark
+        run: |
+          ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc' \
+            -test.benchtime "$BENCHTIME" -test.count "$COUNT" | tee bench.txt
+      - name: Profile
+        run: |
+          ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc/.*/go' \
+            -test.benchtime 20000x -test.count 1 -test.cpuprofile cpu.pprof >/dev/null
+          go tool pprof -top -nodecount=40 -focus='goaec3' bench.test cpu.pprof | tee pprof.txt
+      - name: Summary
+        run: |
+          {
+            echo "### ${{ matrix.name }} on ${{ matrix.os }}"
+            echo
+            echo "CPU: $CPU_MODEL. Go ${GO_VERSION}, GOEXPERIMENT=${GOEXPERIMENT:-(none)}, GODEBUG=${GODEBUG:-(none)}."
+            echo "Median of $COUNT runs, µs per 10 ms frame."
+            echo
+            echo "| Case | goaec3 | libwebrtc (C++) | Go / C++ |"
+            echo "| --- | --- | --- | --- |"
+            awk -f "$RUNNER_TEMP/table.awk" bench.txt
+            echo
+            echo "<details><summary>Profile (Go side)</summary>"
+            echo
+            echo '```'
+            head -50 pprof.txt
+            echo '```'
+            echo "</details>"
+          } >>"$GITHUB_STEP_SUMMARY"
+          awk -v lane="${{ matrix.name }}" -v os="${{ matrix.os }}" -v csv=1 -f "$RUNNER_TEMP/table.awk" bench.txt >rows.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.os }}-${{ matrix.name }}
+          path: |
+            bench.txt
+            cpu.txt
+            cpu.pprof
+            pprof.txt
+            rows.csv
+            bench.test
+
+  summary:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-*
+          path: results
+      - name: Table
+        run: |
+          {
+            echo "### goaec3 vs libwebrtc, µs per 10 ms frame (median)"
+            echo
+            echo "| Runner | Lane | Case | goaec3 | libwebrtc (C++) | Go / C++ |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            cat results/*/rows.csv | sort -t, -k1,1 -k2,2 -k3,3 |
+              awk -F, '{ printf "| %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6 }'
+          } >>"$GITHUB_STEP_SUMMARY"
