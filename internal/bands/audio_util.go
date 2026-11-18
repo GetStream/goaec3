@@ -52,34 +52,32 @@ func bsCopysignHalf(v float32) float32 {
 	return 0.5
 }
 
-// FloatS16ToS16Slice converts src into dest (len(src) samples).
-func FloatS16ToS16Slice(src []float32, dest []int16) {
+// The slice conversions dispatch to archsimd kernels under GOEXPERIMENT=simd
+// (audio_util_simd_*.go). The ...Ref functions are the scalar spec: every
+// kernel is elementwise and bit-identical to them.
+
+func floatS16ToS16SliceRef(src []float32, dest []int16) {
 	dest = dest[:len(src)]
 	for i, v := range src {
 		dest[i] = FloatS16ToS16(v)
 	}
 }
 
-// S16ToFloatS16Slice converts src into dest (len(src) samples).
-func S16ToFloatS16Slice(src []int16, dest []float32) {
+func s16ToFloatS16SliceRef(src []int16, dest []float32) {
 	dest = dest[:len(src)]
 	for i, v := range src {
 		dest[i] = float32(v)
 	}
 }
 
-// FloatToFloatS16Slice converts src into dest (len(src) samples); src and
-// dest may alias.
-func FloatToFloatS16Slice(src, dest []float32) {
+func floatToFloatS16SliceRef(src, dest []float32) {
 	dest = dest[:len(src)]
 	for i, v := range src {
 		dest[i] = FloatToFloatS16(v)
 	}
 }
 
-// FloatS16ToFloatSlice converts src into dest (len(src) samples); src and
-// dest may alias.
-func FloatS16ToFloatSlice(src, dest []float32) {
+func floatS16ToFloatSliceRef(src, dest []float32) {
 	dest = dest[:len(src)]
 	for i, v := range src {
 		dest[i] = FloatS16ToFloat(v)

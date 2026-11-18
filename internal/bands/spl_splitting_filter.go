@@ -84,9 +84,9 @@ func bsAllPassQMF(inData []int32, outData []int32, filterCoefficients *[3]uint16
 	filterState[5] = outData[n-1]
 }
 
-// AnalysisQMF mirrors WebRtcSpl_AnalysisQMF: it splits inData (even length,
-// at most 640 samples) into lowBand and highBand of len(inData)/2 samples.
-func AnalysisQMF(inData []int16, lowBand, highBand []int16, filterState1, filterState2 *[6]int32) {
+// analysisQMFRef is WebRtcSpl_AnalysisQMF loop for loop; AnalysisQMF is
+// tested against it.
+func analysisQMFRef(inData []int16, lowBand, highBand []int16, filterState1, filterState2 *[6]int32) {
 	var halfIn1, halfIn2, filter1, filter2 [bsMaxBandFrameLength]int32
 	bandLength := len(inData) / 2
 
@@ -113,9 +113,9 @@ func AnalysisQMF(inData []int16, lowBand, highBand []int16, filterState1, filter
 	}
 }
 
-// SynthesisQMF mirrors WebRtcSpl_SynthesisQMF: it merges lowBand and highBand
-// (len(lowBand) samples each, at most 320) into 2*len(lowBand) samples.
-func SynthesisQMF(lowBand, highBand []int16, outData []int16, filterState1, filterState2 *[6]int32) {
+// synthesisQMFRef is WebRtcSpl_SynthesisQMF loop for loop; SynthesisQMF is
+// tested against it.
+func synthesisQMFRef(lowBand, highBand []int16, outData []int16, filterState1, filterState2 *[6]int32) {
 	var halfIn1, halfIn2, filter1, filter2 [bsMaxBandFrameLength]int32
 	bandLength := len(lowBand)
 	highBand = highBand[:bandLength]
@@ -146,4 +146,70 @@ func SynthesisQMF(lowBand, highBand []int16, outData []int16, filterState1, filt
 		outData[k] = SatW32ToW16(tmp)
 		k++
 	}
+}
+
+// The QMF filters below compute exactly what the reference loops compute,
+// in integer arithmetic, but in one pass over the samples: the three
+// all-pass cascades of both branches advance together, which turns six
+// serial recurrences into independent work per sample, and the even/odd
+// split and the band combination need no scratch buffers.
+
+// bsSubSat32 is WebRtcSpl_SubSatW32 without branches.
+func bsSubSat32(a, b int32) int32 {
+	d := int64(a) - int64(b)
+	return int32(min(max(d, -2147483648), 2147483647))
+}
+
+// bsSat16 is WebRtcSpl_SatW32ToW16 without branches.
+func bsSat16(v int32) int16 { return int16(min(max(v, -32768), 32767)) }
+
+// bsAllPass is one sample of the three all-pass cascades of
+// WebRtcSpl_AllPassQMF. s holds, per cascade j, the previous input
+// (s[2j]) and the previous output (s[2j+1]), which is the filter state
+// layout of the reference after each call.
+func bsAllPass(x int32, c *[3]uint16, s *[6]int32) int32 {
+	y := bsScaleDiff32(c[0], bsSubSat32(x, s[1]), s[0])
+	s[0], s[1] = x, y
+	z := bsScaleDiff32(c[1], bsSubSat32(y, s[3]), s[2])
+	s[2], s[3] = y, z
+	w := bsScaleDiff32(c[2], bsSubSat32(z, s[5]), s[4])
+	s[4], s[5] = z, w
+	return w
+}
+
+// AnalysisQMF mirrors WebRtcSpl_AnalysisQMF: it splits inData (even length,
+// at most 640 samples) into lowBand and highBand of len(inData)/2 samples.
+func AnalysisQMF(inData []int16, lowBand, highBand []int16, filterState1, filterState2 *[6]int32) {
+	bandLength := len(inData) / 2
+	inData = inData[:2*bandLength]
+	lowBand = lowBand[:bandLength]
+	highBand = highBand[:bandLength]
+	s1, s2 := *filterState1, *filterState2
+	for i := range lowBand {
+		// Odd samples go through filter 1, even samples through filter 2,
+		// both in Q10.
+		f2 := bsAllPass(int32(inData[2*i])*(1<<10), &bsAllPassFilter2, &s2)
+		f1 := bsAllPass(int32(inData[2*i+1])*(1<<10), &bsAllPassFilter1, &s1)
+		lowBand[i] = bsSat16((f1 + f2 + 1024) >> 11)
+		highBand[i] = bsSat16((f1 - f2 + 1024) >> 11)
+	}
+	*filterState1, *filterState2 = s1, s2
+}
+
+// SynthesisQMF mirrors WebRtcSpl_SynthesisQMF: it merges lowBand and highBand
+// (len(lowBand) samples each, at most 320) into 2*len(lowBand) samples.
+func SynthesisQMF(lowBand, highBand []int16, outData []int16, filterState1, filterState2 *[6]int32) {
+	bandLength := len(lowBand)
+	highBand = highBand[:bandLength]
+	outData = outData[:2*bandLength]
+	s1, s2 := *filterState1, *filterState2
+	for i, l := range lowBand {
+		h := highBand[i]
+		// Sum and difference channels in Q10.
+		f1 := bsAllPass((int32(l)+int32(h))*(1<<10), &bsAllPassFilter2, &s1)
+		f2 := bsAllPass((int32(l)-int32(h))*(1<<10), &bsAllPassFilter1, &s2)
+		outData[2*i] = bsSat16((f2 + 512) >> 10)
+		outData[2*i+1] = bsSat16((f1 + 512) >> 10)
+	}
+	*filterState1, *filterState2 = s1, s2
 }
