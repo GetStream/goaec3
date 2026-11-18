@@ -61,8 +61,15 @@ func biquadTestSignal(rng *rand.Rand, x []float32) {
 	}
 }
 
+// equalBits returns the first index where a and b differ, -1 if none: bit
+// for bit, except that any two NaNs match (as in kernCheckExact; the NaN sign
+// and payload depend on the operand order the compiler picks for a
+// commutative operation on amd64, as they do for the C++).
 func equalBits(a, b []float32) int {
 	for i := range a {
+		if a[i] != a[i] && b[i] != b[i] {
+			continue
+		}
 		if math.Float32bits(a[i]) != math.Float32bits(b[i]) {
 			return i
 		}
