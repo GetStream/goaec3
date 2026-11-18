@@ -60,6 +60,9 @@ for {
   like WebRTC's render and capture threads. `NotifyEchoPathGainChange` may be
   called from any goroutine.
 - Frames are caller-owned. Once warmed up, the hot path allocates nothing.
+- Non-finite input (NaN) poisons the canceller's state permanently, exactly
+  as in libwebrtc: every later output is NaN while the metrics can still look
+  healthy. Sanitize input upstream, or create a new canceller.
 - Default settings find echo delays up to about 0.5 s; raise
   `Config.Delay.NumFilters` for longer paths (each filter adds about 96 ms).
 
@@ -129,7 +132,7 @@ What is checked, every value bit for bit (`math.Float32bits` equality):
   (all 134 fields), call patterns and audio, with 60 s+ runs.
 - **Edge inputs**: NaN, ±Inf, ±0 and extreme gains, including C++
   `std::min`/`std::max` semantics; non-finite inputs give the same output as
-  libwebrtc.
+  libwebrtc (NaN payloads aside).
 
 Floating point follows the C++ build: libwebrtc is built with
 `-ffp-contract=off`, so goaec3 fuses multiply-adds only where the C++ uses an
@@ -137,7 +140,8 @@ FMA intrinsic, and a test fails if the compiler fuses one anywhere else.
 AEC3 reaches libm only through `exp2f`, `exp10f` and `log10f`. Their float
 results differ between Apple libm and glibc, so goaec3 uses the correctly
 rounded value, and the oracle substitutes the same functions. Against stock,
-unmodified libwebrtc, 18 scenarios of 60 s each matched bit for bit too.
+unmodified libwebrtc with Apple libm, 18 scenarios of 60 s each matched bit
+for bit too (glibc is not yet compared).
 
 Robustness: native fuzzing of the public API, a one-hour soak per setup
 (echo reduction holds at 31–37 dB), `-race` tests for concurrent render and
@@ -162,10 +166,20 @@ libwebrtc m141's `EchoCanceller3` driven through `webrtc::AudioBuffer`
 | 48 kHz mono | **64 µs** | 75 µs | 257 µs |
 | 48 kHz stereo | **91 µs** | 101 µs | 378 µs |
 
-With `GOEXPERIMENT=simd` goaec3 is 10–14% faster than libwebrtc while
-producing the same output bit for bit; that is under 1% of one core per
-stream at 16 kHz. Without the experiment the same lanes run as plain Go,
-about 3.5× slower. Zero allocations per frame in every case.
+On arm64 with `GOEXPERIMENT=simd`, goaec3 is 10–14% faster than the prebuilt
+libwebrtc and 2–12% faster than the same C++ built from source with clang
+`-O2`, while producing the same output bit for bit; that is under 1% of one
+core per stream at 16 kHz. Zero allocations per frame in every case.
+
+Scope of these numbers:
+
+- **Build flag.** Without `GOEXPERIMENT=simd` the same lanes run as plain Go,
+  about 3.5–4× slower than libwebrtc on arm64. Build with the experiment.
+- **amd64.** Parity on amd64 (SSE2 and AVX2) is proven in CI on real
+  hardware, but speed against libwebrtc has not yet been measured on real x86
+  hardware. A build without `GOEXPERIMENT=simd` on an AVX2 machine is
+  especially slow: the AVX2 lane's fused multiply-adds then run as software
+  float32 FMAs.
 
 ```sh
 GOEXPERIMENT=simd go test -tags webrtc_oracle -run '^$' -bench BenchmarkEc3VsLibwebrtc ./internal/webrtcoracle/
