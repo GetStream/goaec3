@@ -25,13 +25,10 @@ func afirTestRenderBuffer(rng *rand.Rand, size, numChannels, read int) *RenderBu
 	return NewRenderBuffer(NewBlockBuffer(size, 1, numChannels), NewSpectrumBuffer(size, numChannels), fb)
 }
 
-func afirTestH(rng *rand.Rand, numPartitions, numChannels int) [][]FftData {
-	H := make([][]FftData, numPartitions)
-	for p := range H {
-		H[p] = make([]FftData, numChannels)
-		for ch := range H[p] {
-			afirTestRandFft(rng, &H[p][ch], 0.1)
-		}
+func afirTestH(rng *rand.Rand, numPartitions, numChannels int) FirCoefficients {
+	H := NewFirCoefficients(numPartitions, numChannels)
+	for i := range H.Flat() {
+		afirTestRandFft(rng, &H.Flat()[i], 0.1)
 	}
 	return H
 }
@@ -63,9 +60,9 @@ func afirEqualArr(t *testing.T, what string, got, want []float32) {
 // proves the archsimd kernels against the scalar reference.
 func TestAfirLanesMatchScalar(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
-	type applyFn func(*RenderBuffer, int, [][]FftData, *FftData)
-	type adaptFn func(*RenderBuffer, *FftData, int, [][]FftData)
-	type frFn func(int, [][]FftData, [][FftLengthBy2Plus1]float32)
+	type applyFn func(*RenderBuffer, int, FirCoefficients, *FftData)
+	type adaptFn func(*RenderBuffer, *FftData, int, FirCoefficients)
+	type frFn func(int, FirCoefficients, [][FftLengthBy2Plus1]float32)
 	type erlFn func([][FftLengthBy2Plus1]float32, []float32)
 	applies := map[string]applyFn{"neon": ApplyFilterNeon, "sse2": ApplyFilterSse2, "avx2": ApplyFilterAvx2}
 	adapts := map[string]adaptFn{"neon": AdaptPartitionsNeon, "sse2": AdaptPartitionsSse2, "avx2": AdaptPartitionsAvx2}
@@ -95,9 +92,9 @@ func TestAfirLanesMatchScalar(t *testing.T) {
 		for name, f := range adapts {
 			Hg := afirCopyH(H)
 			f(rb, &G, np, Hg)
-			for p := range Hg {
-				for ch := range Hg[p] {
-					afirEqualFft(t, "AdaptPartitions "+name, &Hg[p][ch], &Hw[p][ch])
+			for p := range Hg.NumPartitions() {
+				for ch := range Hg.At(p) {
+					afirEqualFft(t, "AdaptPartitions "+name, &Hg.At(p)[ch], &Hw.At(p)[ch])
 				}
 			}
 		}
@@ -212,13 +209,7 @@ func BenchmarkAfirMaxAbsUpdate(b *testing.B) {
 	})
 }
 
-func afirCopyH(H [][]FftData) [][]FftData {
-	c := make([][]FftData, len(H))
-	for p := range H {
-		c[p] = append([]FftData(nil), H[p]...)
-	}
-	return c
-}
+func afirCopyH(H FirCoefficients) FirCoefficients { return H.Clone() }
 
 // The AVX2 frequency response (fused) against its pure-Go reference; in
 // amd64 SIMD builds with AVX2+FMA this checks the archsimd kernel.
@@ -231,15 +222,15 @@ func TestAfirFreqRespAvx2(t *testing.T) {
 		H := afirTestH(rng, np, numCh)
 		if trial%3 == 0 {
 			for j := 0; j < FftLengthBy2; j++ {
-				H[0][0].Im[j] = im
-				H[0][0].Re[j] = float32(1e-17 * float64(j+1))
+				H.At(0)[0].Im[j] = im
+				H.At(0)[0].Re[j] = float32(1e-17 * float64(j+1))
 			}
 		}
 		want := make([][FftLengthBy2Plus1]float32, np)
 		for p := 0; p < np; p++ {
 			for ch := 0; ch < numCh; ch++ {
-				afirFreqRespBlockAvx2Go(&H[p][ch], &want[p])
-				afirFreqRespBinsGo(&H[p][ch], &want[p], FftLengthBy2, FftLengthBy2Plus1)
+				afirFreqRespBlockAvx2Go(&H.At(p)[ch], &want[p])
+				afirFreqRespBinsGo(&H.At(p)[ch], &want[p], FftLengthBy2, FftLengthBy2Plus1)
 			}
 		}
 		got := make([][FftLengthBy2Plus1]float32, np)
@@ -274,7 +265,7 @@ func TestAfirAdaptiveFirFilterNoAllocs(t *testing.T) {
 	}
 }
 
-func afirBenchSetup(b *testing.B) (*RenderBuffer, [][]FftData, *FftData) {
+func afirBenchSetup(b *testing.B) (*RenderBuffer, FirCoefficients, *FftData) {
 	rng := rand.New(rand.NewSource(6))
 	rb := afirTestRenderBuffer(rng, 20, 1, 15)
 	H := afirTestH(rng, 13, 1)
@@ -304,7 +295,7 @@ func BenchmarkAfirApplyFilter(b *testing.B) {
 
 func BenchmarkAfirAdaptPartitions(b *testing.B) {
 	rb, H, G := afirBenchSetup(b)
-	fns := map[string]func(*RenderBuffer, *FftData, int, [][]FftData){
+	fns := map[string]func(*RenderBuffer, *FftData, int, FirCoefficients){
 		"None": AdaptPartitions, "Neon": AdaptPartitionsNeon, "Sse2": AdaptPartitionsSse2, "Avx2": AdaptPartitionsAvx2,
 	}
 	for _, l := range afirBenchLanes {
@@ -319,7 +310,7 @@ func BenchmarkAfirAdaptPartitions(b *testing.B) {
 func BenchmarkAfirComputeFrequencyResponse(b *testing.B) {
 	_, H, _ := afirBenchSetup(b)
 	H2 := make([][FftLengthBy2Plus1]float32, 13)
-	fns := map[string]func(int, [][]FftData, [][FftLengthBy2Plus1]float32){
+	fns := map[string]func(int, FirCoefficients, [][FftLengthBy2Plus1]float32){
 		"None": ComputeFrequencyResponse, "Neon": ComputeFrequencyResponseNeon, "Sse2": ComputeFrequencyResponseSse2, "Avx2": ComputeFrequencyResponseAvx2,
 	}
 	for _, l := range afirBenchLanes {

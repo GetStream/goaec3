@@ -64,12 +64,8 @@ func (r *SrcRenderBuffer) SetFft(index, ch int, d *aec3.FftData) {
 func (r *SrcRenderBuffer) SetRead(read int) { C.src_kern_rb_set_read(r.p, C.int(read)) }
 
 // srcFlatH packs H[partition][channel] contiguously.
-func srcFlatH(H [][]aec3.FftData) []aec3.FftData {
-	out := make([]aec3.FftData, 0, len(H)*len(H[0]))
-	for p := range H {
-		out = append(out, H[p]...)
-	}
-	return out
+func srcFlatH(H aec3.FirCoefficients) []aec3.FftData {
+	return append([]aec3.FftData(nil), H.Flat()...)
 }
 
 func SrcApplyFilter(rb *SrcRenderBuffer, lane aec3.Aec3Optimization, numPartitions int, H []aec3.FftData,

@@ -108,15 +108,13 @@ func afirCmp(t *testing.T, what string, got, want []float32) {
 	}
 }
 
-func afirRandH(rng *rand.Rand, P, C int, scale float64) [][]aec3.FftData {
-	H := make([][]aec3.FftData, P)
-	for p := range H {
-		H[p] = make([]aec3.FftData, C)
-		for ch := range H[p] {
-			for k := range H[p][ch].Re {
-				H[p][ch].Re[k] = float32(rng.NormFloat64() * scale)
-				H[p][ch].Im[k] = float32(rng.NormFloat64() * scale)
-			}
+func afirRandH(rng *rand.Rand, P, C int, scale float64) aec3.FirCoefficients {
+	H := aec3.NewFirCoefficients(P, C)
+	for i := range H.Flat() {
+		h := &H.Flat()[i]
+		for k := range h.Re {
+			h.Re[k] = float32(rng.NormFloat64() * scale)
+			h.Im[k] = float32(rng.NormFloat64() * scale)
 		}
 	}
 	return H
@@ -155,10 +153,7 @@ func TestAfirKernelsParity(t *testing.T) {
 				AfirApplyFilter(e.c, l.lane, np, flat, P, numCh, &Sc)
 				afirCmpFft(t, name+" ApplyFilter", &Sg, &Sc)
 
-				Hg := make([][]aec3.FftData, P)
-				for p := range H {
-					Hg[p] = append([]aec3.FftData(nil), H[p]...)
-				}
+				Hg := H.Clone()
 				fc := append([]aec3.FftData(nil), flat...)
 				adapt(e.rb, &G, np, Hg)
 				AfirAdaptPartitions(e.c, l.lane, &G, np, fc, P, numCh)

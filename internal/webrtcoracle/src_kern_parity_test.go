@@ -127,9 +127,9 @@ func TestSrcMatchedFilterCoreParity(t *testing.T) {
 }
 
 type srcAfirKernels struct {
-	apply func(*aec3.RenderBuffer, int, [][]aec3.FftData, *aec3.FftData)
-	adapt func(*aec3.RenderBuffer, *aec3.FftData, int, [][]aec3.FftData)
-	fr    func(int, [][]aec3.FftData, [][aec3.FftLengthBy2Plus1]float32)
+	apply func(*aec3.RenderBuffer, int, aec3.FirCoefficients, *aec3.FftData)
+	adapt func(*aec3.RenderBuffer, *aec3.FftData, int, aec3.FirCoefficients)
+	fr    func(int, aec3.FirCoefficients, [][aec3.FftLengthBy2Plus1]float32)
 	erl   func([][aec3.FftLengthBy2Plus1]float32, []float32)
 }
 
@@ -187,12 +187,9 @@ func TestSrcAdaptiveFilterKernelsParity(t *testing.T) {
 					c.SetRead(fb.Read)
 					P := 1 + rng.Intn(size)
 					np := rng.Intn(P + 1)
-					H := make([][]aec3.FftData, P)
-					for p := range H {
-						H[p] = make([]aec3.FftData, numCh)
-						for ch := range H[p] {
-							srcRandFft(rng, &H[p][ch], 0.05)
-						}
+					H := aec3.NewFirCoefficients(P, numCh)
+					for i := range H.Flat() {
+						srcRandFft(rng, &H.Flat()[i], 0.05)
 					}
 					flat := srcFlatH(H)
 					var G aec3.FftData

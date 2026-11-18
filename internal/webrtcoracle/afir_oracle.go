@@ -45,11 +45,9 @@ func (r *AfirRenderBuffer) SetRead(fftRead, spectrumRead, blockRead int) {
 }
 
 // AfirFlatH packs H[partition][channel] contiguously.
-func AfirFlatH(H [][]aec3.FftData) []aec3.FftData {
-	out := make([]aec3.FftData, 0, len(H)*len(H[0]))
-	for p := range H {
-		out = append(out, H[p]...)
-	}
+func AfirFlatH(H aec3.FirCoefficients) []aec3.FftData {
+	out := make([]aec3.FftData, 0, len(H.Flat()))
+	out = append(out, H.Flat()...)
 	return out
 }
 

@@ -15,33 +15,33 @@ package aec3
 // numerically (it uses _mm256_fmadd_ps).
 
 // ComputeFrequencyResponse is aec3::ComputeFrequencyResponse (scalar).
-func ComputeFrequencyResponse(numPartitions int, H [][]FftData, H2 [][FftLengthBy2Plus1]float32) {
+func ComputeFrequencyResponse(numPartitions int, H FirCoefficients, H2 [][FftLengthBy2Plus1]float32) {
 	for i := range H2 {
 		H2[i] = [FftLengthBy2Plus1]float32{}
 	}
-	numRenderChannels := len(H[0])
+	numRenderChannels := H.NumChannels()
 	for p := 0; p < numPartitions; p++ {
 		h2 := &H2[p]
 		for ch := 0; ch < numRenderChannels; ch++ {
-			afirFreqRespBinsGo(&H[p][ch], h2, 0, FftLengthBy2Plus1)
+			afirFreqRespBinsGo(&H.At(p)[ch], h2, 0, FftLengthBy2Plus1)
 		}
 	}
 }
 
 // ComputeFrequencyResponseNeon is aec3::ComputeFrequencyResponse_Neon.
-func ComputeFrequencyResponseNeon(numPartitions int, H [][]FftData, H2 [][FftLengthBy2Plus1]float32) {
+func ComputeFrequencyResponseNeon(numPartitions int, H FirCoefficients, H2 [][FftLengthBy2Plus1]float32) {
 	afirComputeFrequencyResponseSimd(OptNeon, numPartitions, H, H2)
 }
 
 // ComputeFrequencyResponseSse2 is aec3::ComputeFrequencyResponse_Sse2.
-func ComputeFrequencyResponseSse2(numPartitions int, H [][]FftData, H2 [][FftLengthBy2Plus1]float32) {
+func ComputeFrequencyResponseSse2(numPartitions int, H FirCoefficients, H2 [][FftLengthBy2Plus1]float32) {
 	afirComputeFrequencyResponseSimd(OptSse2, numPartitions, H, H2)
 }
 
-func afirComputeFrequencyResponseSimd(opt Aec3Optimization, numPartitions int, H [][]FftData, H2 [][FftLengthBy2Plus1]float32) {
+func afirComputeFrequencyResponseSimd(opt Aec3Optimization, numPartitions int, H FirCoefficients, H2 [][FftLengthBy2Plus1]float32) {
 	if opt == OptNeon && afirHasNeonFreqResp {
 		for p := 0; p < numPartitions; p++ {
-			afirFreqRespPartitionNEON(H[p], &H2[p])
+			afirFreqRespPartitionNEON(H.At(p), &H2[p])
 		}
 		for i := numPartitions; i < len(H2); i++ {
 			H2[i] = [FftLengthBy2Plus1]float32{}
@@ -51,11 +51,11 @@ func afirComputeFrequencyResponseSimd(opt Aec3Optimization, numPartitions int, H
 	for i := range H2 {
 		H2[i] = [FftLengthBy2Plus1]float32{}
 	}
-	numRenderChannels := len(H[0])
+	numRenderChannels := H.NumChannels()
 	for p := 0; p < numPartitions; p++ {
 		h2 := &H2[p]
 		for ch := 0; ch < numRenderChannels; ch++ {
-			hp := &H[p][ch]
+			hp := &H.At(p)[ch]
 			afirFreqRespBlock(opt, hp, h2)
 			afirFreqRespBinsGo(hp, h2, FftLengthBy2, FftLengthBy2Plus1)
 		}
@@ -94,14 +94,14 @@ func afirFreqRespBlockSse2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 }
 
 // AdaptPartitions is aec3::AdaptPartitions (scalar): H(t+1)=H(t)+G(t)*conj(X(t)).
-func AdaptPartitions(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
+func AdaptPartitions(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H FirCoefficients) {
 	data := renderBuffer.GetFftBuffer()
 	index := renderBuffer.Position()
 	numRenderChannels := data.NumChannels()
 	for p := 0; p < numPartitions; p++ {
 		x := data.At(index)
 		for ch := 0; ch < numRenderChannels; ch++ {
-			afirAdaptAllGo(&x[ch], G, &H[p][ch])
+			afirAdaptAllGo(&x[ch], G, &H.At(p)[ch])
 		}
 		if index < data.Size-1 {
 			index++
@@ -112,16 +112,16 @@ func AdaptPartitions(renderBuffer *RenderBuffer, G *FftData, numPartitions int, 
 }
 
 // AdaptPartitionsNeon is aec3::AdaptPartitions_Neon.
-func AdaptPartitionsNeon(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
+func AdaptPartitionsNeon(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H FirCoefficients) {
 	afirAdaptPartitionsSimd(OptNeon, renderBuffer, G, numPartitions, H)
 }
 
 // AdaptPartitionsSse2 is aec3::AdaptPartitions_Sse2.
-func AdaptPartitionsSse2(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
+func AdaptPartitionsSse2(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H FirCoefficients) {
 	afirAdaptPartitionsSimd(OptSse2, renderBuffer, G, numPartitions, H)
 }
 
-func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G *FftData, numPartitions int, H [][]FftData) {
+func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G *FftData, numPartitions int, H FirCoefficients) {
 	data := renderBuffer.GetFftBuffer()
 	numRenderChannels := data.NumChannels()
 	if afirHasTermKernels && numPartitions*numRenderChannels <= afirMaxTerms {
@@ -139,7 +139,7 @@ func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G
 	for {
 		for ; p < limit; p, xPartition = p+1, xPartition+1 {
 			for ch := 0; ch < numRenderChannels; ch++ {
-				afirAdaptBlock(opt, &data.At(xPartition)[ch], G, &H[p][ch])
+				afirAdaptBlock(opt, &data.At(xPartition)[ch], G, &H.At(p)[ch])
 			}
 		}
 		xPartition = 0
@@ -155,7 +155,7 @@ func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G
 	for {
 		for ; p < limit; p, xPartition = p+1, xPartition+1 {
 			for ch := 0; ch < numRenderChannels; ch++ {
-				afirAdaptBinsGo(&data.At(xPartition)[ch], G, &H[p][ch], FftLengthBy2, FftLengthBy2Plus1)
+				afirAdaptBinsGo(&data.At(xPartition)[ch], G, &H.At(p)[ch], FftLengthBy2, FftLengthBy2Plus1)
 			}
 		}
 		xPartition = 0
@@ -175,7 +175,7 @@ func afirAdaptBinsGo(x, g, h *FftData, from, to int) {
 }
 
 // ApplyFilter is aec3::ApplyFilter (scalar).
-func ApplyFilter(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
+func ApplyFilter(renderBuffer *RenderBuffer, numPartitions int, H FirCoefficients, S *FftData) {
 	S.Re = [FftLengthBy2Plus1]float32{}
 	S.Im = [FftLengthBy2Plus1]float32{}
 	data := renderBuffer.GetFftBuffer()
@@ -184,7 +184,7 @@ func ApplyFilter(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S
 	for p := 0; p < numPartitions; p++ {
 		x := data.At(index)
 		for ch := 0; ch < numRenderChannels; ch++ {
-			afirApplyAllGo(&x[ch], &H[p][ch], S)
+			afirApplyAllGo(&x[ch], &H.At(p)[ch], S)
 		}
 		if index < data.Size-1 {
 			index++
@@ -195,16 +195,16 @@ func ApplyFilter(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S
 }
 
 // ApplyFilterNeon is aec3::ApplyFilter_Neon.
-func ApplyFilterNeon(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
+func ApplyFilterNeon(renderBuffer *RenderBuffer, numPartitions int, H FirCoefficients, S *FftData) {
 	afirApplyFilterSimd(OptNeon, renderBuffer, numPartitions, H, S)
 }
 
 // ApplyFilterSse2 is aec3::ApplyFilter_Sse2.
-func ApplyFilterSse2(renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
+func ApplyFilterSse2(renderBuffer *RenderBuffer, numPartitions int, H FirCoefficients, S *FftData) {
 	afirApplyFilterSimd(OptSse2, renderBuffer, numPartitions, H, S)
 }
 
-func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPartitions int, H [][]FftData, S *FftData) {
+func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPartitions int, H FirCoefficients, S *FftData) {
 	data := renderBuffer.GetFftBuffer()
 	numRenderChannels := data.NumChannels()
 	if afirHasTermKernels && numPartitions*numRenderChannels <= afirMaxTerms {
@@ -223,7 +223,7 @@ func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPa
 	for {
 		for ; p < limit; p, xPartition = p+1, xPartition+1 {
 			for ch := 0; ch < numRenderChannels; ch++ {
-				afirApplyBlock(opt, &data.At(xPartition)[ch], &H[p][ch], S)
+				afirApplyBlock(opt, &data.At(xPartition)[ch], &H.At(p)[ch], S)
 			}
 		}
 		limit = lim2
@@ -239,7 +239,7 @@ func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPa
 	for {
 		for ; p < limit; p, xPartition = p+1, xPartition+1 {
 			for ch := 0; ch < numRenderChannels; ch++ {
-				afirApplyBinsGo(&data.At(xPartition)[ch], &H[p][ch], S, FftLengthBy2, FftLengthBy2Plus1)
+				afirApplyBinsGo(&data.At(xPartition)[ch], &H.At(p)[ch], S, FftLengthBy2, FftLengthBy2Plus1)
 			}
 		}
 		limit = lim2
@@ -258,14 +258,14 @@ const afirMaxTerms = 64
 // the C++ accumulation order: partition-major, channel-minor, with the render
 // ring index running from the read position and wrapping to 0 exactly as
 // the lim1/lim2 loops do. It returns the number of pairs.
-func afirTerms(data *FftBuffer, position, numPartitions int, H [][]FftData, xs, hs *[afirMaxTerms]*FftData) int {
+func afirTerms(data *FftBuffer, position, numPartitions int, H FirCoefficients, xs, hs *[afirMaxTerms]*FftData) int {
 	n := 0
 	xPartition := position
 	for p := 0; p < numPartitions; p++ {
 		if xPartition == data.Size {
 			xPartition = 0
 		}
-		xp, hp := data.At(xPartition), H[p]
+		xp, hp := data.At(xPartition), H.At(p)
 		hp = hp[:len(xp)]
 		for ch := range xp {
 			xs[n], hs[n] = &xp[ch], &hp[ch]
@@ -372,10 +372,11 @@ func afirAdaptTermsFastGo(xs, hs []*FftData, g *FftData) {
 }
 
 // afirZeroFilter clears the partitions [oldSize, newSize).
-func afirZeroFilter(oldSize, newSize int, H [][]FftData) {
+func afirZeroFilter(oldSize, newSize int, H FirCoefficients) {
 	for p := oldSize; p < newSize; p++ {
-		for ch := range H[0] {
-			H[p][ch].Clear()
+		hp := H.At(p)
+		for ch := range hp {
+			hp[ch].Clear()
 		}
 	}
 }
@@ -397,6 +398,42 @@ func afirNextPartition(a, n int) int {
 	return 0
 }
 
+// FirCoefficients holds the coefficients of a partitioned filter
+// ([partition][channel]) partition-major in one pointer-free backing array;
+// At returns the channels of one partition.
+type FirCoefficients struct {
+	numChannels int
+	data        []FftData
+}
+
+func NewFirCoefficients(numPartitions, numChannels int) FirCoefficients {
+	return FirCoefficients{numChannels: numChannels, data: make([]FftData, numPartitions*numChannels)}
+}
+
+// At returns the per-channel coefficients of partition p.
+func (h FirCoefficients) At(p int) []FftData {
+	n := h.numChannels
+	return h.data[p*n : (p+1)*n : (p+1)*n]
+}
+
+func (h FirCoefficients) NumChannels() int { return h.numChannels }
+
+// NumPartitions returns the number of partitions held.
+func (h FirCoefficients) NumPartitions() int {
+	if h.numChannels == 0 {
+		return 0
+	}
+	return len(h.data) / h.numChannels
+}
+
+// Flat returns the coefficients partition-major, aliasing the storage.
+func (h FirCoefficients) Flat() []FftData { return h.data }
+
+// Clone returns a copy with its own storage.
+func (h FirCoefficients) Clone() FirCoefficients {
+	return FirCoefficients{numChannels: h.numChannels, data: append([]FftData(nil), h.data...)}
+}
+
 // AdaptiveFirFilter is a frequency-domain partitioned adaptive filter.
 type AdaptiveFirFilter struct {
 	fft                           Aec3Fft
@@ -409,7 +446,7 @@ type AdaptiveFirFilter struct {
 	targetSizePartitions          int
 	oldTargetSizePartitions       int
 	sizeChangeCounter             int
-	H                             [][]FftData
+	H                             FirCoefficients
 	partitionToConstrain          int
 }
 
@@ -422,11 +459,7 @@ func NewAdaptiveFirFilter(maxSizePartitions, initialSizePartitions, sizeChangeDu
 		currentSizePartitions:    initialSizePartitions,
 		targetSizePartitions:     initialSizePartitions,
 		oldTargetSizePartitions:  initialSizePartitions,
-		H:                        make([][]FftData, maxSizePartitions),
-	}
-	h := make([]FftData, maxSizePartitions*numRenderChannels)
-	for p := range f.H {
-		f.H[p] = h[p*numRenderChannels : (p+1)*numRenderChannels : (p+1)*numRenderChannels]
+		H:                        NewFirCoefficients(maxSizePartitions, numRenderChannels),
 	}
 	f.oneBySizeChangeDurationBlocks = 1 / float32(f.sizeChangeDurationBlocks)
 	afirZeroFilter(0, f.maxSizePartitions, f.H)
@@ -446,7 +479,7 @@ func (f *AdaptiveFirFilter) SizePartitions() int { return f.currentSizePartition
 func (f *AdaptiveFirFilter) MaxFilterSizePartitions() int { return f.maxSizePartitions }
 
 // GetFilter returns the filter coefficients ([partition][channel]).
-func (f *AdaptiveFirFilter) GetFilter() [][]FftData { return f.H }
+func (f *AdaptiveFirFilter) GetFilter() FirCoefficients { return f.H }
 
 // SetSizePartitions sets the target filter size, immediately or gradually.
 func (f *AdaptiveFirFilter) SetSizePartitions(size int, immediateEffect bool) {
@@ -569,7 +602,7 @@ func (f *AdaptiveFirFilter) constrainAndUpdateImpulseResponse(impulseResponse *[
 	}
 
 	for ch := 0; ch < f.numRenderChannels; ch++ {
-		hp := &f.H[f.partitionToConstrain][ch]
+		hp := &f.H.At(f.partitionToConstrain)[ch]
 		f.fft.Ifft(hp, &h)
 		const scale = 1.0 / FftLengthBy2
 		kernScale(h[:FftLengthBy2], scale, h[:FftLengthBy2])
@@ -598,7 +631,7 @@ func afirMaxAbsUpdateGo(ir, h *[FftLengthBy2]float32) {
 func (f *AdaptiveFirFilter) constrain() {
 	var h [FftLength]float32
 	for ch := 0; ch < f.numRenderChannels; ch++ {
-		hp := &f.H[f.partitionToConstrain][ch]
+		hp := &f.H.At(f.partitionToConstrain)[ch]
 		f.fft.Ifft(hp, &h)
 		const scale = 1.0 / FftLengthBy2
 		kernScale(h[:FftLengthBy2], scale, h[:FftLengthBy2])
@@ -610,27 +643,26 @@ func (f *AdaptiveFirFilter) constrain() {
 
 // ScaleFilter scales all filter coefficients by factor.
 func (f *AdaptiveFirFilter) ScaleFilter(factor float32) {
-	for p := range f.H {
-		for ch := range f.H[p] {
-			hp := &f.H[p][ch]
-			for i := range hp.Re {
-				hp.Re[i] *= factor
-			}
-			for i := range hp.Im {
-				hp.Im[i] *= factor
-			}
+	for i := range f.H.data {
+		hp := &f.H.data[i]
+		for i := range hp.Re {
+			hp.Re[i] *= factor
+		}
+		for i := range hp.Im {
+			hp.Im[i] *= factor
 		}
 	}
 }
 
 // SetFilter copies the first min(SizePartitions(), numPartitions) partitions
 // of H into the filter.
-func (f *AdaptiveFirFilter) SetFilter(numPartitions int, H [][]FftData) {
+func (f *AdaptiveFirFilter) SetFilter(numPartitions int, H FirCoefficients) {
 	n := min(f.currentSizePartitions, numPartitions)
 	for p := 0; p < n; p++ {
+		dst, src := f.H.At(p), H.At(p)
 		for ch := 0; ch < f.numRenderChannels; ch++ {
-			f.H[p][ch].Re = H[p][ch].Re
-			f.H[p][ch].Im = H[p][ch].Im
+			dst[ch].Re = src[ch].Re
+			dst[ch].Im = src[ch].Im
 		}
 	}
 }
