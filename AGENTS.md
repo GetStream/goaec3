@@ -111,10 +111,14 @@ Steady-state processing is allocation-free. Lock new hot paths with a
   (`go test -race -short ./...` without and with simd); `oracle-src` (the
   source oracle in the AVX2, SSE2, NEON and scalar lanes, with and without
   simd; the avx2-simd job also runs the x86 kernel oracle, and the avx2-simd
-  and neon-simd jobs log the glibc stock-libm divergence); `macos` (one
+  and neon-simd jobs log the glibc stock-libm divergence). Runs on main,
+  nightly and manual runs are never cancelled; a new push to a pull request
+  cancels its run. `.github/workflows/macos.yml` runs separately (one
   macos-15 job: the tests in all three builds, the NEON and scalar source
-  oracle and the Apple libm stock gate). Runs on main, nightly and manual
-  runs are never cancelled; a new push to a pull request cancels its run.
+  oracle and the Apple libm stock gate), so a macOS job waiting for a runner
+  never holds up ci; a newer macOS run cancels a waiting one.
+  `.github/workflows/bench.yml` times Go against the source-built libwebrtc
+  per lane on real x86 and arm64 runners (push to `perf/**` or manual).
 - `GOEXPERIMENT=simd go test ./...` — default lane with archsimd kernels
   (`make test-simd`).
 - `go test ./...` — default lane, pure-Go lane references (no experiment)

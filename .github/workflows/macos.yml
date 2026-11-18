@@ -1,0 +1,56 @@
+name: macos
+
+# macOS runners are scarce in this organization and can queue for hours. This
+# workflow is separate from ci so a waiting macOS job never holds up the
+# required Linux checks; a newer run cancels an older one that is still waiting.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.27.4"
+  GOTOOLCHAIN: local
+
+jobs:
+  macos:
+    runs-on: macos-15
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Cache WebRTC sources
+        uses: actions/cache@v4
+        with:
+          path: tmp_check/webrtc-m141
+          key: webrtc-m141-${{ hashFiles('scripts/fetch-webrtc.sh') }}
+      - name: Fetch WebRTC sources
+        run: bash scripts/fetch-webrtc.sh
+      - name: go test (default, simd, purego)
+        run: |
+          go test -count=1 ./...
+          GOEXPERIMENT=simd go test -count=1 ./...
+          go test -count=1 -tags purego ./...
+      - name: Parity against the source-built WebRTC (neon-simd)
+        run: GOEXPERIMENT=simd GOAEC3_EXPECT_LANE=neon go test -count=1 -timeout 40m -v -tags webrtc_src_oracle ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
+        shell: bash -o pipefail {0}
+      - name: Parity against the source-built WebRTC (scalar)
+        run: GOAEC3_EXPECT_LANE=none go test -count=1 -timeout 40m -v -tags "webrtc_src_oracle purego" ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
+        shell: bash -o pipefail {0}
+      - name: Bit-exact against the source-built WebRTC on Apple libm
+        run: GOEXPERIMENT=simd go test -count=1 -timeout 40m -v -tags "webrtc_src_oracle webrtc_oracle_stock" -run '^TestEc3StockLibmDivergence$' ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
+        shell: bash -o pipefail {0}
