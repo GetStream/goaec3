@@ -146,6 +146,27 @@ func dlyAxpyRef(h, x []float32, alpha float32) {
 	}
 }
 
+// dlyAxpyDotNeonRef applies h += alpha*xa and then runs dlyDotNeonRef on
+// the updated h against xb. len(h) is a multiple of 4.
+func dlyAxpyDotNeonRef(h, xa, xb []float32, alpha float32, acc *[8]float32) {
+	dlyAxpyRef(h, xa, alpha)
+	dlyDotNeonRef(h, xb, acc)
+}
+
+// dlyAxpyDotSse2Ref applies h += alpha*xa and then runs dlyDotSse2Ref on
+// the updated h against xb. len(h) is a multiple of 8.
+func dlyAxpyDotSse2Ref(h, xa, xb []float32, alpha float32, acc *[16]float32) {
+	dlyAxpyRef(h, xa, alpha)
+	dlyDotSse2Ref(h, xb, acc)
+}
+
+// dlyAxpyFmaDotAvx2Ref applies h = fma(xa, alpha, h) and then runs
+// dlyDotAvx2Ref on the updated h against xb. len(h) is a multiple of 16.
+func dlyAxpyFmaDotAvx2Ref(h, xa, xb []float32, alpha float32, acc *[32]float32) {
+	dlyAxpyFmaRef(h, xa, alpha)
+	dlyDotAvx2Ref(h, xb, acc)
+}
+
 // dlyAxpyFmaRef computes h = fma(x, alpha, h) (_mm256_fmadd_ps).
 func dlyAxpyFmaRef(h, x []float32, alpha float32) {
 	x = x[:len(h)]

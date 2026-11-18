@@ -25,3 +25,17 @@ func dlyAccErrAvx2(h, x []float32, y float32, accErr []float32, x2 *[16]float32)
 func dlyAxpy(h, x []float32, alpha float32) { dlyAxpyRef(h, x, alpha) }
 
 func dlyAxpyFma(h, x []float32, alpha float32) { dlyAxpyFmaRef(h, x, alpha) }
+
+func dlyAxpyDotNeon(h, xa, xb []float32, alpha float32, acc *[8]float32) {
+	dlyAxpyDotNeonRef(h, xa, xb, alpha, acc)
+}
+
+func dlyAxpyDotSse2(h, xa, xb []float32, alpha float32, acc *[16]float32) {
+	dlyAxpyDotSse2Ref(h, xa, xb, alpha, acc)
+}
+
+func dlyAxpyFmaDotAvx2(h, xa, xb []float32, alpha float32, acc *[32]float32) {
+	dlyAxpyFmaDotAvx2Ref(h, xa, xb, alpha, acc)
+}
+
+func dlyMaxSquarePeakIndex(h []float32) int { return dlyMaxSquarePeakIndexRef(h) }

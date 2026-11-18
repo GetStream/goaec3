@@ -183,3 +183,17 @@ func dlyAxpyFma(h, x []float32, alpha float32) {
 		h[k] = dlyFmaf(x[k], alpha, h[k])
 	}
 }
+
+func dlyMaxSquarePeakIndex(h []float32) int { return dlyMaxSquarePeakIndexRef(h) }
+
+func dlyAxpyDotSse2(h, xa, xb []float32, alpha float32, acc *[16]float32) {
+	dlyAxpyDotSse2Ref(h, xa, xb, alpha, acc)
+}
+
+func dlyAxpyFmaDotAvx2(h, xa, xb []float32, alpha float32, acc *[32]float32) {
+	dlyAxpyFmaDotAvx2Ref(h, xa, xb, alpha, acc)
+}
+
+func dlyAxpyDotNeon(h, xa, xb []float32, alpha float32, acc *[8]float32) {
+	dlyAxpyDotNeonRef(h, xa, xb, alpha, acc)
+}

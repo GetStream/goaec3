@@ -61,10 +61,15 @@ func TestDlyFmafCorrectlyRounded(t *testing.T) {
 // lane references.
 func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(2))
-	for trial := 0; trial < 400; trial++ {
-		n := 16 * (1 + rng.Intn(40))
+	for trial := 0; trial < 4000; trial++ {
+		// Every residue modulo the unroll widths, short lengths below one
+		// unrolled iteration, and x longer than h.
+		n := rng.Intn(80)
+		if trial%3 == 0 {
+			n = rng.Intn(700)
+		}
 		h := dlyRandSlice(rng, n, 0.3)
-		x := dlyRandSlice(rng, n, 1000)
+		x := dlyRandSlice(rng, n+rng.Intn(20), 1000)
 		y := float32(rng.NormFloat64() * 1000)
 
 		var a8, b8 [8]float32
@@ -128,6 +133,30 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 		dlyAxpyFma(hA, x, alpha)
 		dlyAxpyFmaRef(hB, x, alpha)
 		dlyRequireBits(t, "axpyFma", hA, hB)
+
+		xa := dlyRandSlice(rng, n+rng.Intn(20), 1000)
+		for _, g := range []int{4, 8, 16} {
+			mg := n &^ (g - 1)
+			hA = append(hA[:0], h[:mg]...)
+			hB = append(hB[:0], h[:mg]...)
+			for i := range a32 {
+				a32[i] = float32(rng.NormFloat64())
+			}
+			b32 = a32
+			switch g {
+			case 4:
+				dlyAxpyDotNeon(hA, xa, x, alpha, (*[8]float32)(a32[:8]))
+				dlyAxpyDotNeonRef(hB, xa, x, alpha, (*[8]float32)(b32[:8]))
+			case 8:
+				dlyAxpyDotSse2(hA, xa, x, alpha, (*[16]float32)(a32[:16]))
+				dlyAxpyDotSse2Ref(hB, xa, x, alpha, (*[16]float32)(b32[:16]))
+			default:
+				dlyAxpyFmaDotAvx2(hA, xa, x, alpha, &a32)
+				dlyAxpyFmaDotAvx2Ref(hB, xa, x, alpha, &b32)
+			}
+			dlyRequireBits(t, "axpyDot h", hA, hB)
+			dlyRequireBits(t, "axpyDot acc", a32[:], b32[:])
+		}
 	}
 }
 
