@@ -134,7 +134,7 @@ jobs:
         run: |
           : >bench.txt
           : >base.txt
-          for i in $(seq "$COUNT"); do
+          for _ in $(seq "$COUNT"); do
             if [ -n "$BASE" ]; then
               ./base.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc' \
                 -test.benchtime "$BENCHTIME" -test.count 1 | tee -a base.txt
@@ -147,7 +147,7 @@ jobs:
           kb='BenchmarkMatchedFilterCore$|BenchmarkMatchedFilterCoreUpdating$|BenchmarkAfir|BenchmarkKern$|BenchmarkFmaf$'
           : >kern.txt
           : >basekern.txt
-          for i in $(seq 5); do
+          for _ in $(seq 5); do
             if [ -n "$BASE" ]; then
               (cd internal/aec3 && ../../basekern.test -test.run '^$' -test.bench "$kb" -test.count 1) | tee -a basekern.txt
             fi
