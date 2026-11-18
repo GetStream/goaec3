@@ -477,3 +477,37 @@ func dlyAxpyFmaDotAvx2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32)
 	archsimd.ClearAVXUpperBits()
 	return 0 + r[1], 0 + r[0]
 }
+
+// dlyPeakLanes256 is dlyPeakLanes128 with two 256-bit vectors per 16
+// samples (lanes 0-7 and 8-15, the same index residues). It reports false
+// without AVX2.
+func dlyPeakLanes256(p []float32, mv *[16]float32, iv *[16]int32) bool {
+	if !kernHasAVX2 {
+		return false
+	}
+	m0 := archsimd.BroadcastFloat32x8(-1)
+	m1 := m0
+	i0 := archsimd.BroadcastInt32x8(-1)
+	i1 := i0
+	cur := archsimd.LoadInt32x8Array(&[8]int32{0, 1, 2, 3, 4, 5, 6, 7})
+	eight := archsimd.BroadcastInt32x8(8)
+	step := archsimd.BroadcastInt32x8(16)
+	n := len(p)
+	for i := 0; i < n-15; i += 16 {
+		pp := (*[16]float32)(p[i : i+16])
+		v0 := dlyLd8((*[8]float32)(pp[0:8]))
+		v1 := dlyLd8((*[8]float32)(pp[8:16]))
+		v0, v1 = v0.Mul(v0), v1.Mul(v1)
+		c1 := cur.Add(eight)
+		g0, g1 := v0.Greater(m0), v1.Greater(m1)
+		m0, i0 = v0.IfElse(g0, m0), cur.IfElse(g0, i0)
+		m1, i1 = v1.IfElse(g1, m1), c1.IfElse(g1, i1)
+		cur = cur.Add(step)
+	}
+	m0.StoreArray((*[8]float32)(mv[0:8]))
+	m1.StoreArray((*[8]float32)(mv[8:16]))
+	i0.StoreArray((*[8]int32)(iv[0:8]))
+	i1.StoreArray((*[8]int32)(iv[8:16]))
+	archsimd.ClearAVXUpperBits()
+	return true
+}
