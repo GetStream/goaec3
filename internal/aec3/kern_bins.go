@@ -315,3 +315,11 @@ func kernCoarseMuGeneric(X2 *[FftLengthBy2Plus1]float32, gate, rate float32, mu 
 		}
 	}
 }
+
+// kernReverbScalarGeneric sets r = (r + float32(p*s)) * d element-wise.
+func kernReverbScalarGeneric(r, p []float32, s, d float32) {
+	p = p[:len(r)]
+	for k := range r {
+		r[k] = (r[k] + float32(p[k]*s)) * d
+	}
+}

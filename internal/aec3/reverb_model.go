@@ -18,9 +18,7 @@ func (r *ReverbModel) Reverb() *[FftLengthBy2Plus1]float32 { return &r.reverb }
 // scaling for every frequency.
 func (r *ReverbModel) UpdateReverbNoFreqShaping(powerSpectrum []float32, powerSpectrumScaling, reverbDecay float32) {
 	if reverbDecay > 0 {
-		for k := range powerSpectrum {
-			r.reverb[k] = (r.reverb[k] + float32(powerSpectrum[k]*powerSpectrumScaling)) * reverbDecay
-		}
+		kernReverbScalar(r.reverb[:len(powerSpectrum)], powerSpectrum, powerSpectrumScaling, reverbDecay)
 	}
 }
 

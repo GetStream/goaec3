@@ -44,13 +44,9 @@ func (r *ReverbFrequencyResponse) update(frequencyResponse [][FftLengthBy2Plus1]
 	averageDecay := stAverageDecayWithinFilter(directPath, tail)
 	smoothing := 0.2 * linearFilterQuality
 	r.averageDecay += float32(smoothing * (averageDecay - r.averageDecay))
-	for k := 0; k < FftLengthBy2Plus1; k++ {
-		r.tailResponse[k] = directPath[k] * r.averageDecay
-	}
+	kernScale(directPath[:], r.averageDecay, r.tailResponse[:])
 	if r.useConservativeTailFrequencyResponse {
-		for k := 0; k < FftLengthBy2Plus1; k++ {
-			r.tailResponse[k] = stMaxf(tail[k], r.tailResponse[k])
-		}
+		kernStdMax(tail[:], r.tailResponse[:], r.tailResponse[:])
 	}
 	for k := 1; k < FftLengthBy2; k++ {
 		avgNeighbour := 0.5 * (r.tailResponse[k-1] + r.tailResponse[k+1])

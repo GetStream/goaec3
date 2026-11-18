@@ -389,14 +389,10 @@ func stComputeAvgRenderReverb(spectrumBuffer *SpectrumBuffer, delayBlocks int, r
 		averageChannels := func(spectrumBand0 [][FftLengthBy2Plus1]float32, renderPower *[FftLengthBy2Plus1]float32) {
 			*renderPower = [FftLengthBy2Plus1]float32{}
 			for ch := 0; ch < numRenderChannels; ch++ {
-				for k := 0; k < FftLengthBy2Plus1; k++ {
-					renderPower[k] += spectrumBand0[ch][k]
-				}
+				vectorAccumulate(spectrumBand0[ch][:], renderPower[:])
 			}
 			normalizer := 1 / float32(numRenderChannels)
-			for k := 0; k < FftLengthBy2Plus1; k++ {
-				renderPower[k] *= normalizer
-			}
+			kernScale(renderPower[:], normalizer, renderPower[:])
 		}
 		averageChannels(spectrumBuffer.Buffer[idxPast], &X2Data)
 		reverbModel.UpdateReverbNoFreqShaping(X2Data[:], 1, reverbDecay)
@@ -407,9 +403,7 @@ func stComputeAvgRenderReverb(spectrumBuffer *SpectrumBuffer, delayBlocks int, r
 		X2 = &spectrumBuffer.Buffer[idxAtDelay][0]
 	}
 	reverbPower := reverbModel.Reverb()
-	for k := range X2 {
-		reverbPowerSpectrum[k] = X2[k] + reverbPower[k]
-	}
+	kernAdd(X2[:], reverbPower[:], reverbPowerSpectrum[:])
 }
 
 // Update updates the AEC state. externalDelay is nil when no external delay

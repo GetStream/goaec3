@@ -63,3 +63,5 @@ func kernRefinedLeak(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []floa
 func kernCoarseMu(X2 *[FftLengthBy2Plus1]float32, gate, rate float32, mu *[FftLengthBy2Plus1]float32) {
 	kernCoarseMuGeneric(X2, gate, rate, mu)
 }
+
+func kernReverbScalar(r, p []float32, s, d float32) { kernReverbScalarGeneric(r, p, s, d) }

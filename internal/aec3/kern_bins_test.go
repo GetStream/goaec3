@@ -67,6 +67,9 @@ func TestKernBinsElementwise(t *testing.T) {
 				}
 			}
 			c, d := kernEdgeVec(rng, n), kernEdgeVec(rng, n)
+			if n == 0 {
+				y = []float32{1}
+			}
 			kernMulAdd2(x, y, c, d, got)
 			kernMulAdd2Generic(x, y, c, d, want)
 			kernCheckExact(t, "MulAdd2", got, want)
@@ -108,6 +111,11 @@ func TestKernBinsElementwise(t *testing.T) {
 			kernReverb(got, x, y, a)
 			kernReverbGeneric(want, x, y, a)
 			kernCheckExact(t, "Reverb", got, want)
+			copy(got, c)
+			copy(want, c)
+			kernReverbScalar(got, x, a, y[0])
+			kernReverbScalarGeneric(want, x, a, y[0])
+			kernCheckExact(t, "ReverbScalar", got, want)
 			// In place.
 			copy(got, x)
 			copy(want, x)

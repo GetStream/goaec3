@@ -501,3 +501,17 @@ func kernCoarseMu(X2 *[FftLengthBy2Plus1]float32, gate, rate float32, mu *[FftLe
 		mu[k] = 0
 	}
 }
+
+func kernReverbScalar(r, p []float32, s, d float32) {
+	p = p[:len(r)]
+	sv := archsimd.BroadcastFloat32x4(s)
+	dv := archsimd.BroadcastFloat32x4(d)
+	j := 0
+	for ; j+4 <= len(r); j += 4 {
+		q := archsimd.LoadFloat32x4(p[j:]).Mul(sv)
+		archsimd.LoadFloat32x4(r[j:]).Add(q).Mul(dv).Store(r[j:])
+	}
+	for ; j < len(r); j++ {
+		r[j] = (r[j] + float32(p[j]*s)) * d
+	}
+}
