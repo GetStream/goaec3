@@ -5,29 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"testing"
-
-	"github.com/GetStream/goaec3/internal/aec3"
 )
-
-// ec3EchoRemoverPorted reports whether EchoRemover is functional (the API
-// stub panics).
-func ec3EchoRemoverPorted() (ok bool) {
-	defer func() {
-		if recover() != nil {
-			ok = false
-		}
-	}()
-	cfg := aec3.DefaultEchoCanceller3Config()
-	aec3.NewEchoRemover(&cfg, 16000, 1, 1).GetMetrics()
-	return true
-}
-
-func ec3RequireEchoRemover(t testing.TB) {
-	t.Helper()
-	if !ec3EchoRemoverPorted() {
-		t.Skip("EchoRemover is not ported yet")
-	}
-}
 
 func ec3Frame(numChannels, n int) [][]float32 {
 	f := make([][]float32, numChannels)
@@ -131,7 +109,6 @@ func TestPassthroughAllocationFree(t *testing.T) {
 // TestEchoCancellerAllocationFree locks the full steady-state path,
 // including Metrics, to zero allocations.
 func TestEchoCancellerAllocationFree(t *testing.T) {
-	ec3RequireEchoRemover(t)
 	for _, rate := range []int{16000, 32000, 48000} {
 		e, err := New(DefaultConfig(), rate, 2, 1)
 		if err != nil {
@@ -162,7 +139,6 @@ func TestEchoCancellerAllocationFree(t *testing.T) {
 // TestEchoCancellerReducesEcho checks that a delayed, attenuated copy of
 // the render signal is removed from the capture signal.
 func TestEchoCancellerReducesEcho(t *testing.T) {
-	ec3RequireEchoRemover(t)
 	e, err := New(DefaultConfig(), 16000, 1, 1)
 	if err != nil {
 		t.Fatal(err)
