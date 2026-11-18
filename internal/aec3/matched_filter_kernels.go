@@ -44,37 +44,28 @@ func dlyDotSse2Ref(h, x []float32, acc *[16]float32) {
 	n := len(h) &^ 7
 	h = h[:n:n]
 	x = x[:n:n]
-	// The sixteen lanes are independent chains, kept in locals.
-	s0, s1, s2, s3 := acc[0], acc[1], acc[2], acc[3]
-	s4, s5, s6, s7 := acc[4], acc[5], acc[6], acc[7]
-	q0, q1, q2, q3 := acc[8], acc[9], acc[10], acc[11]
-	q4, q5, q6, q7 := acc[12], acc[13], acc[14], acc[15]
-	for k := 0; k < len(h)-7; k += 8 {
-		hh := (*[8]float32)(h[k : k+8])
-		xx := (*[8]float32)(x[k : k+8])
-		x0, x1, x2, x3 := xx[0], xx[1], xx[2], xx[3]
-		x4, x5, x6, x7 := xx[4], xx[5], xx[6], xx[7]
-		q0 += float32(x0 * x0)
-		q1 += float32(x1 * x1)
-		q2 += float32(x2 * x2)
-		q3 += float32(x3 * x3)
-		q4 += float32(x4 * x4)
-		q5 += float32(x5 * x5)
-		q6 += float32(x6 * x6)
-		q7 += float32(x7 * x7)
-		s0 += float32(hh[0] * x0)
-		s1 += float32(hh[1] * x1)
-		s2 += float32(hh[2] * x2)
-		s3 += float32(hh[3] * x3)
-		s4 += float32(hh[4] * x4)
-		s5 += float32(hh[5] * x5)
-		s6 += float32(hh[6] * x6)
-		s7 += float32(hh[7] * x7)
+	// The sixteen lanes are independent chains. They run in two passes of
+	// eight (the low and the high four samples of every group) so the
+	// accumulators stay in registers on amd64 too.
+	for half := 0; half < 8; half += 4 {
+		s0, s1, s2, s3 := acc[half], acc[half+1], acc[half+2], acc[half+3]
+		q0, q1, q2, q3 := acc[8+half], acc[9+half], acc[10+half], acc[11+half]
+		for k := half; k < len(h)-3; k += 8 {
+			hh := (*[4]float32)(h[k : k+4])
+			xx := (*[4]float32)(x[k : k+4])
+			x0, x1, x2, x3 := xx[0], xx[1], xx[2], xx[3]
+			q0 += float32(x0 * x0)
+			q1 += float32(x1 * x1)
+			q2 += float32(x2 * x2)
+			q3 += float32(x3 * x3)
+			s0 += float32(hh[0] * x0)
+			s1 += float32(hh[1] * x1)
+			s2 += float32(hh[2] * x2)
+			s3 += float32(hh[3] * x3)
+		}
+		acc[half], acc[half+1], acc[half+2], acc[half+3] = s0, s1, s2, s3
+		acc[8+half], acc[9+half], acc[10+half], acc[11+half] = q0, q1, q2, q3
 	}
-	acc[0], acc[1], acc[2], acc[3] = s0, s1, s2, s3
-	acc[4], acc[5], acc[6], acc[7] = s4, s5, s6, s7
-	acc[8], acc[9], acc[10], acc[11] = q0, q1, q2, q3
-	acc[12], acc[13], acc[14], acc[15] = q4, q5, q6, q7
 }
 
 // dlyDotAvx2Ref accumulates over len(h)/16 groups of 16 into the two pairs
