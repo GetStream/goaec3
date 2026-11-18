@@ -101,10 +101,10 @@ func bsFilterIndex(index int) int {
 	return index - 2
 }
 
-// ThreeBandFilterBank splits a 48 kHz frame into three 16 kHz bands and
-// merges them back. The prototype low-pass filter has half bandwidth, so a
-// DCT shifts it to the center frequencies [1/12, 3/12, 5/12].
-type ThreeBandFilterBank struct {
+// threeBandFilterBankRef is the scalar three_band_filter_bank.cc, operation
+// for operation. It is the spec the archsimd ThreeBandFilterBank kernels are
+// tested against and the implementation used without them.
+type threeBandFilterBankRef struct {
 	stateAnalysis  [NumNonZeroFilters][MemorySize]float32
 	stateSynthesis [NumNonZeroFilters][MemorySize]float32
 
@@ -115,9 +115,8 @@ type ThreeBandFilterBank struct {
 
 func NewThreeBandFilterBank() *ThreeBandFilterBank { return &ThreeBandFilterBank{} }
 
-// Analysis splits in (FullBandSize samples) into NumBands downsampled
-// frequency bands in out, each of SplitBandSize samples.
-func (f *ThreeBandFilterBank) Analysis(in *[FullBandSize]float32, out *[NumBands][]float32) {
+// analysis is ThreeBandFilterBank::Analysis.
+func (f *threeBandFilterBankRef) analysis(in *[FullBandSize]float32, out *[NumBands][]float32) {
 	var outBands [NumBands]*[SplitBandSize]float32
 	for band := range outBands {
 		outBands[band] = (*[SplitBandSize]float32)(out[band])
@@ -157,9 +156,8 @@ func (f *ThreeBandFilterBank) Analysis(in *[FullBandSize]float32, out *[NumBands
 	}
 }
 
-// Synthesis merges the NumBands downsampled bands in (SplitBandSize samples
-// each) into out (FullBandSize samples).
-func (f *ThreeBandFilterBank) Synthesis(in *[NumBands][]float32, out *[FullBandSize]float32) {
+// synthesis is ThreeBandFilterBank::Synthesis.
+func (f *threeBandFilterBankRef) synthesis(in *[NumBands][]float32, out *[FullBandSize]float32) {
 	var inBands [NumBands]*[SplitBandSize]float32
 	for band := range inBands {
 		inBands[band] = (*[SplitBandSize]float32)(in[band])
