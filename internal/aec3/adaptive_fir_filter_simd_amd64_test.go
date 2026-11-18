@@ -64,3 +64,18 @@ func TestAfirSimdKernelsAmd64(t *testing.T) {
 		}
 	}
 }
+
+// TestAfirAVXOnlyKernels runs the lane and row-sum checks with the 128-bit
+// AVX paths of the term and row kernels (CPUs with AVX but not AVX2).
+func TestAfirAVXOnlyKernels(t *testing.T) {
+	if !afirHasAVX {
+		t.Skip("no AVX")
+	}
+	a, k := afirHasAVX2, kernHasAVX2
+	afirHasAVX2, kernHasAVX2 = false, false
+	defer func() { afirHasAVX2, kernHasAVX2 = a, k }()
+	TestAfirLanesMatchScalar(t)
+	TestKernSumRows(t)
+	TestRenderBufferSpectralSums(t)
+	TestKernBinsElementwise(t)
+}

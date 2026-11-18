@@ -283,6 +283,46 @@ func BenchmarkKernBins(b *testing.B) {
 	bench("SumRows13", func() { kernSumRows(&re, rows) }, func() { kernSumRowsGeneric(&re, rows) })
 	bench("Unpack", func() { kernUnpack(&v, &re, &im) }, func() { kernUnpackGeneric(&v, &re, &im) })
 	bench("Pack", func() { kernPack(&re, &im, &v) }, func() { kernPackGeneric(&re, &im, &v) })
+	bench("Sub", func() { kernSub(x, y, z) }, func() { kernSubGeneric(x, y, z) })
+	bench("MulAdd2", func() { kernMulAdd2(x, y, x, y, z) }, func() { kernMulAdd2Generic(x, y, x, y, z) })
+	bench("Axpy", func() { kernAxpy(x, 0.5, z) }, func() { kernAxpyGeneric(x, 0.5, z) })
+	bench("OneMinusSq", func() { kernOneMinusSq(x, z) }, func() { kernOneMinusSqGeneric(x, z) })
+	bench("DiffPower", func() { kernDiffPower(x, y, y, x, z) }, func() { kernDiffPowerGeneric(x, y, y, x, z) })
+	bench("MinGo", func() { kernMinGo(x, y, z) }, func() { kernMinGoGeneric(x, y, z) })
+	bench("MaxGo", func() { kernMaxGo(x, y, z) }, func() { kernMaxGoGeneric(x, y, z) })
+	bench("MaxScalarGo", func() { kernMaxScalarGo(z, 0.1) }, func() { kernMaxScalarGoGeneric(z, 0.1) })
+	bench("Clamp", func() { kernClamp(z, -1, 1) }, func() { kernClampGeneric(z, -1, 1) })
+	bench("Smooth", func() { kernSmooth(z, x, 0.1) }, func() { kernSmoothGeneric(z, x, 0.1) })
+	bench("Div", func() { kernDiv(x, y, z) }, func() { kernDivGeneric(x, y, z) })
+	bench("Reverb", func() { kernReverb(z, x, y, 0.5) }, func() { kernReverbGeneric(z, x, y, 0.5) })
+	bench("ReverbScalar", func() { kernReverbScalar(z, x, 2, 0.5) }, func() { kernReverbScalarGeneric(z, x, 2, 0.5) })
+	bench("StdMax", func() { kernStdMax(x, y, z) }, func() { kernStdMaxGeneric(x, y, z) })
+
+	a := func() *[FftLengthBy2Plus1]float32 {
+		var p [FftLengthBy2Plus1]float32
+		for i := range p {
+			p[i] = float32(math.Abs(rng.NormFloat64()) * 1000)
+		}
+		return &p
+	}
+	ne, ec, ma, et, es, mt, out := a(), a(), a(), a(), a(), a(), a()
+	bench("NoAudibleEcho", func() { kernNoAudibleEcho(ne, ec, ma, et, es, mt, out) },
+		func() { kernNoAudibleEchoGeneric(ne, ec, ma, et, es, mt, out) })
+	bench("MinGain", func() { kernMinGain(ec, 30, out) }, func() { kernMinGainGeneric(ec, 30, out) })
+	bench("Weigh", func() { kernWeigh(800, 0.01, ec[7:], out[7:]) }, func() { kernWeighGeneric(800, 0.01, ec[7:], out[7:]) })
+	n2, s2 := *ne, *ec
+	bench("NoiseUpdate", func() { kernNoiseUpdate(&n2, &s2) }, func() { kernNoiseUpdateGeneric(&n2, &s2) })
+	bench("NoiseInitialUpdate", func() { kernNoiseInitialUpdate(&s2, &n2) }, func() { kernNoiseInitialUpdateGeneric(&s2, &n2) })
+	h := [3]float32{0.7929742, -0.36072128, -0.47047766}
+	firX := make([]float32, 13*64)
+	firOut := make([]float32, 13*64)
+	bench("Fir3x64", func() { kernFir3(firX, &h, firOut, 128, 191) }, func() { kernFir3Generic(firX, &h, firOut, 128, 191) })
+	bench("RefinedMu", func() { kernRefinedMu(ne, ec, ma, 10, 13, out) }, func() { kernRefinedMuGeneric(ne, ec, ma, 10, 13, out) })
+	he := *ma
+	bench("RefinedHError", func() { kernRefinedHError(ne, ec, &he) }, func() { kernRefinedHErrorGeneric(ne, ec, &he) })
+	bench("RefinedLeak", func() { kernRefinedLeak(ne, ec, et[:], false, 0.001, 0.01, 0.001, 2, &he) },
+		func() { kernRefinedLeakGeneric(ne, ec, et[:], false, 0.001, 0.01, 0.001, 2, &he) })
+	bench("CoarseMu", func() { kernCoarseMu(ne, 10, 0.7, out) }, func() { kernCoarseMuGeneric(ne, 10, 0.7, out) })
 }
 
 func kernEdge65(rng *rand.Rand) *[FftLengthBy2Plus1]float32 {
