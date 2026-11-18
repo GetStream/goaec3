@@ -222,4 +222,4 @@ func dlyAxpyFma(h, x []float32, alpha float32) {
 	}
 }
 
-func dlyMaxSquarePeakIndex(h []float32) int { return dlyMaxSquarePeakIndexRef(h) }
+const dlyPeakSimd = true

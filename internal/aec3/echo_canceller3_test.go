@@ -6,26 +6,6 @@ import (
 	"testing"
 )
 
-// ec3EchoRemoverPorted reports whether EchoRemover is functional (the API
-// stub panics).
-func ec3EchoRemoverPorted() (ok bool) {
-	defer func() {
-		if recover() != nil {
-			ok = false
-		}
-	}()
-	cfg := DefaultEchoCanceller3Config()
-	NewEchoRemover(&cfg, 16000, 1, 1).GetMetrics()
-	return true
-}
-
-func ec3RequireEchoRemover(t testing.TB) {
-	t.Helper()
-	if !ec3EchoRemoverPorted() {
-		t.Skip("EchoRemover is not ported yet")
-	}
-}
-
 // ec3FakeRemover records the BlockProcessor -> EchoRemover calls.
 type ec3FakeRemover struct {
 	calls          int
@@ -410,7 +390,6 @@ func TestEc3PassthroughAllocationFree(t *testing.T) {
 // TestEc3AllocationFree locks the full steady-state path to zero
 // allocations.
 func TestEc3AllocationFree(t *testing.T) {
-	ec3RequireEchoRemover(t)
 	for _, rate := range []int{16000, 48000} {
 		cfg := DefaultEchoCanceller3Config()
 		cfg.Filter.ExportLinearAecOutput = true
