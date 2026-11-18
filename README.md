@@ -160,11 +160,14 @@ float conversion included), on identical converged echo input, against
 libwebrtc m141's `EchoCanceller3` driven through `webrtc::AudioBuffer`
 (release build, NEON). Apple M4 Max, Go 1.27.4, median of 6 runs:
 
-| Case | goaec3, `GOEXPERIMENT=simd` | libwebrtc (C++) | goaec3, pure Go |
-| --- | --- | --- | --- |
-| 16 kHz mono | **57 µs** | 64 µs | 220 µs |
-| 48 kHz mono | **64 µs** | 75 µs | 257 µs |
-| 48 kHz stereo | **91 µs** | 101 µs | 378 µs |
+| Case | goaec3, `GOEXPERIMENT=simd` | libwebrtc, prebuilt | libwebrtc, from source (clang `-O2`) | goaec3, pure Go |
+| --- | --- | --- | --- | --- |
+| 16 kHz mono | **57 µs** | 64 µs | 61–65 µs | 220 µs |
+| 48 kHz mono | **64 µs** | 75 µs | 68–71 µs | 257 µs |
+| 48 kHz stereo | **91 µs** | 101 µs | 94–96 µs | 378 µs |
+
+(The from-source column is the range of two runs of the C++ reference built
+by `make oracle-src`.)
 
 On arm64 with `GOEXPERIMENT=simd`, goaec3 is 10–14% faster than the prebuilt
 libwebrtc and 2–12% faster than the same C++ built from source with clang
