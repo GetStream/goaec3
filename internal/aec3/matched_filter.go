@@ -227,6 +227,35 @@ func dlyReduceAvx2Ref(acc *[32]float32, s, x2Sum float32) (float32, float32) {
 	return s, x2Sum
 }
 
+// dlyDotSse2SumRef is dlyDotSse2Ref from zero accumulators, reduced.
+func dlyDotSse2SumRef(h, x []float32) (s, x2Sum float32) {
+	var acc [16]float32
+	dlyDotSse2Ref(h, x, &acc)
+	return dlyReduceSse2Ref(&acc, 0, 0)
+}
+
+// dlyAxpyDotSse2SumRef is dlyAxpyDotSse2Ref from zero accumulators, reduced.
+func dlyAxpyDotSse2SumRef(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
+	var acc [16]float32
+	dlyAxpyDotSse2Ref(h, xa, xb, alpha, &acc)
+	return dlyReduceSse2Ref(&acc, 0, 0)
+}
+
+// dlyDotAvx2SumRef is dlyDotAvx2Ref from zero accumulators, reduced.
+func dlyDotAvx2SumRef(h, x []float32) (s, x2Sum float32) {
+	var acc [32]float32
+	dlyDotAvx2Ref(h, x, &acc)
+	return dlyReduceAvx2Ref(&acc, 0, 0)
+}
+
+// dlyAxpyFmaDotAvx2SumRef is dlyAxpyFmaDotAvx2Ref from zero accumulators,
+// reduced.
+func dlyAxpyFmaDotAvx2SumRef(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
+	var acc [32]float32
+	dlyAxpyFmaDotAvx2Ref(h, xa, xb, alpha, &acc)
+	return dlyReduceAvx2Ref(&acc, 0, 0)
+}
+
 // dlyAxpyRun is a stretch [start, end) of the filter whose update reads
 // x[k+off] and uses a fused (fma) or unfused multiply-add.
 type dlyAxpyRun struct {
@@ -418,27 +447,45 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 	xSize := len(x)
 	var pend dlyPendingAxpy
 	pendWhole := false // the pending update covers h with one x stretch at pendStart
-	pendStart := 0
+	pendStart, pendChunk1 := 0, 0
 	var acc [32]float32
 	for i := range y {
-		dlyZeroAcc(&acc)
 		var x2Sum, s float32
 		chunk1 := min(hSize, xSize-xStartIndex)
 		chunk2 := hSize - chunk1
 		v1 := chunk1 &^ (g - 1)
-		if pend.active && pendWhole && v1 == hSize {
+		reduced := false
+		if v1 == hSize && g != 4 {
+			// One stretch, no tails: the Sum kernels reduce in registers.
+			xb := x[xStartIndex : xStartIndex+hSize]
+			if pend.active && pendWhole {
+				xa := x[pendStart : pendStart+hSize]
+				if g == 8 {
+					s, x2Sum = dlyAxpyDotSse2Sum(h, xa, xb, pend.alpha)
+				} else {
+					s, x2Sum = dlyAxpyFmaDotAvx2Sum(h, xa, xb, pend.alpha)
+				}
+			} else {
+				if pend.active {
+					pend.set(pendStart, pendChunk1, hSize, pend.alpha, g == 16)
+					pend.apply(h, x, 0, hSize)
+				}
+				if g == 8 {
+					s, x2Sum = dlyDotSse2Sum(h, xb)
+				} else {
+					s, x2Sum = dlyDotAvx2Sum(h, xb)
+				}
+			}
+			reduced = true
+		} else if pend.active && pendWhole && v1 == hSize {
+			dlyZeroAcc(&acc)
 			xa := x[pendStart : pendStart+hSize]
 			xb := x[xStartIndex : xStartIndex+hSize]
-			switch g {
-			case 4:
-				dlyAxpyDotNeon(h, xa, xb, pend.alpha, (*[8]float32)(acc[:8]))
-			case 8:
-				dlyAxpyDotSse2(h, xa, xb, pend.alpha, (*[16]float32)(acc[:16]))
-			default:
-				dlyAxpyFmaDotAvx2(h, xa, xb, pend.alpha, &acc)
-			}
+			dlyAxpyDotNeon(h, xa, xb, pend.alpha, (*[8]float32)(acc[:8]))
 		} else {
+			dlyZeroAcc(&acc)
 			if pend.active {
+				pend.set(pendStart, pendChunk1, hSize, pend.alpha, g == 16)
 				pend.apply(h, x, 0, hSize)
 			}
 			dlyLaneDot(g, h[:v1], x[xStartIndex:xStartIndex+v1], &acc)
@@ -455,10 +502,11 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 				s += float32(h[k] * xk)
 			}
 		}
-		switch g {
-		case 4:
+		switch {
+		case reduced:
+		case g == 4:
 			s, x2Sum = dlyReduceNeon((*[8]float32)(acc[:8]), s, x2Sum)
-		case 8:
+		case g == 8:
 			s, x2Sum = dlyReduceSse2((*[16]float32)(acc[:16]), s, x2Sum)
 		default:
 			s, x2Sum = dlyReduceAvx2(&acc, s, x2Sum)
@@ -469,9 +517,10 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 		pend.active = false
 		if x2Sum > x2SumThreshold && !dlySaturated(y[i]) {
 			alpha := float32(smoothing*e) / x2Sum
-			pend.set(xStartIndex, chunk1, hSize, alpha, g == 16)
+			pend.active = true
+			pend.alpha = alpha
 			pendWhole = chunk1 == hSize
-			pendStart = xStartIndex
+			pendStart, pendChunk1 = xStartIndex, chunk1
 			*filtersUpdated = true
 		}
 		if xStartIndex > 0 {
@@ -481,6 +530,7 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 		}
 	}
 	if pend.active {
+		pend.set(pendStart, pendChunk1, hSize, pend.alpha, g == 16)
 		pend.apply(h, x, 0, hSize)
 	}
 }

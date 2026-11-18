@@ -78,4 +78,5 @@ func TestAfirAVXOnlyKernels(t *testing.T) {
 	TestKernSumRows(t)
 	TestRenderBufferSpectralSums(t)
 	TestKernBinsElementwise(t)
+	TestKernSpectrum(t)
 }

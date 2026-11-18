@@ -91,6 +91,28 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 		sB = dlyAccErrAvx2Ref(h, x, y, accB, &x16b)
 		dlyRequireBits(t, "accErrAvx2", append(accA, append(x16a[:], sA)...), append(accB, append(x16b[:], sB)...))
 
+		{
+			m8, m16 := n&^7, n&^15
+			s1, x1 := dlyDotSse2Sum(h[:m8], x)
+			s2, x2 := dlyDotSse2SumRef(h[:m8], x)
+			dlyRequireBits(t, "dotSse2Sum", []float32{s1, x1}, []float32{s2, x2})
+			s1, x1 = dlyDotAvx2Sum(h[:m16], x)
+			s2, x2 = dlyDotAvx2SumRef(h[:m16], x)
+			dlyRequireBits(t, "dotAvx2Sum", []float32{s1, x1}, []float32{s2, x2})
+			alpha := float32(rng.NormFloat64() * 1e-4)
+			xa := dlyRandSlice(rng, n+rng.Intn(20), 1000)
+			hA := append([]float32(nil), h[:m8]...)
+			hB := append([]float32(nil), h[:m8]...)
+			s1, x1 = dlyAxpyDotSse2Sum(hA, xa, x, alpha)
+			s2, x2 = dlyAxpyDotSse2SumRef(hB, xa, x, alpha)
+			dlyRequireBits(t, "axpyDotSse2Sum", append(hA, s1, x1), append(hB, s2, x2))
+			hA = append(hA[:0], h[:m16]...)
+			hB = append(hB[:0], h[:m16]...)
+			s1, x1 = dlyAxpyFmaDotAvx2Sum(hA, xa, x, alpha)
+			s2, x2 = dlyAxpyFmaDotAvx2SumRef(hB, xa, x, alpha)
+			dlyRequireBits(t, "axpyFmaDotAvx2Sum", append(hA, s1, x1), append(hB, s2, x2))
+		}
+
 		ts, tx := float32(rng.NormFloat64()), float32(rng.NormFloat64())
 		if trial%7 == 0 {
 			ts, tx = 0, 0

@@ -78,7 +78,7 @@ func kernSub(x, y, z []float32) {
 // accumulate into them, in row order starting from +0.
 func kernSumRows(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]float32) {
 	if !kernHasAVX2 {
-		kernSumRowsGeneric(dst, rows)
+		kernSumRows128(dst, rows)
 		return
 	}
 	for k := 0; k < FftLengthBy2; k += 16 {
@@ -93,6 +93,34 @@ func kernSumRows(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]flo
 		a1.StoreArray((*[8]float32)(p[8:16]))
 	}
 	archsimd.ClearAVXUpperBits()
+	var last float32
+	for _, r := range rows {
+		last += r[FftLengthBy2]
+	}
+	dst[FftLengthBy2] = last
+}
+
+// kernSumRows128 is kernSumRows with 128-bit operations (AVX without AVX2).
+func kernSumRows128(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]float32) {
+	if !kernHasAVX {
+		kernSumRowsGeneric(dst, rows)
+		return
+	}
+	for k := 0; k < FftLengthBy2; k += 16 {
+		var a0, a1, a2, a3 f32x4
+		for _, r := range rows {
+			p := (*[16]float32)(r[k : k+16])
+			a0 = a0.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[0:4])))
+			a1 = a1.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[4:8])))
+			a2 = a2.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[8:12])))
+			a3 = a3.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[12:16])))
+		}
+		p := (*[16]float32)(dst[k : k+16])
+		a0.StoreArray((*[4]float32)(p[0:4]))
+		a1.StoreArray((*[4]float32)(p[4:8]))
+		a2.StoreArray((*[4]float32)(p[8:12]))
+		a3.StoreArray((*[4]float32)(p[12:16]))
+	}
 	var last float32
 	for _, r := range rows {
 		last += r[FftLengthBy2]

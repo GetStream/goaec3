@@ -241,3 +241,15 @@ func dlyReduceAvx2(acc *[32]float32, s, x2Sum float32) (float32, float32) {
 
 // dlyZeroAcc clears the lane accumulators.
 func dlyZeroAcc(acc *[32]float32) { *acc = [32]float32{} }
+
+func dlyDotSse2Sum(h, x []float32) (s, x2Sum float32) { return dlyDotSse2SumRef(h, x) }
+
+func dlyAxpyDotSse2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
+	return dlyAxpyDotSse2SumRef(h, xa, xb, alpha)
+}
+
+func dlyDotAvx2Sum(h, x []float32) (s, x2Sum float32) { return dlyDotAvx2SumRef(h, x) }
+
+func dlyAxpyFmaDotAvx2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
+	return dlyAxpyFmaDotAvx2SumRef(h, xa, xb, alpha)
+}

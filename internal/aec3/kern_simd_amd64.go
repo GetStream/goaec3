@@ -23,6 +23,8 @@ func fftDataSpectrum(opt Aec3Optimization, re, im, out *[FftLengthBy2Plus1]float
 		kernSpectrumAvx2Ref(re, im, out)
 	case kernHasAVX2:
 		kernSpectrumSse2(re, im, out)
+	case kernHasAVX:
+		kernSpectrumSse2x4(re, im, out)
 	default:
 		fftDataSpectrumGeneric(re, im, out)
 	}
@@ -48,6 +50,18 @@ func kernSpectrumSse2(re, im, out *[FftLengthBy2Plus1]float32) {
 		r.Mul(r).Add(i.Mul(i)).StoreArray((*[8]float32)(out[k : k+8]))
 	}
 	archsimd.ClearAVXUpperBits()
+	const n = FftLengthBy2
+	out[n] = float32(re[n]*re[n]) + float32(im[n]*im[n])
+}
+
+// kernSpectrumSse2x4 is kernSpectrumSse2 with 128-bit operations, for
+// CPUs (or GODEBUG settings) with AVX but not AVX2.
+func kernSpectrumSse2x4(re, im, out *[FftLengthBy2Plus1]float32) {
+	for k := 0; k+4 <= FftLengthBy2; k += 4 {
+		r := archsimd.LoadFloat32x4Array((*[4]float32)(re[k : k+4]))
+		i := archsimd.LoadFloat32x4Array((*[4]float32)(im[k : k+4]))
+		r.Mul(r).Add(i.Mul(i)).StoreArray((*[4]float32)(out[k : k+4]))
+	}
 	const n = FftLengthBy2
 	out[n] = float32(re[n]*re[n]) + float32(im[n]*im[n])
 }
