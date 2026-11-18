@@ -56,6 +56,10 @@ write changelog narrative.
   (VZEROUPPER). Go's scalar float code is legacy-SSE encoded, so a dirty upper
   YMM state makes every later scalar float op pay the AVX→SSE transition
   penalty: on Intel this made the AVX2 lane 16× slower per frame.
+- A float32 live across `ClearAVXUpperBits` is spilled with a 4-byte store
+  and restored with a 16-byte load, which the CPU cannot store-forward (this
+  made Zen 3 1.6× slower). 256-bit kernels return results through the
+  caller's memory, or keep their 256-bit part in a `//go:noinline` helper.
 - CPU detection (`DetectOptimization`): one routine for builds with and
   without `GOEXPERIMENT=simd`, `golang.org/x/sys/cpu` with libwebrtc's kAVX2
   condition (AVX, OSXSAVE/YMM, AVX2, BMI2), so both builds pick the same lane

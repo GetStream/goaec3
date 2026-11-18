@@ -183,17 +183,16 @@ On real x86 and Linux arm64 hardware (GitHub-hosted runners,
 
 | Lane, CPU | 16 kHz mono | 48 kHz mono | 48 kHz stereo | goaec3 / libwebrtc |
 | --- | --- | --- | --- | --- |
-| amd64 AVX2, Intel Xeon 8573C | 76.5 µs | 85.7 µs | 114 µs | 1.37–1.57× |
-| amd64 AVX2, AMD EPYC 9V45 | 47.9 µs | 53.6 µs | 68.9 µs | 1.40–1.63× |
-| amd64 SSE2, AMD EPYC 9V45 | 59.1 µs | 64.1 µs | 90.2 µs | 1.37–1.46× |
-| arm64 NEON, Neoverse-N2 | 72.5 µs | 81.4 µs | 118 µs | 1.06–1.08× |
+| amd64 AVX2, Intel Xeon 6975P-C | 43.1 µs | 49.9 µs | 72.3 µs | 1.12–1.15× |
+| amd64 SSE2, AMD EPYC 7763 | 67.8 µs | 76.4 µs | 113 µs | 1.06–1.17× |
+| arm64 NEON, Neoverse-N2 | 68.1 µs | 76.9 µs | 115 µs | 1.00–1.05× |
 
-So goaec3 is faster than libwebrtc on Apple silicon, 6–8% slower on Linux
-arm64 servers, and 1.4–1.7× slower on amd64 (all with
-`GOEXPERIMENT=simd`, all bit-exact). Without `GOEXPERIMENT=simd` the same
-lanes run as plain Go: about 3.3–4.5× libwebrtc on arm64 and SSE2, and 7–9× on
-the amd64 AVX2 lane, whose fused multiply-adds then run in software. Build
-with the experiment.
+So with `GOEXPERIMENT=simd` goaec3 is faster than libwebrtc on Apple silicon,
+level with it on Linux arm64 servers, and 6–17% slower on amd64 (other AMD
+EPYC runners: 1.08–1.18×), all bit-exact. Without `GOEXPERIMENT=simd` the
+same lanes run as plain Go: about 2–3× libwebrtc on arm64 and 2.8–3.6× on the
+amd64 SSE2 lane; the amd64 AVX2 lane is about 9× because its fused
+multiply-adds then run in software. Build with the experiment.
 
 ```sh
 GOEXPERIMENT=simd go test -tags webrtc_oracle -run '^$' -bench BenchmarkEc3VsLibwebrtc ./internal/webrtcoracle/
