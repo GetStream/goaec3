@@ -22,3 +22,13 @@ func swap64(x vec) vec {
 func even(x, y vec) vec { return x.ToBits().ConcatEven(y.ToBits()).BitsToFloat32() }
 
 func odd(x, y vec) vec { return x.ToBits().ConcatOdd(y.ToBits()).BitsToFloat32() }
+
+// lo64 is vcombine(low(x), low(y)) = {x0, x1, y0, y1}.
+func lo64(x, y vec) vec {
+	return x.ToBits().ReshapeToUint64s().InterleaveLo(y.ToBits().ReshapeToUint64s()).ReshapeToUint32s().BitsToFloat32()
+}
+
+// hi64 is vcombine(high(x), high(y)) = {x2, x3, y2, y3}.
+func hi64(x, y vec) vec {
+	return x.ToBits().ReshapeToUint64s().InterleaveHi(y.ToBits().ReshapeToUint64s()).ReshapeToUint32s().BitsToFloat32()
+}

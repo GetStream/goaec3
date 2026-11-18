@@ -31,16 +31,6 @@ func vst(a *[128]float32, i int, x vec) { x.StoreArray((*[4]float32)(a[i : i+4])
 
 func vtab(t []float32, i int) vec { return archsimd.LoadFloat32x4Array((*[4]float32)(t[i : i+4])) }
 
-// lo64 is vcombine(low(x), low(y)) = {x0, x1, y0, y1}.
-func lo64(x, y vec) vec {
-	return x.ToBits().ReshapeToUint64s().InterleaveLo(y.ToBits().ReshapeToUint64s()).ReshapeToUint32s().BitsToFloat32()
-}
-
-// hi64 is vcombine(high(x), high(y)) = {x2, x3, y2, y3}.
-func hi64(x, y vec) vec {
-	return x.ToBits().ReshapeToUint64s().InterleaveHi(y.ToBits().ReshapeToUint64s()).ReshapeToUint32s().BitsToFloat32()
-}
-
 // zipLo is {x0, y0, x1, y1}; zipHi is {x2, y2, x3, y3}.
 func zipLo(x, y vec) vec { return x.ToBits().InterleaveLo(y.ToBits()).BitsToFloat32() }
 
