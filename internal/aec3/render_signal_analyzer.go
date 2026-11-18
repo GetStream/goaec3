@@ -1,5 +1,7 @@
 package aec3
 
+import "math"
+
 // Port of render_signal_analyzer.{h,cc}.
 
 const afirCounterThreshold = 5
@@ -32,20 +34,42 @@ func (r *RenderSignalAnalyzer) identifySmallNarrowBandRegions(renderBuffer *Rend
 	var channelCounters [FftLengthBy2 - 1]int
 	X2 := renderBuffer.Spectrum(delayPartitions)
 	for ch := range X2 {
-		x := &X2[ch]
-		for k := 1; k < FftLengthBy2; k++ {
-			if x[k] > 3*stdMax(x[k-1], x[k+1]) {
-				channelCounters[k-1]++
-			}
-		}
+		rsaCountNarrowBands(&X2[ch], &channelCounters)
 	}
+	for k := range r.narrowBandCounters {
+		// Increment, or reset to zero, without a branch.
+		inc := 0
+		if channelCounters[k] > 0 {
+			inc = 1
+		}
+		r.narrowBandCounters[k] = (r.narrowBandCounters[k] + 1) * inc
+	}
+}
+
+// rsaCountNarrowBands increments counters[k-1] for each bin k in
+// [1, FftLengthBy2) with x[k] > 3*std::max(x[k-1], x[k+1]). The bins are
+// independent and the outcome is data dependent, so the comparisons become
+// selects instead of branches.
+func rsaCountNarrowBands(x *[FftLengthBy2Plus1]float32, counters *[FftLengthBy2 - 1]int) {
 	for k := 1; k < FftLengthBy2; k++ {
-		if channelCounters[k-1] > 0 {
-			r.narrowBandCounters[k-1]++
-		} else {
-			r.narrowBandCounters[k-1] = 0
-		}
+		counters[k-1] += rsaB2i(x[k] > 3*rsaMax(x[k-1], x[k+1]))
 	}
+}
+
+// rsaMax is std::max(a, b): a unless a < b, so a NaN b yields a. It selects
+// between the bit patterns with a mask, which compiles to straight-line code
+// (a float select compiles to a branch).
+func rsaMax(a, b float32) float32 {
+	mask := -uint32(rsaB2i(a < b))
+	return math.Float32frombits(math.Float32bits(a)&^mask | math.Float32bits(b)&mask)
+}
+
+func rsaB2i(c bool) int {
+	i := 0
+	if c {
+		i = 1
+	}
+	return i
 }
 
 func (r *RenderSignalAnalyzer) identifyStrongNarrowBandComponent(renderBuffer *RenderBuffer) {
@@ -62,7 +86,9 @@ func (r *RenderSignalAnalyzer) identifyStrongNarrowBandComponent(renderBuffer *R
 	for channel := 0; channel < xLatest.NumChannels(); channel++ {
 		X2Latest := &renderBuffer.Spectrum(0)[channel]
 
-		// Identify the spectral peak (first maximum).
+		// Identify the spectral peak (first maximum). The peak search and
+		// the max folds below form serial dependency chains whose branches
+		// predict well, so they stay branches.
 		peakBin := 0
 		for k := 1; k < FftLengthBy2Plus1; k++ {
 			if X2Latest[k] > X2Latest[peakBin] {
