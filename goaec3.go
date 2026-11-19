@@ -80,19 +80,22 @@ var (
 // states, each in one pointer-free array; at 16 kHz the single band is the
 // full-band signal and it holds nothing.
 type ec3Side struct {
+	full        []float32 // [channel][frameLength]
+	filter      bands.SplittingFilter
 	numChannels int
 	numBands    int
 	frameLength int
-	full        []float32 // [channel][frameLength]
-	filter      bands.SplittingFilter
 }
 
-func (s *ec3Side) init(sampleRateHz, numChannels int) {
+// init sets up s; with more than one band the full-band copy lives in the
+// first numChannels*sampleRateHz/100 samples of storage.
+func (s *ec3Side) init(sampleRateHz, numChannels int, storage []float32) {
 	s.numChannels = numChannels
 	s.frameLength = sampleRateHz / 100
 	s.numBands = s.frameLength / aec3.SplitBandSize
 	if s.numBands > 1 {
-		s.full = make([]float32, numChannels*s.frameLength)
+		n := numChannels * s.frameLength
+		s.full = storage[:n:n]
 		s.filter.Init(numChannels, s.numBands)
 	}
 }
@@ -171,16 +174,17 @@ func ec3CheckFrame(frame [][]float32, numChannels, frameLength int) error {
 // sample buffers are pointer-free arrays, so the garbage collector follows
 // few pointers per canceller.
 type EchoCanceller struct {
-	ec                 aec3.EchoCanceller3
+	// The sides and the canceller keep their pointers at their start.
+	render  ec3Side
+	capture ec3Side
+	ec      aec3.EchoCanceller3
+
 	sampleRateHz       int
 	frameLength        int
 	numRenderChannels  int
 	numCaptureChannels int
 	exportLinearOutput bool
 	echoPathGainChange atomic.Bool
-
-	render  ec3Side
-	capture ec3Side
 }
 
 // New creates an echo canceller for sampleRateHz (16000, 32000 or 48000)
@@ -229,8 +233,15 @@ func newEchoCanceller(cfg, multichannelCfg *Config, sampleRateHz, numRenderChann
 		exportLinearOutput: cfg.Filter.ExportLinearAecOutput,
 	}
 	e.ec.Init(cfg, multichannelCfg, sampleRateHz, numRenderChannels, numCaptureChannels)
-	e.render.init(sampleRateHz, numRenderChannels)
-	e.capture.init(sampleRateHz, numCaptureChannels)
+	// The full-band copies of both sides share one array; the capture side
+	// comes first, the render side, which AnalyzeRender writes, last.
+	var captureFull, renderFull []float32
+	if sampleRateHz > 16000 {
+		full := make([]float32, (numCaptureChannels+numRenderChannels)*e.frameLength)
+		captureFull, renderFull = full[:numCaptureChannels*e.frameLength], full[numCaptureChannels*e.frameLength:]
+	}
+	e.capture.init(sampleRateHz, numCaptureChannels, captureFull)
+	e.render.init(sampleRateHz, numRenderChannels, renderFull)
 	return e, nil
 }
 

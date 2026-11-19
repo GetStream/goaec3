@@ -61,6 +61,32 @@ func channelSlice[T any](inline []T, n int) []T {
 	return make([]T, n)
 }
 
+// channelState returns n elements of per-channel state of a component:
+// inline[:n], an array of the component's own struct, for up to
+// inlineChannels elements, and otherwise more, which the component
+// allocated (see moreChannels). The component holds no pointer to inline, so
+// with up to inlineChannels channels its per-channel state is nothing the
+// garbage collector reads, and the component stays a plain value. A
+// component keeps what it allocates for more channels behind one pointer at
+// its start: the garbage collector reads every pointer word of a live
+// object, nil or not, so pointer words scattered over a large struct each
+// cost a cache line.
+func channelState[T any](inline *[inlineChannels]T, n int, more []T) []T {
+	if more != nil {
+		return more
+	}
+	return inline[:n:n]
+}
+
+// moreChannels returns the n elements that channelState hands out when they
+// do not fit inline, and nil when they do.
+func moreChannels[T any](n int) []T {
+	if n > inlineChannels {
+		return make([]T, n)
+	}
+	return nil
+}
+
 // BlockBuffer is a ring of Blocks (block_buffer.h). The slots share one
 // pointer-free backing array; At returns a view of one slot.
 type BlockBuffer struct {

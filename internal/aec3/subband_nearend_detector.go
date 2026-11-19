@@ -15,7 +15,7 @@ type SubbandNearendDetectionConfig struct {
 type SubbandNearendDetector struct {
 	config                SubbandNearendDetectionConfig
 	numCaptureChannels    int
-	nearendSmoothers      []*MovingAverage
+	nearendSmoothers      []MovingAverage
 	oneOverSubbandLength1 float32
 	oneOverSubbandLength2 float32
 	nearendState          bool
@@ -24,17 +24,23 @@ type SubbandNearendDetector struct {
 var _ NearendDetector = (*SubbandNearendDetector)(nil)
 
 func NewSubbandNearendDetector(config *SubbandNearendDetectionConfig, numCaptureChannels int) *SubbandNearendDetector {
-	d := &SubbandNearendDetector{
+	d := &SubbandNearendDetector{}
+	d.init(config, numCaptureChannels)
+	return d
+}
+
+// init sets up d in place.
+func (d *SubbandNearendDetector) init(config *SubbandNearendDetectionConfig, numCaptureChannels int) {
+	*d = SubbandNearendDetector{
 		config:                *config,
 		numCaptureChannels:    numCaptureChannels,
-		nearendSmoothers:      make([]*MovingAverage, numCaptureChannels),
 		oneOverSubbandLength1: 1 / float32(config.Subband1.High-config.Subband1.Low+1),
 		oneOverSubbandLength2: 1 / float32(config.Subband2.High-config.Subband2.Low+1),
 	}
+	d.nearendSmoothers = make([]MovingAverage, numCaptureChannels)
 	for ch := range d.nearendSmoothers {
-		d.nearendSmoothers[ch] = NewMovingAverage(FftLengthBy2Plus1, config.NearendAverageBlocks)
+		d.nearendSmoothers[ch] = *NewMovingAverage(FftLengthBy2Plus1, config.NearendAverageBlocks)
 	}
-	return d
 }
 
 func (d *SubbandNearendDetector) IsNearendState() bool { return d.nearendState }
@@ -51,10 +57,11 @@ func (d *SubbandNearendDetector) Update(nearendSpectrum, _,
 	comfortNoiseSpectrum [][FftLengthBy2Plus1]float32, _ bool) {
 	d.nearendState = false
 	s1, s2 := d.config.Subband1, d.config.Subband2
-	for ch := 0; ch < d.numCaptureChannels; ch++ {
+	smoothers := d.nearendSmoothers
+	for ch := range smoothers {
 		noise := &comfortNoiseSpectrum[ch]
 		var nearend [FftLengthBy2Plus1]float32
-		d.nearendSmoothers[ch].Average(nearendSpectrum[ch][:], nearend[:])
+		smoothers[ch].Average(nearendSpectrum[ch][:], nearend[:])
 
 		// Noise power of the first region.
 		noisePower := supSumRange(noise[s1.Low:s1.High+1]) * d.oneOverSubbandLength1

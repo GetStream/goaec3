@@ -185,8 +185,9 @@ type ec3RenderWriter struct {
 	renderQueueInputFrame Frame
 }
 
-func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numBands, numChannels int) {
-	*w = ec3RenderWriter{renderQueueInputFrame: NewFrame(numBands, numChannels)}
+// init sets up w; the frame keeps its samples in storage.
+func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numBands, numChannels int, storage []float32) {
+	*w = ec3RenderWriter{renderQueueInputFrame: ec3FrameOver(numBands, numChannels, storage)}
 	if config.Filter.HighPassFilterEchoReference {
 		w.hasHighPassFilter = true
 		w.highPassFilter.init(16000, numChannels)
@@ -223,11 +224,28 @@ func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue) {
 // may be called concurrently with the other methods; the other methods must
 // not be called concurrently with each other.
 //
-// The frames, blocks and framing buffers of the capture side are views of
-// one pointer-free array and the framing components are held by value, so
-// the garbage collector follows few pointers per canceller.
+// The frames, blocks and framing buffers are views of one pointer-free
+// array, and the framing components and the block processor are held by
+// value, so the garbage collector follows few pointers per canceller.
 type EchoCanceller3 struct {
-	renderWriter ec3RenderWriter
+	// The fields that hold pointers come first, the block processor (whose
+	// own come first too) after them and the pointer-free state last: the
+	// garbage collector reads a canceller up to its last pointer.
+	renderWriter             ec3RenderWriter
+	linearOutputFramer       BlockFramer
+	outputFramer             BlockFramer
+	captureBlocker           FrameBlocker
+	renderBlocker            FrameBlocker
+	renderTransferQueue      ec3RenderTransferQueue
+	renderQueueOutputFrame   Frame
+	captureFrame             Frame
+	linearOutputFrame        Frame // [1][channel][SplitBandSize]
+	renderBlock              Block
+	linearOutputBlock        Block
+	captureBlock             Block
+	blockDelayBuffer         BlockDelayBuffer
+	blockProcessorForTesting *BlockProcessor // set by SetBlockProcessorForTesting
+	blockProcessor           BlockProcessor
 
 	config                      EchoCanceller3Config
 	sampleRateHz                int
@@ -238,21 +256,8 @@ type EchoCanceller3 struct {
 	configSelector              ConfigSelector
 	multichannelContentDetector MultiChannelContentDetector
 	hasLinearOutput             bool
-	linearOutputFramer          BlockFramer
-	outputFramer                BlockFramer
-	captureBlocker              FrameBlocker
-	renderBlocker               FrameBlocker
-	renderTransferQueue         ec3RenderTransferQueue
-	blockProcessor              *BlockProcessor
-	renderQueueOutputFrame      Frame
-	captureFrame                Frame
-	linearOutputFrame           Frame // [1][channel][SplitBandSize]
 	saturatedMicrophoneSignal   bool
-	renderBlock                 Block
-	linearOutputBlock           Block
-	captureBlock                Block
 	hasBlockDelayBuffer         bool
-	blockDelayBuffer            BlockDelayBuffer
 }
 
 // NewEchoCanceller3 creates an echo canceller. multichannelConfig is the
@@ -287,10 +292,11 @@ func (e *EchoCanceller3) Init(config, multichannelConfig *EchoCanceller3Config, 
 		active.MultiChannel.StereoDetectionHysteresisSeconds)
 	e.hasLinearOutput = active.Filter.ExportLinearAecOutput
 
-	// One backing array for every capture-side sample buffer.
+	// One backing array for every sample buffer but the transfer queue. The
+	// render frame, which the render side writes, comes last.
 	renderViews := e.numBands * e.numRenderInputChannels
 	captureViews := e.numBands * e.numCaptureChannels
-	n := renderViews*(SplitBandSize+2*BlockSize) + captureViews*(SplitBandSize+3*BlockSize)
+	n := renderViews*(2*SplitBandSize+2*BlockSize) + captureViews*(SplitBandSize+3*BlockSize)
 	if e.hasLinearOutput {
 		n += e.numCaptureChannels * (SplitBandSize + 2*BlockSize)
 	}
@@ -318,13 +324,13 @@ func (e *EchoCanceller3) Init(config, multichannelConfig *EchoCanceller3Config, 
 			e.config.Delay.FixedCaptureDelaySamples)
 	}
 
-	e.renderWriter.init(active, e.numBands, e.numRenderInputChannels)
-
 	if e.hasLinearOutput {
 		e.linearOutputFramer.init(1, e.numCaptureChannels, take(e.numCaptureChannels*BlockSize))
 		e.linearOutputBlock = ec3BlockOver(1, e.numCaptureChannels, take(e.numCaptureChannels*BlockSize))
 		e.linearOutputFrame = ec3FrameOver(1, e.numCaptureChannels, take(e.numCaptureChannels*SplitBandSize))
 	}
+
+	e.renderWriter.init(active, e.numBands, e.numRenderInputChannels, take(renderViews*SplitBandSize))
 
 	e.initialize()
 }
@@ -350,13 +356,21 @@ func (e *EchoCanceller3) initialize() {
 	// An empty blocker over the same storage.
 	e.renderBlocker.init(e.numBands, e.numRenderChannelsToAec, e.renderBlocker.buffer[:cap(e.renderBlocker.buffer)])
 
-	e.blockProcessor = NewBlockProcessor(e.configSelector.ActiveConfig(), e.sampleRateHz,
+	e.blockProcessor.init(e.configSelector.ActiveConfig(), e.sampleRateHz,
 		e.numRenderChannelsToAec, e.numCaptureChannels)
+}
+
+// processor returns the block processor in use.
+func (e *EchoCanceller3) processor() *BlockProcessor {
+	if e.blockProcessorForTesting != nil {
+		return e.blockProcessorForTesting
+	}
+	return &e.blockProcessor
 }
 
 // SetBlockProcessorForTesting replaces the internal block processor.
 func (e *EchoCanceller3) SetBlockProcessorForTesting(blockProcessor *BlockProcessor) {
-	e.blockProcessor = blockProcessor
+	e.blockProcessorForTesting = blockProcessor
 }
 
 // StereoRenderProcessingActiveForTesting reports whether stereo processing
@@ -507,7 +521,7 @@ func (e *EchoCanceller3) linearBlock() *Block {
 func (e *EchoCanceller3) processCaptureFrameContent(linearOutput, levelChange, aecReferenceIsDownmixedStereo bool,
 	subFrameIndex int) {
 	e.captureBlocker.InsertSubFrameAndExtractBlock(e.captureFrame, subFrameIndex, &e.captureBlock)
-	e.blockProcessor.ProcessCapture(levelChange || aecReferenceIsDownmixedStereo,
+	e.processor().ProcessCapture(levelChange || aecReferenceIsDownmixedStereo,
 		e.saturatedMicrophoneSignal, e.linearBlock(), &e.captureBlock)
 	e.outputFramer.InsertBlockAndExtractSubFrame(&e.captureBlock, e.captureFrame, subFrameIndex)
 
@@ -522,7 +536,7 @@ func (e *EchoCanceller3) processRemainingCaptureFrameContent(levelChange, aecRef
 	}
 
 	e.captureBlocker.ExtractBlock(&e.captureBlock)
-	e.blockProcessor.ProcessCapture(levelChange || aecReferenceIsDownmixedStereo,
+	e.processor().ProcessCapture(levelChange || aecReferenceIsDownmixedStereo,
 		e.saturatedMicrophoneSignal, e.linearBlock(), &e.captureBlock)
 	e.outputFramer.InsertBlock(&e.captureBlock)
 
@@ -534,7 +548,7 @@ func (e *EchoCanceller3) processRemainingCaptureFrameContent(levelChange, aecRef
 func (e *EchoCanceller3) bufferRenderFrameContent(properDownmixNeeded bool, subFrameIndex int) {
 	ec3DownmixRenderSubFrame(properDownmixNeeded, e.renderQueueOutputFrame, subFrameIndex, e.numRenderChannelsToAec)
 	e.renderBlocker.InsertSubFrameAndExtractBlock(e.renderQueueOutputFrame, subFrameIndex, &e.renderBlock)
-	e.blockProcessor.BufferRender(&e.renderBlock)
+	e.processor().BufferRender(&e.renderBlock)
 }
 
 func (e *EchoCanceller3) bufferRemainingRenderFrameContent() {
@@ -542,7 +556,7 @@ func (e *EchoCanceller3) bufferRemainingRenderFrameContent() {
 		return
 	}
 	e.renderBlocker.ExtractBlock(&e.renderBlock)
-	e.blockProcessor.BufferRender(&e.renderBlock)
+	e.processor().BufferRender(&e.renderBlock)
 }
 
 // emptyRenderQueue empties the render transfer queue.
@@ -565,20 +579,20 @@ func (e *EchoCanceller3) emptyRenderQueue() {
 
 // GetMetrics collects the current metrics from the echo canceller.
 func (e *EchoCanceller3) GetMetrics() EchoControlMetrics {
-	return e.blockProcessor.GetMetrics()
+	return e.processor().GetMetrics()
 }
 
 // SetAudioBufferDelay provides an optional external estimate of the audio
 // buffer delay.
 func (e *EchoCanceller3) SetAudioBufferDelay(delayMs int) {
-	e.blockProcessor.SetAudioBufferDelay(delayMs)
+	e.processor().SetAudioBufferDelay(delayMs)
 }
 
 // SetCaptureOutputUsage specifies whether the capture output will be used,
 // allowing some processing to be deactivated when it is not, for instance
 // when the endpoint is muted.
 func (e *EchoCanceller3) SetCaptureOutputUsage(captureOutputUsed bool) {
-	e.blockProcessor.SetCaptureOutputUsage(captureOutputUsed)
+	e.processor().SetCaptureOutputUsage(captureOutputUsed)
 }
 
 // ActiveProcessing reports whether the echo canceller is processing; AEC3
@@ -589,7 +603,7 @@ func (e *EchoCanceller3) ActiveProcessing() bool { return true }
 // echo leakage from the echo canceller. Once flagged, leakage should be
 // unflagged when it no longer occurs.
 func (e *EchoCanceller3) UpdateEchoLeakageStatus(leakageDetected bool) {
-	e.blockProcessor.UpdateEchoLeakageStatus(leakageDetected)
+	e.processor().UpdateEchoLeakageStatus(leakageDetected)
 }
 
 // SampleRateHz returns the full-band sample rate.

@@ -15,59 +15,68 @@ type BlockProcessorEchoRemover interface {
 // BlockProcessor performs echo cancellation on 64 sample blocks of audio
 // data (block_processor.h; this is the BlockProcessorImpl of
 // block_processor.cc). Metrics reporting is not ported.
+//
+// The render delay buffer, the delay controller and the echo remover that
+// NewBlockProcessor creates are part of the BlockProcessor, which must not
+// be copied (its components refer to it).
 type BlockProcessor struct {
-	config                 *EchoCanceller3Config // shared, never modified
+	// The components of NewBlockProcessorWithComponents; nil otherwise.
+	injected *blockProcessorComponents
+
+	ownRenderBuffer    RenderDelayBuffer
+	ownDelayController RenderDelayController
+	ownEchoRemover     EchoRemover
+
+	config                 EchoCanceller3Config
 	captureProperlyStarted bool
 	renderProperlyStarted  bool
 	sampleRateHz           int
-	renderBuffer           *RenderDelayBuffer
-	delayController        *RenderDelayController // nil with an external delay estimator
-	echoRemover            BlockProcessorEchoRemover
+	hasDelayController     bool // false with an external delay estimator
 	renderEvent            BufferingEvent
 	captureCallCounter     int
 	estimatedDelay         DelayEstimate
 	hasEstimatedDelay      bool
 }
 
+// blockProcessorComponents are the components handed to
+// NewBlockProcessorWithComponents.
+type blockProcessorComponents struct {
+	renderBuffer    *RenderDelayBuffer
+	delayController *RenderDelayController
+	echoRemover     BlockProcessorEchoRemover
+}
+
 // NewBlockProcessor mirrors BlockProcessor::Create(env, config,
 // sample_rate_hz, num_render_channels, num_capture_channels).
 func NewBlockProcessor(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int) *BlockProcessor {
-	// The processor, its render delay buffer and its delay controller are
-	// one heap object.
+	p := &BlockProcessor{}
+	p.init(config, sampleRateHz, numRenderChannels, numCaptureChannels)
+	return p
+}
+
+// init sets up p in place, as NewBlockProcessor does.
+func (p *BlockProcessor) init(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
+	numCaptureChannels int) {
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate for BlockProcessor")
 	}
-	if config.Delay.UseExternalDelayEstimator {
-		s := &struct {
-			processor    BlockProcessor
-			renderBuffer RenderDelayBuffer
-		}{}
-		s.renderBuffer.init(config, sampleRateHz, numRenderChannels)
-		s.processor = BlockProcessor{config: config, sampleRateHz: sampleRateHz, renderBuffer: &s.renderBuffer,
-			echoRemover: NewEchoRemover(config, sampleRateHz, numRenderChannels, numCaptureChannels),
-			renderEvent: BufferingEventNone}
-		return &s.processor
+	*p = BlockProcessor{}
+	p.config = *config
+	config = &p.config
+	p.sampleRateHz = sampleRateHz
+	p.renderEvent = BufferingEventNone
+	p.ownRenderBuffer.init(config, sampleRateHz, numRenderChannels)
+	if !config.Delay.UseExternalDelayEstimator {
+		p.hasDelayController = true
+		p.ownDelayController.init(config, sampleRateHz, numCaptureChannels)
 	}
-	s := &struct {
-		processor       BlockProcessor
-		renderBuffer    RenderDelayBuffer
-		delayController RenderDelayController
-	}{}
-	s.renderBuffer.init(config, sampleRateHz, numRenderChannels)
-	s.delayController.init(config, sampleRateHz, numCaptureChannels)
-	s.processor = BlockProcessor{config: config, sampleRateHz: sampleRateHz, renderBuffer: &s.renderBuffer,
-		delayController: &s.delayController,
-		echoRemover:     NewEchoRemover(config, sampleRateHz, numRenderChannels, numCaptureChannels),
-		renderEvent:     BufferingEventNone}
-	return &s.processor
+	p.ownEchoRemover.init(config, sampleRateHz, numRenderChannels, numCaptureChannels, DetectOptimization())
 }
 
 // NewBlockProcessorWithComponents mirrors the BlockProcessor::Create
 // overload that takes the render delay buffer, the delay controller (nil
 // when the config uses an external delay estimator) and the echo remover.
-// The result keeps a reference to config, which must not change while it
-// is in use (the C++ copies it).
 func NewBlockProcessorWithComponents(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int, renderBuffer *RenderDelayBuffer, delayController *RenderDelayController,
 	echoRemover BlockProcessorEchoRemover) *BlockProcessor {
@@ -76,13 +85,30 @@ func NewBlockProcessorWithComponents(config *EchoCanceller3Config, sampleRateHz,
 		panic("aec3: invalid sample rate for BlockProcessor")
 	}
 	return &BlockProcessor{
-		config:          config,
-		sampleRateHz:    sampleRateHz,
-		renderBuffer:    renderBuffer,
-		delayController: delayController,
-		echoRemover:     echoRemover,
-		renderEvent:     BufferingEventNone,
+		config:             *config,
+		sampleRateHz:       sampleRateHz,
+		hasDelayController: delayController != nil,
+		renderEvent:        BufferingEventNone,
+		injected: &blockProcessorComponents{renderBuffer: renderBuffer, delayController: delayController,
+			echoRemover: echoRemover},
 	}
+}
+
+// renderBuffer returns the render delay buffer in use.
+func (p *BlockProcessor) renderBuffer() *RenderDelayBuffer {
+	if p.injected != nil {
+		return p.injected.renderBuffer
+	}
+	return &p.ownRenderBuffer
+}
+
+// delayController returns the delay controller in use; it is only valid
+// with hasDelayController.
+func (p *BlockProcessor) delayController() *RenderDelayController {
+	if p.injected != nil {
+		return p.injected.delayController
+	}
+	return &p.ownDelayController
 }
 
 // ProcessCapture processes a block of capture data. linearOutput is nil
@@ -98,15 +124,15 @@ func (p *BlockProcessor) ProcessCapture(echoPathGainChange, captureSignalSaturat
 	if p.renderProperlyStarted {
 		if !p.captureProperlyStarted {
 			p.captureProperlyStarted = true
-			p.renderBuffer.Reset()
-			if p.delayController != nil {
-				p.delayController.Reset(true)
+			p.renderBuffer().Reset()
+			if p.hasDelayController {
+				p.delayController().Reset(true)
 			}
 		}
 	} else {
 		// If no render data has yet arrived, do not process the capture
 		// signal.
-		p.renderBuffer.HandleSkippedCaptureProcessing()
+		p.renderBuffer().HandleSkippedCaptureProcessing()
 		return
 	}
 
@@ -118,8 +144,8 @@ func (p *BlockProcessor) ProcessCapture(echoPathGainChange, captureSignalSaturat
 
 	if p.renderEvent == BufferingEventRenderOverrun && p.renderProperlyStarted {
 		echoPathVariability.DelayChange = DelayAdjustmentBufferFlush
-		if p.delayController != nil {
-			p.delayController.Reset(true)
+		if p.hasDelayController {
+			p.delayController().Reset(true)
 		}
 	}
 	p.renderEvent = BufferingEventNone
@@ -127,11 +153,11 @@ func (p *BlockProcessor) ProcessCapture(echoPathGainChange, captureSignalSaturat
 	// Update the render buffers with any newly arrived render blocks and
 	// prepare the render buffers for reading the render data corresponding
 	// to the current capture block.
-	bufferEvent := p.renderBuffer.PrepareCaptureProcessing()
+	bufferEvent := p.renderBuffer().PrepareCaptureProcessing()
 	// Reset the delay controller at render buffer underrun.
 	if bufferEvent == BufferingEventRenderUnderrun {
-		if p.delayController != nil {
-			p.delayController.Reset(false)
+		if p.hasDelayController {
+			p.delayController().Reset(false)
 		}
 	}
 
@@ -139,28 +165,33 @@ func (p *BlockProcessor) ProcessCapture(echoPathGainChange, captureSignalSaturat
 	if hasDelayEstimator {
 		// Compute and apply the render delay required to achieve proper
 		// signal alignment.
-		p.estimatedDelay, p.hasEstimatedDelay = p.delayController.GetDelay(
-			p.renderBuffer.GetDownsampledRenderBuffer(), p.renderBuffer.Delay(), captureBlock)
+		p.estimatedDelay, p.hasEstimatedDelay = p.delayController().GetDelay(
+			p.renderBuffer().GetDownsampledRenderBuffer(), p.renderBuffer().Delay(), captureBlock)
 
 		if p.hasEstimatedDelay {
-			if p.renderBuffer.AlignFromDelay(p.estimatedDelay.Delay) {
+			if p.renderBuffer().AlignFromDelay(p.estimatedDelay.Delay) {
 				echoPathVariability.DelayChange = DelayAdjustmentNewDetectedDelay
 			}
 		}
 
-		echoPathVariability.ClockDrift = p.delayController.HasClockdrift()
+		echoPathVariability.ClockDrift = p.delayController().HasClockdrift()
 	} else {
-		p.renderBuffer.AlignFromExternalDelay()
+		p.renderBuffer().AlignFromExternalDelay()
 	}
 
 	// Remove the echo from the capture signal.
-	if hasDelayEstimator || p.renderBuffer.HasReceivedBufferDelay() {
+	if hasDelayEstimator || p.renderBuffer().HasReceivedBufferDelay() {
 		var externalDelay *DelayEstimate
 		if p.hasEstimatedDelay {
 			externalDelay = &p.estimatedDelay
 		}
-		p.echoRemover.ProcessCapture(echoPathVariability, captureSignalSaturation, externalDelay,
-			p.renderBuffer.GetRenderBuffer(), linearOutput, captureBlock)
+		if p.injected != nil {
+			p.injected.echoRemover.ProcessCapture(echoPathVariability, captureSignalSaturation, externalDelay,
+				p.renderBuffer().GetRenderBuffer(), linearOutput, captureBlock)
+		} else {
+			p.ownEchoRemover.ProcessCapture(echoPathVariability, captureSignalSaturation, externalDelay,
+				p.ownRenderBuffer.GetRenderBuffer(), linearOutput, captureBlock)
+		}
 	}
 }
 
@@ -169,37 +200,50 @@ func (p *BlockProcessor) BufferRender(block *Block) {
 	if block.NumBands() != NumBandsForRate(p.sampleRateHz) {
 		panic("aec3: BlockProcessor render block has the wrong number of bands")
 	}
-	p.renderEvent = p.renderBuffer.Insert(block)
+	p.renderEvent = p.renderBuffer().Insert(block)
 
 	p.renderProperlyStarted = true
-	if p.delayController != nil {
-		p.delayController.LogRenderCall()
+	if p.hasDelayController {
+		p.delayController().LogRenderCall()
 	}
 }
 
 // UpdateEchoLeakageStatus reports whether echo leakage has been detected in
 // the echo canceller output.
 func (p *BlockProcessor) UpdateEchoLeakageStatus(leakageDetected bool) {
-	p.echoRemover.UpdateEchoLeakageStatus(leakageDetected)
+	if p.injected != nil {
+		p.injected.echoRemover.UpdateEchoLeakageStatus(leakageDetected)
+		return
+	}
+	p.ownEchoRemover.UpdateEchoLeakageStatus(leakageDetected)
 }
 
 // GetMetrics returns the current metrics.
 func (p *BlockProcessor) GetMetrics() EchoControlMetrics {
-	metrics := p.echoRemover.GetMetrics()
+	var metrics EchoControlMetrics
+	if p.injected != nil {
+		metrics = p.injected.echoRemover.GetMetrics()
+	} else {
+		metrics = p.ownEchoRemover.GetMetrics()
+	}
 	const blockSizeMs = 4
-	metrics.DelayMs = p.renderBuffer.Delay() * blockSizeMs
+	metrics.DelayMs = p.renderBuffer().Delay() * blockSizeMs
 	return metrics
 }
 
 // SetAudioBufferDelay provides an optional external estimate of the audio
 // buffer delay.
 func (p *BlockProcessor) SetAudioBufferDelay(delayMs int) {
-	p.renderBuffer.SetAudioBufferDelay(delayMs)
+	p.renderBuffer().SetAudioBufferDelay(delayMs)
 }
 
 // SetCaptureOutputUsage specifies whether the capture output will be used.
 // The block processor may then deactivate some of the processing when the
 // output is anyway not used, for instance when the endpoint is muted.
 func (p *BlockProcessor) SetCaptureOutputUsage(captureOutputUsed bool) {
-	p.echoRemover.SetCaptureOutputUsage(captureOutputUsed)
+	if p.injected != nil {
+		p.injected.echoRemover.SetCaptureOutputUsage(captureOutputUsed)
+		return
+	}
+	p.ownEchoRemover.SetCaptureOutputUsage(captureOutputUsed)
 }

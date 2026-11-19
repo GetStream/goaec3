@@ -15,10 +15,16 @@ type CoarseFilterUpdateGain struct {
 }
 
 func NewCoarseFilterUpdateGain(config CoarseConfiguration, configChangeDurationBlocks int) *CoarseFilterUpdateGain {
-	g := &CoarseFilterUpdateGain{configChangeDurationBlocks: configChangeDurationBlocks}
+	g := &CoarseFilterUpdateGain{}
+	g.init(config, configChangeDurationBlocks)
+	return g
+}
+
+// init sets up g in place.
+func (g *CoarseFilterUpdateGain) init(config CoarseConfiguration, configChangeDurationBlocks int) {
+	*g = CoarseFilterUpdateGain{configChangeDurationBlocks: configChangeDurationBlocks}
 	g.SetConfig(config, true)
 	g.oneByConfigChangeDurationBlocks = 1 / float32(g.configChangeDurationBlocks)
-	return g
 }
 
 // HandleEchoPathChange resets the adaptation counters.

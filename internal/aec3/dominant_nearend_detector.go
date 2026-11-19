@@ -14,6 +14,8 @@ type DominantNearendDetectionConfig struct {
 
 // DominantNearendDetector detects when the nearend signal dominates the echo.
 type DominantNearendDetector struct {
+	moreCounters          []dominantNearendCounters // with more than inlineChannels channels
+	counters              [inlineChannels]dominantNearendCounters
 	enrThreshold          float32
 	enrExitThreshold      float32
 	snrThreshold          float32
@@ -22,22 +24,25 @@ type DominantNearendDetector struct {
 	useDuringInitialPhase bool
 	numCaptureChannels    int
 	nearendState          bool
-	triggerCounters       []int
-	holdCounters          []int
+}
 
-	// The counters above for up to inlineChannels channels.
-	inline struct {
-		triggerCounters [inlineChannels]int
-		holdCounters    [inlineChannels]int
-	}
+// dominantNearendCounters are the counters of one capture channel.
+type dominantNearendCounters struct {
+	trigger int
+	hold    int
 }
 
 var _ NearendDetector = (*DominantNearendDetector)(nil)
 
 func NewDominantNearendDetector(config *DominantNearendDetectionConfig, numCaptureChannels int) *DominantNearendDetector {
-	// The counters live in the detector, which must not be copied (see
-	// channelSlice).
-	d := &DominantNearendDetector{
+	d := &DominantNearendDetector{}
+	d.init(config, numCaptureChannels)
+	return d
+}
+
+// init sets up d in place.
+func (d *DominantNearendDetector) init(config *DominantNearendDetectionConfig, numCaptureChannels int) {
+	*d = DominantNearendDetector{
 		enrThreshold:          config.EnrThreshold,
 		enrExitThreshold:      config.EnrExitThreshold,
 		snrThreshold:          config.SnrThreshold,
@@ -46,9 +51,7 @@ func NewDominantNearendDetector(config *DominantNearendDetectionConfig, numCaptu
 		useDuringInitialPhase: config.UseDuringInitialPhase,
 		numCaptureChannels:    numCaptureChannels,
 	}
-	d.triggerCounters = channelSlice(d.inline.triggerCounters[:], numCaptureChannels)
-	d.holdCounters = channelSlice(d.inline.holdCounters[:], numCaptureChannels)
-	return d
+	d.moreCounters = moreChannels[dominantNearendCounters](numCaptureChannels)
 }
 
 func (d *DominantNearendDetector) IsNearendState() bool { return d.nearendState }
@@ -65,7 +68,9 @@ func (d *DominantNearendDetector) Update(nearendSpectrum, residualEchoSpectrum,
 	comfortNoiseSpectrum [][FftLengthBy2Plus1]float32, initialState bool) {
 	d.nearendState = false
 
-	for ch := 0; ch < d.numCaptureChannels; ch++ {
+	counters := channelState(&d.counters, d.numCaptureChannels, d.moreCounters)
+	for ch := range counters {
+		c := &counters[ch]
 		neSum := supLowFrequencyEnergy(&nearendSpectrum[ch])
 		echoSum := supLowFrequencyEnergy(&residualEchoSpectrum[ch])
 		noiseSum := supLowFrequencyEnergy(&comfortNoiseSpectrum[ch])
@@ -75,26 +80,26 @@ func (d *DominantNearendDetector) Update(nearendSpectrum, residualEchoSpectrum,
 		if (!initialState || d.useDuringInitialPhase) &&
 			echoSum < d.enrThreshold*neSum &&
 			neSum > d.snrThreshold*noiseSum {
-			d.triggerCounters[ch]++
-			if d.triggerCounters[ch] >= d.triggerThreshold {
+			c.trigger++
+			if c.trigger >= d.triggerThreshold {
 				// After a period of strong active nearend activity, flag
 				// nearend mode.
-				d.holdCounters[ch] = d.holdDuration
-				d.triggerCounters[ch] = d.triggerThreshold
+				c.hold = d.holdDuration
+				c.trigger = d.triggerThreshold
 			}
 		} else {
 			// Forget previously detected strong active nearend activity.
-			d.triggerCounters[ch] = max(0, d.triggerCounters[ch]-1)
+			c.trigger = max(0, c.trigger-1)
 		}
 
 		// Exit nearend-state early at strong echo.
 		if echoSum > d.enrExitThreshold*neSum &&
 			echoSum > d.snrThreshold*noiseSum {
-			d.holdCounters[ch] = 0
+			c.hold = 0
 		}
 
 		// Remain in any nearend mode for a certain duration.
-		d.holdCounters[ch] = max(0, d.holdCounters[ch]-1)
-		d.nearendState = d.nearendState || d.holdCounters[ch] > 0
+		c.hold = max(0, c.hold-1)
+		d.nearendState = d.nearendState || c.hold > 0
 	}
 }

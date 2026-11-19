@@ -202,12 +202,17 @@ type AecState struct {
 // depends on the filter length.
 func NewAecState(config *EchoCanceller3Config, numCaptureChannels int) *AecState {
 	a := &AecState{}
+	a.initDefault(config, numCaptureChannels)
+	return a
+}
+
+// initDefault sets up a in place as NewAecState does.
+func (a *AecState) initDefault(config *EchoCanceller3Config, numCaptureChannels int) {
 	a.init(config, numCaptureChannels)
 	if !config.EpStrength.BoundedErl {
 		a.legacyTransparentMode = *NewLegacyTransparentMode(config)
 		a.transparentState = &a.legacyTransparentMode
 	}
-	return a
 }
 
 // NewAecStateWithTransparentMode builds an AecState with an explicit

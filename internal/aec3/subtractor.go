@@ -98,21 +98,21 @@ func (m *subFilterMisadjustmentEstimator) Reset() {
 
 // Subtractor performs the linear echo cancellation with a refined and a
 // coarse adaptive filter per capture channel.
+//
+// The filters, gains and counters of up to inlineChannels capture channels
+// are part of the Subtractor. The filter coefficients of all channels share
+// one array, as do the frequency responses and the impulse responses.
 type Subtractor struct {
-	fft                           aec3FftPair
-	optimization                  Aec3Optimization
-	config                        *EchoCanceller3Config // shared, never modified
-	numCaptureChannels            int
-	useCoarseFilterResetHangover  bool
-	refinedFilters                []*AdaptiveFirFilter
-	coarseFilter                  []*AdaptiveFirFilter
-	refinedGains                  []*RefinedFilterUpdateGain
-	coarseGains                   []*CoarseFilterUpdateGain
-	filterMisadjustmentEstimators []subFilterMisadjustmentEstimator
-	poorCoarseFilterCounters      []int
-	coarseFilterResetHangover     []int
-	refinedFrequencyResponses     [][][FftLengthBy2Plus1]float32
-	refinedImpulseResponses       [][]float32
+	more                      *subMore                                     // with more than inlineChannels channels
+	refinedFrequencyResponses [inlineChannels][][FftLengthBy2Plus1]float32 // [channel][partition]
+	refinedImpulseResponses   [inlineChannels][]float32                    // [channel][sample]
+	channels                  [inlineChannels]subChannel
+
+	fft                          aec3FftPair
+	optimization                 Aec3Optimization
+	config                       EchoCanceller3Config
+	numCaptureChannels           int
+	useCoarseFilterResetHangover bool
 
 	// Per-block scratch.
 	x2Refined      [FftLengthBy2Plus1]float32
@@ -125,86 +125,139 @@ type Subtractor struct {
 	predictionTmp2 [FftLength]float32
 }
 
+// subChannel is the state of one capture channel of a Subtractor.
+type subChannel struct {
+	refinedFilter                AdaptiveFirFilter
+	coarseFilter                 AdaptiveFirFilter
+	refinedGain                  RefinedFilterUpdateGain
+	coarseGain                   CoarseFilterUpdateGain
+	filterMisadjustmentEstimator subFilterMisadjustmentEstimator
+	poorCoarseFilterCounter      int
+	coarseFilterResetHangover    int
+}
+
+// subMore is the per-channel state of a Subtractor with more than
+// inlineChannels capture channels.
+type subMore struct {
+	refinedFrequencyResponses [][][FftLengthBy2Plus1]float32
+	refinedImpulseResponses   [][]float32
+	channels                  []subChannel
+}
+
 // NewSubtractor creates a Subtractor. Field trials are fixed at their
 // defaults, so the coarse filter reset hangover is in use.
-// The result keeps a reference to config, which must not change while it
-// is in use (the C++ copies it).
 func NewSubtractor(config *EchoCanceller3Config, numRenderChannels, numCaptureChannels int, optimization Aec3Optimization) *Subtractor {
-	s := &Subtractor{
-		optimization:                  optimization,
-		config:                        config,
-		numCaptureChannels:            numCaptureChannels,
-		useCoarseFilterResetHangover:  true,
-		refinedFilters:                make([]*AdaptiveFirFilter, numCaptureChannels),
-		coarseFilter:                  make([]*AdaptiveFirFilter, numCaptureChannels),
-		refinedGains:                  make([]*RefinedFilterUpdateGain, numCaptureChannels),
-		coarseGains:                   make([]*CoarseFilterUpdateGain, numCaptureChannels),
-		filterMisadjustmentEstimators: make([]subFilterMisadjustmentEstimator, numCaptureChannels),
-		poorCoarseFilterCounters:      make([]int, numCaptureChannels),
-		coarseFilterResetHangover:     make([]int, numCaptureChannels),
-		refinedFrequencyResponses:     make([][][FftLengthBy2Plus1]float32, numCaptureChannels),
-		refinedImpulseResponses:       make([][]float32, numCaptureChannels),
-	}
-	c := s.config
-	maxRefinedBlocks := max(c.Filter.RefinedInitial.LengthBlocks, c.Filter.Refined.LengthBlocks)
-	for ch := 0; ch < numCaptureChannels; ch++ {
-		s.refinedFrequencyResponses[ch] = make([][FftLengthBy2Plus1]float32, maxRefinedBlocks)
-		s.refinedImpulseResponses[ch] = make([]float32, GetTimeDomainLength(maxRefinedBlocks))
-
-		s.refinedFilters[ch] = NewAdaptiveFirFilter(c.Filter.Refined.LengthBlocks, c.Filter.RefinedInitial.LengthBlocks,
-			c.Filter.ConfigChangeDurationBlocks, numRenderChannels, optimization)
-		s.coarseFilter[ch] = NewAdaptiveFirFilter(c.Filter.Coarse.LengthBlocks, c.Filter.CoarseInitial.LengthBlocks,
-			c.Filter.ConfigChangeDurationBlocks, numRenderChannels, optimization)
-		s.refinedGains[ch] = NewRefinedFilterUpdateGain(c.Filter.RefinedInitial, c.Filter.ConfigChangeDurationBlocks)
-		s.coarseGains[ch] = NewCoarseFilterUpdateGain(c.Filter.CoarseInitial, c.Filter.ConfigChangeDurationBlocks)
-	}
+	s := &Subtractor{}
+	s.init(config, numRenderChannels, numCaptureChannels, optimization)
 	return s
+}
+
+// init sets up s in place.
+func (s *Subtractor) init(config *EchoCanceller3Config, numRenderChannels, numCaptureChannels int, optimization Aec3Optimization) {
+	*s = Subtractor{}
+	s.optimization = optimization
+	s.config = *config
+	s.numCaptureChannels = numCaptureChannels
+	s.useCoarseFilterResetHangover = true
+	if numCaptureChannels > inlineChannels {
+		s.more = &subMore{
+			refinedFrequencyResponses: make([][][FftLengthBy2Plus1]float32, numCaptureChannels),
+			refinedImpulseResponses:   make([][]float32, numCaptureChannels),
+			channels:                  make([]subChannel, numCaptureChannels),
+		}
+	}
+	c := &s.config
+	maxRefinedBlocks := max(c.Filter.RefinedInitial.LengthBlocks, c.Filter.Refined.LengthBlocks)
+	refinedCoefficients := c.Filter.Refined.LengthBlocks * numRenderChannels
+	coarseCoefficients := c.Filter.Coarse.LengthBlocks * numRenderChannels
+	impulseResponseLength := GetTimeDomainLength(maxRefinedBlocks)
+	coefficients := make([]FftData, numCaptureChannels*(refinedCoefficients+coarseCoefficients))
+	frequencyResponses := make([][FftLengthBy2Plus1]float32, numCaptureChannels*maxRefinedBlocks)
+	impulseResponses := make([]float32, numCaptureChannels*impulseResponseLength)
+
+	channels := s.channelStates()
+	H2 := s.FilterFrequencyResponses()
+	h := s.FilterImpulseResponses()
+	for ch := range channels {
+		H2[ch] = frequencyResponses[:maxRefinedBlocks:maxRefinedBlocks]
+		frequencyResponses = frequencyResponses[maxRefinedBlocks:]
+		h[ch] = impulseResponses[:impulseResponseLength:impulseResponseLength]
+		impulseResponses = impulseResponses[impulseResponseLength:]
+
+		sc := &channels[ch]
+		sc.refinedFilter.init(c.Filter.Refined.LengthBlocks, c.Filter.RefinedInitial.LengthBlocks,
+			c.Filter.ConfigChangeDurationBlocks, numRenderChannels, optimization, coefficients[:refinedCoefficients])
+		coefficients = coefficients[refinedCoefficients:]
+		sc.coarseFilter.init(c.Filter.Coarse.LengthBlocks, c.Filter.CoarseInitial.LengthBlocks,
+			c.Filter.ConfigChangeDurationBlocks, numRenderChannels, optimization, coefficients[:coarseCoefficients])
+		coefficients = coefficients[coarseCoefficients:]
+		sc.refinedGain.init(c.Filter.RefinedInitial, c.Filter.ConfigChangeDurationBlocks)
+		sc.coarseGain.init(c.Filter.CoarseInitial, c.Filter.ConfigChangeDurationBlocks)
+	}
+}
+
+// channelStates returns the state of every capture channel.
+func (s *Subtractor) channelStates() []subChannel {
+	if s.more != nil {
+		return s.more.channels
+	}
+	return s.channels[:s.numCaptureChannels:s.numCaptureChannels]
 }
 
 // HandleEchoPathChange handles echo path changes.
 func (s *Subtractor) HandleEchoPathChange(echoPathVariability EchoPathVariability) {
-	c := s.config
+	c := &s.config
+	channels := s.channelStates()
 	if echoPathVariability.DelayChange != DelayAdjustmentNone {
-		for ch := 0; ch < s.numCaptureChannels; ch++ {
-			s.refinedFilters[ch].HandleEchoPathChange()
-			s.coarseFilter[ch].HandleEchoPathChange()
-			s.refinedGains[ch].HandleEchoPathChange(echoPathVariability)
-			s.coarseGains[ch].HandleEchoPathChange()
-			s.refinedGains[ch].SetConfig(c.Filter.RefinedInitial, true)
-			s.coarseGains[ch].SetConfig(c.Filter.CoarseInitial, true)
-			s.refinedFilters[ch].SetSizePartitions(c.Filter.RefinedInitial.LengthBlocks, true)
-			s.coarseFilter[ch].SetSizePartitions(c.Filter.CoarseInitial.LengthBlocks, true)
+		for ch := range channels {
+			sc := &channels[ch]
+			sc.refinedFilter.HandleEchoPathChange()
+			sc.coarseFilter.HandleEchoPathChange()
+			sc.refinedGain.HandleEchoPathChange(echoPathVariability)
+			sc.coarseGain.HandleEchoPathChange()
+			sc.refinedGain.SetConfig(c.Filter.RefinedInitial, true)
+			sc.coarseGain.SetConfig(c.Filter.CoarseInitial, true)
+			sc.refinedFilter.SetSizePartitions(c.Filter.RefinedInitial.LengthBlocks, true)
+			sc.coarseFilter.SetSizePartitions(c.Filter.CoarseInitial.LengthBlocks, true)
 		}
 	}
 
 	if echoPathVariability.GainChange {
-		for ch := 0; ch < s.numCaptureChannels; ch++ {
-			s.refinedGains[ch].HandleEchoPathChange(echoPathVariability)
+		for ch := range channels {
+			channels[ch].refinedGain.HandleEchoPathChange(echoPathVariability)
 		}
 	}
 }
 
 // ExitInitialState switches the filters and gains to the normal configs.
 func (s *Subtractor) ExitInitialState() {
-	c := s.config
-	for ch := 0; ch < s.numCaptureChannels; ch++ {
-		s.refinedGains[ch].SetConfig(c.Filter.Refined, false)
-		s.coarseGains[ch].SetConfig(c.Filter.Coarse, false)
-		s.refinedFilters[ch].SetSizePartitions(c.Filter.Refined.LengthBlocks, false)
-		s.coarseFilter[ch].SetSizePartitions(c.Filter.Coarse.LengthBlocks, false)
+	c := &s.config
+	channels := s.channelStates()
+	for ch := range channels {
+		sc := &channels[ch]
+		sc.refinedGain.SetConfig(c.Filter.Refined, false)
+		sc.coarseGain.SetConfig(c.Filter.Coarse, false)
+		sc.refinedFilter.SetSizePartitions(c.Filter.Refined.LengthBlocks, false)
+		sc.coarseFilter.SetSizePartitions(c.Filter.Coarse.LengthBlocks, false)
 	}
 }
 
 // FilterFrequencyResponses returns the block-wise frequency responses of the
 // refined adaptive filters ([channel][partition]).
 func (s *Subtractor) FilterFrequencyResponses() [][][FftLengthBy2Plus1]float32 {
-	return s.refinedFrequencyResponses
+	if s.more != nil {
+		return s.more.refinedFrequencyResponses
+	}
+	return s.refinedFrequencyResponses[:s.numCaptureChannels:s.numCaptureChannels]
 }
 
 // FilterImpulseResponses returns the impulse response estimates of the
 // refined adaptive filters ([channel][sample]).
 func (s *Subtractor) FilterImpulseResponses() [][]float32 {
-	return s.refinedImpulseResponses
+	if s.more != nil {
+		return s.more.refinedImpulseResponses
+	}
+	return s.refinedImpulseResponses[:s.numCaptureChannels:s.numCaptureChannels]
 }
 
 // Process performs the echo subtraction. outputs has one entry per capture
@@ -212,8 +265,11 @@ func (s *Subtractor) FilterImpulseResponses() [][]float32 {
 func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderSignalAnalyzer *RenderSignalAnalyzer,
 	aecState *AecState, outputs []SubtractorOutput) {
 	// Compute the render powers.
-	refinedSize := s.refinedFilters[0].SizePartitions()
-	coarseSize := s.coarseFilter[0].SizePartitions()
+	channels := s.channelStates()
+	frequencyResponses := s.FilterFrequencyResponses()
+	impulseResponses := s.FilterImpulseResponses()
+	refinedSize := channels[0].refinedFilter.SizePartitions()
+	coarseSize := channels[0].coarseFilter.SizePartitions()
 	sameFilterSizes := refinedSize == coarseSize
 	X2Refined := &s.x2Refined
 	X2Coarse := &s.x2CoarseData
@@ -229,7 +285,8 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 	saturatedCapture := aecState.SaturatedCapture()
 
 	// Process all capture channels.
-	for ch := 0; ch < s.numCaptureChannels; ch++ {
+	for ch := range channels {
+		sc := &channels[ch]
 		output := &outputs[ch]
 		y := capture.View(0, ch)
 		ERefined := &output.ERefinedFft
@@ -242,8 +299,8 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 
 		// Form the outputs of the refined and coarse filters; the two
 		// inverse transforms run as a pair.
-		s.refinedFilters[ch].Filter(renderBuffer, S)
-		s.coarseFilter[ch].Filter(renderBuffer, &s.sCoarse)
+		sc.refinedFilter.Filter(renderBuffer, S)
+		sc.coarseFilter.Filter(renderBuffer, &s.sCoarse)
 		subPredictionErrorPair(&s.fft, S, &s.sCoarse, y, &s.predictionTmp, &s.predictionTmp2,
 			eRefined, &output.SRefined, eCoarse, &output.SCoarse)
 
@@ -252,12 +309,12 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 
 		// Adjust the filter if needed.
 		refinedFiltersAdjusted := false
-		est := &s.filterMisadjustmentEstimators[ch]
+		est := &sc.filterMisadjustmentEstimator
 		est.Update(output)
 		if est.IsAdjustmentNeeded() {
 			scale := est.GetMisadjustment()
-			s.refinedFilters[ch].ScaleFilter(scale)
-			h := s.refinedImpulseResponses[ch]
+			sc.refinedFilter.ScaleFilter(scale)
+			h := impulseResponses[ch]
 			for k := range h {
 				h[k] *= scale
 			}
@@ -278,11 +335,11 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 			// Do not allow the performance of the coarse filter to affect the
 			// adaptation speed of the refined filter just after the coarse
 			// filter has been reset.
-			disallowLeakageDiverged := s.coarseFilterResetHangover[ch] > 0 && s.useCoarseFilterResetHangover
+			disallowLeakageDiverged := sc.coarseFilterResetHangover > 0 && s.useCoarseFilterResetHangover
 
-			ComputeErl(s.optimization, s.refinedFrequencyResponses[ch], s.erl[:])
-			s.refinedGains[ch].Compute(X2Refined, renderSignalAnalyzer, output, s.erl[:],
-				s.refinedFilters[ch].SizePartitions(), saturatedCapture, disallowLeakageDiverged, G)
+			ComputeErl(s.optimization, frequencyResponses[ch], s.erl[:])
+			sc.refinedGain.Compute(X2Refined, renderSignalAnalyzer, output, s.erl[:],
+				sc.refinedFilter.SizePartitions(), saturatedCapture, disallowLeakageDiverged, G)
 		} else {
 			G.Clear()
 		}
@@ -293,37 +350,37 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 		// copies it, so the constraint waits for the coarse filter's and
 		// the transforms of the two run as pairs; the frequency response
 		// follows them.
-		s.refinedFilters[ch].adaptAndUpdateSize(renderBuffer, G)
+		sc.refinedFilter.adaptAndUpdateSize(renderBuffer, G)
 		refinedConstrained := false
 
 		// Update the coarse filter.
 		if output.E2RefinedSum < output.E2CoarseSum {
-			s.poorCoarseFilterCounters[ch]++
+			sc.poorCoarseFilterCounter++
 		} else {
-			s.poorCoarseFilterCounters[ch] = 0
+			sc.poorCoarseFilterCounter = 0
 		}
-		if s.poorCoarseFilterCounters[ch] < 5 {
-			s.coarseGains[ch].Compute(X2Coarse, renderSignalAnalyzer, ECoarse,
-				s.coarseFilter[ch].SizePartitions(), saturatedCapture, G)
-			s.coarseFilterResetHangover[ch] = max(s.coarseFilterResetHangover[ch]-1, 0)
+		if sc.poorCoarseFilterCounter < 5 {
+			sc.coarseGain.Compute(X2Coarse, renderSignalAnalyzer, ECoarse,
+				sc.coarseFilter.SizePartitions(), saturatedCapture, G)
+			sc.coarseFilterResetHangover = max(sc.coarseFilterResetHangover-1, 0)
 		} else {
-			s.poorCoarseFilterCounters[ch] = 0
+			sc.poorCoarseFilterCounter = 0
 			// The coarse filter takes the constrained refined filter.
-			s.refinedFilters[ch].constrainAndUpdateImpulseResponse(&s.refinedImpulseResponses[ch])
+			sc.refinedFilter.constrainAndUpdateImpulseResponse(&impulseResponses[ch])
 			refinedConstrained = true
-			s.coarseFilter[ch].SetFilter(s.refinedFilters[ch].SizePartitions(), s.refinedFilters[ch].GetFilter())
-			s.coarseGains[ch].Compute(X2Coarse, renderSignalAnalyzer, ERefined,
-				s.coarseFilter[ch].SizePartitions(), saturatedCapture, G)
-			s.coarseFilterResetHangover[ch] = s.config.Filter.CoarseResetHangoverBlocks
+			sc.coarseFilter.SetFilter(sc.refinedFilter.SizePartitions(), sc.refinedFilter.GetFilter())
+			sc.coarseGain.Compute(X2Coarse, renderSignalAnalyzer, ERefined,
+				sc.coarseFilter.SizePartitions(), saturatedCapture, G)
+			sc.coarseFilterResetHangover = s.config.Filter.CoarseResetHangoverBlocks
 		}
 
-		s.coarseFilter[ch].adaptAndUpdateSize(renderBuffer, G)
+		sc.coarseFilter.adaptAndUpdateSize(renderBuffer, G)
 		if refinedConstrained {
-			s.coarseFilter[ch].constrain()
+			sc.coarseFilter.constrain()
 		} else {
-			afirConstrainPair(&s.fft, s.refinedFilters[ch], &s.refinedImpulseResponses[ch], s.coarseFilter[ch])
+			afirConstrainPair(&s.fft, &sc.refinedFilter, &impulseResponses[ch], &sc.coarseFilter)
 		}
-		s.refinedFilters[ch].ComputeFrequencyResponse(&s.refinedFrequencyResponses[ch])
+		sc.refinedFilter.ComputeFrequencyResponse(&frequencyResponses[ch])
 
 		// SafeClamp(a, -32768.f, 32767.f); see kernClamp.
 		kernClamp(eRefined[:], -32768, 32767)

@@ -12,7 +12,7 @@ const (
 // ResidualEchoEstimator mirrors residual_echo_estimator.h: estimates the
 // residual echo power. Field trials are at their defaults.
 type ResidualEchoEstimator struct {
-	config                                 *EchoCanceller3Config // shared, never modified
+	config                                 EchoCanceller3Config
 	numRenderChannels                      int
 	earlyReflectionsTransparentModeGain    float32
 	lateReflectionsTransparentModeGain     float32
@@ -25,11 +25,16 @@ type ResidualEchoEstimator struct {
 }
 
 // NewResidualEchoEstimator mirrors the C++ constructor.
-// The result keeps a reference to config, which must not change while it
-// is in use (the C++ copies it).
 func NewResidualEchoEstimator(config *EchoCanceller3Config, numRenderChannels int) *ResidualEchoEstimator {
-	r := &ResidualEchoEstimator{
-		config:                                 config,
+	r := &ResidualEchoEstimator{}
+	r.init(config, numRenderChannels)
+	return r
+}
+
+// init sets up r in place.
+func (r *ResidualEchoEstimator) init(config *EchoCanceller3Config, numRenderChannels int) {
+	*r = ResidualEchoEstimator{
+		config:                                 *config,
 		numRenderChannels:                      numRenderChannels,
 		earlyReflectionsTransparentModeGain:    stDefaultTransparentModeGain,
 		lateReflectionsTransparentModeGain:     stDefaultTransparentModeGain,
@@ -38,7 +43,6 @@ func NewResidualEchoEstimator(config *EchoCanceller3Config, numRenderChannels in
 		erleOnsetCompensationInDominantNearend: config.EpStrength.ErleOnsetCompensationInDominantNearend,
 	}
 	r.reset()
-	return r
 }
 
 func (r *ResidualEchoEstimator) reset() {

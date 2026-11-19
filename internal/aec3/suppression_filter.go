@@ -5,12 +5,13 @@ import "math"
 // SuppressionFilter applies the suppression gains and comfort noise in the
 // frequency domain and synthesizes the time-domain output of every band.
 type SuppressionFilter struct {
+	moreEOutputOld     [][MaxNumBands][FftLengthBy2]float32 // with more than inlineChannels channels
 	optimization       Aec3Optimization
 	sampleRateHz       int
 	numCaptureChannels int
 	fft                Aec3Fft
 	fftPair            aec3FftPair
-	eOutputOld         [][][FftLengthBy2]float32 // [band][channel]
+	eOutputOld         [inlineChannels][MaxNumBands][FftLengthBy2]float32 // [channel][band]
 
 	// Scratch.
 	e         FftData
@@ -18,16 +19,18 @@ type SuppressionFilter struct {
 }
 
 func NewSuppressionFilter(optimization Aec3Optimization, sampleRateHz, numCaptureChannels int) *SuppressionFilter {
-	f := &SuppressionFilter{
-		optimization:       optimization,
-		sampleRateHz:       sampleRateHz,
-		numCaptureChannels: numCaptureChannels,
-		eOutputOld:         make([][][FftLengthBy2]float32, NumBandsForRate(sampleRateHz)),
-	}
-	for b := range f.eOutputOld {
-		f.eOutputOld[b] = make([][FftLengthBy2]float32, numCaptureChannels)
-	}
+	f := &SuppressionFilter{}
+	f.init(optimization, sampleRateHz, numCaptureChannels)
 	return f
+}
+
+// init sets up f in place.
+func (f *SuppressionFilter) init(optimization Aec3Optimization, sampleRateHz, numCaptureChannels int) {
+	*f = SuppressionFilter{}
+	f.optimization = optimization
+	f.sampleRateHz = sampleRateHz
+	f.numCaptureChannels = numCaptureChannels
+	f.moreEOutputOld = moreChannels[[MaxNumBands][FftLengthBy2]float32](numCaptureChannels)
 }
 
 // ApplyGain applies the suppression gain, adds the comfort noise and writes
@@ -45,7 +48,9 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 	numBands := e.NumBands()
 	E := &f.e
 	eExtended := &f.eExtended
-	for ch := 0; ch < f.numCaptureChannels; ch++ {
+	eOutputOld := channelState(&f.eOutputOld, f.numCaptureChannels, f.moreEOutputOld)
+	for ch := range eOutputOld {
+		eOld := &eOutputOld[ch]
 		// Analysis filterbank.
 		E.Assign(&eLowestBand[ch])
 
@@ -69,7 +74,7 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 		}
 
 		e0 := e.View(0, ch)
-		e0Old := &f.eOutputOld[0][ch]
+		e0Old := &eOld[0]
 
 		// Window and add the first half of e_extended with the second half of
 		// e_extended from the previous block.
@@ -96,7 +101,7 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 		// Delay upper bands to match the delay of the filter bank.
 		for b := 1; b < numBands; b++ {
 			eBand := e.View(b, ch)
-			eBandOld := &f.eOutputOld[b][ch]
+			eBandOld := &eOld[b]
 			for i := 0; i < FftLengthBy2; i++ {
 				eBand[i], eBandOld[i] = eBandOld[i], eBand[i]
 			}

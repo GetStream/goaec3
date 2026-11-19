@@ -21,7 +21,14 @@ type RefinedFilterUpdateGain struct {
 }
 
 func NewRefinedFilterUpdateGain(config RefinedConfiguration, configChangeDurationBlocks int) *RefinedFilterUpdateGain {
-	g := &RefinedFilterUpdateGain{
+	g := &RefinedFilterUpdateGain{}
+	g.init(config, configChangeDurationBlocks)
+	return g
+}
+
+// init sets up g in place.
+func (g *RefinedFilterUpdateGain) init(config RefinedConfiguration, configChangeDurationBlocks int) {
+	*g = RefinedFilterUpdateGain{
 		configChangeDurationBlocks: configChangeDurationBlocks,
 		poorExcitationCounter:      afirPoorExcitationCounterInitial,
 	}
@@ -30,7 +37,6 @@ func NewRefinedFilterUpdateGain(config RefinedConfiguration, configChangeDuratio
 		g.hError[k] = afirHErrorInitial
 	}
 	g.oneByConfigChangeDurationBlocks = 1 / float32(g.configChangeDurationBlocks)
-	return g
 }
 
 // HandleEchoPathChange reacts to a known echo path change.

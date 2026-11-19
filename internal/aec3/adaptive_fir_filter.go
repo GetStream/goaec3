@@ -463,7 +463,18 @@ type AdaptiveFirFilter struct {
 }
 
 func NewAdaptiveFirFilter(maxSizePartitions, initialSizePartitions, sizeChangeDurationBlocks, numRenderChannels int, optimization Aec3Optimization) *AdaptiveFirFilter {
-	f := &AdaptiveFirFilter{
+	f := &AdaptiveFirFilter{}
+	f.init(maxSizePartitions, initialSizePartitions, sizeChangeDurationBlocks, numRenderChannels, optimization,
+		make([]FftData, maxSizePartitions*numRenderChannels))
+	return f
+}
+
+// init sets up f in place; the coefficients live in storage, which holds
+// maxSizePartitions*numRenderChannels elements.
+func (f *AdaptiveFirFilter) init(maxSizePartitions, initialSizePartitions, sizeChangeDurationBlocks, numRenderChannels int,
+	optimization Aec3Optimization, storage []FftData) {
+	n := maxSizePartitions * numRenderChannels
+	*f = AdaptiveFirFilter{
 		optimization:             optimization,
 		numRenderChannels:        numRenderChannels,
 		maxSizePartitions:        maxSizePartitions,
@@ -471,12 +482,11 @@ func NewAdaptiveFirFilter(maxSizePartitions, initialSizePartitions, sizeChangeDu
 		currentSizePartitions:    initialSizePartitions,
 		targetSizePartitions:     initialSizePartitions,
 		oldTargetSizePartitions:  initialSizePartitions,
-		H:                        NewFirCoefficients(maxSizePartitions, numRenderChannels),
+		H:                        FirCoefficients{numChannels: numRenderChannels, data: storage[:n:n]},
 	}
 	f.oneBySizeChangeDurationBlocks = 1 / float32(f.sizeChangeDurationBlocks)
 	afirZeroFilter(0, f.maxSizePartitions, f.H)
 	f.SetSizePartitions(f.currentSizePartitions, true)
-	return f
 }
 
 // HandleEchoPathChange clears the partitions beyond the current size.

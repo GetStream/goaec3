@@ -87,7 +87,7 @@ func TestEc3BlockProcessorSkipsCaptureBeforeRender(t *testing.T) {
 		t.Fatal("leakage/output usage not forwarded")
 	}
 	m := bp.GetMetrics()
-	if m.EchoReturnLoss != 1 || m.EchoReturnLossEnhancement != 2 || m.DelayMs != bp.renderBuffer.Delay()*4 {
+	if m.EchoReturnLoss != 1 || m.EchoReturnLossEnhancement != 2 || m.DelayMs != bp.renderBuffer().Delay()*4 {
 		t.Fatalf("metrics %+v", m)
 	}
 }

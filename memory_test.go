@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"runtime/metrics"
 	"testing"
 )
 
@@ -222,9 +223,26 @@ func BenchmarkNew(b *testing.B) {
 	}
 }
 
+// gcMarkCPU returns the CPU time the garbage collector has spent marking.
+func gcMarkCPU() float64 {
+	samples := []metrics.Sample{
+		{Name: "/cpu/classes/gc/mark/assist:cpu-seconds"},
+		{Name: "/cpu/classes/gc/mark/dedicated:cpu-seconds"},
+		{Name: "/cpu/classes/gc/mark/idle:cpu-seconds"},
+	}
+	metrics.Read(samples)
+	var seconds float64
+	for _, s := range samples {
+		seconds += s.Value.Float64()
+	}
+	return seconds
+}
+
 // BenchmarkGCMark measures one full GC cycle with 1000 live cancellers. With
 // -cpu 1 the time is close to the mark work; with more Ps it is mostly the
-// coordination of the mark workers.
+// coordination of the mark workers. mark-ns/op is the CPU time of the mark
+// phase alone, which leaves out what the cycle costs whatever the heap holds
+// (stopping and starting the world, the sweep).
 func BenchmarkGCMark(b *testing.B) {
 	for _, c := range footprintCases {
 		b.Run(fmt.Sprintf("%s_x1000", c.name), func(b *testing.B) {
@@ -237,11 +255,13 @@ func BenchmarkGCMark(b *testing.B) {
 				live[i] = ec
 			}
 			runtime.GC()
+			mark := gcMarkCPU()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				runtime.GC()
 			}
 			b.StopTimer()
+			b.ReportMetric((gcMarkCPU()-mark)*1e9/float64(b.N), "mark-ns/op")
 			runtime.KeepAlive(live)
 		})
 	}

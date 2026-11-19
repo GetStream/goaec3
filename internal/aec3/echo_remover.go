@@ -10,32 +10,58 @@ type EchoControlMetrics struct {
 }
 
 // EchoRemover removes the echo from the capture signal.
+//
+// Its components are part of the EchoRemover, as is the per-channel state of
+// up to inlineChannels capture channels. The components that hold pointers
+// come first.
 type EchoRemover struct {
-	config                          *EchoCanceller3Config // shared, never modified
+	more                  *erMore // with more than inlineChannels channels
+	aecState              AecState
+	subtractor            Subtractor
+	suppressionGain       SuppressionGain
+	cng                   ComfortNoiseGenerator
+	suppressionFilter     SuppressionFilter
+	residualEchoEstimator ResidualEchoEstimator
+	renderSignalAnalyzer  RenderSignalAnalyzer
+	metrics               EchoRemoverMetrics
+
+	config                          EchoCanceller3Config
 	fft                             aec3FftPair
 	optimization                    Aec3Optimization
 	sampleRateHz                    int
 	numRenderChannels               int
 	numCaptureChannels              int
 	useCoarseFilterOutput           bool
-	subtractor                      *Subtractor
-	suppressionGain                 *SuppressionGain
-	cng                             *ComfortNoiseGenerator
-	suppressionFilter               *SuppressionFilter
-	renderSignalAnalyzer            *RenderSignalAnalyzer
-	residualEchoEstimator           *ResidualEchoEstimator
 	echoLeakageDetected             bool
 	captureOutputUsed               bool
-	aecState                        *AecState
-	metrics                         *EchoRemoverMetrics
-	eOld                            [][FftLengthBy2]float32
-	yOld                            [][FftLengthBy2]float32
 	blockCounter                    int
 	gainChangeHangover              int
 	refinedFilterOutputLastSelected bool
+	erChannels
+}
 
-	// Per-block scratch (the C++ stack/heap channel data).
-	e                    [][FftLengthBy2]float32
+// erChannels is the per-channel state of an EchoRemover with up to
+// inlineChannels capture channels; all but channels is per-block scratch
+// (the C++ stack/heap channel data).
+type erChannels struct {
+	channels             [inlineChannels]erChannel
+	Y2                   [inlineChannels][FftLengthBy2Plus1]float32
+	E2                   [inlineChannels][FftLengthBy2Plus1]float32
+	R2                   [inlineChannels][FftLengthBy2Plus1]float32
+	R2Unbounded          [inlineChannels][FftLengthBy2Plus1]float32
+	S2Linear             [inlineChannels][FftLengthBy2Plus1]float32
+	Y                    [inlineChannels]FftData
+	E                    [inlineChannels]FftData
+	comfortNoise         [inlineChannels]FftData
+	highBandComfortNoise [inlineChannels]FftData
+	subtractorOutput     [inlineChannels]SubtractorOutput
+	G                    [FftLengthBy2Plus1]float32
+}
+
+// erMore is the per-channel state of an EchoRemover with more than
+// inlineChannels capture channels.
+type erMore struct {
+	channels             []erChannel
 	Y2                   [][FftLengthBy2Plus1]float32
 	E2                   [][FftLengthBy2Plus1]float32
 	R2                   [][FftLengthBy2Plus1]float32
@@ -46,7 +72,15 @@ type EchoRemover struct {
 	comfortNoise         []FftData
 	highBandComfortNoise []FftData
 	subtractorOutput     []SubtractorOutput
-	G                    [FftLengthBy2Plus1]float32
+}
+
+// erChannel is the state of one capture channel that only the EchoRemover
+// reads: the previous block of the capture signal and of the linear filter
+// output, and the current linear filter output.
+type erChannel struct {
+	eOld [FftLengthBy2]float32
+	yOld [FftLengthBy2]float32
+	e    [FftLengthBy2]float32
 }
 
 // NewEchoRemover mirrors EchoRemover::Create; the optimization is
@@ -58,46 +92,52 @@ func NewEchoRemover(config *EchoCanceller3Config, sampleRateHz, numRenderChannel
 
 // NewEchoRemoverWithOptimization creates an EchoRemover that runs the given
 // optimization lane instead of DetectOptimization().
-// The result keeps a reference to config, which must not change while it
-// is in use (the C++ copies it).
 func NewEchoRemoverWithOptimization(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int, optimization Aec3Optimization) *EchoRemover {
+	e := &EchoRemover{}
+	e.init(config, sampleRateHz, numRenderChannels, numCaptureChannels, optimization)
+	return e
+}
+
+// init sets up e in place; e must not be copied afterwards (its AecState
+// refers to itself and to the config of e).
+func (e *EchoRemover) init(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
+	numCaptureChannels int, optimization Aec3Optimization) {
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate")
 	}
-	e := &EchoRemover{
-		config:                          config,
-		optimization:                    optimization,
-		sampleRateHz:                    sampleRateHz,
-		numRenderChannels:               numRenderChannels,
-		numCaptureChannels:              numCaptureChannels,
-		captureOutputUsed:               true,
-		refinedFilterOutputLastSelected: true,
-		metrics:                         NewEchoRemoverMetrics(),
-		eOld:                            make([][FftLengthBy2]float32, numCaptureChannels),
-		yOld:                            make([][FftLengthBy2]float32, numCaptureChannels),
-		e:                               make([][FftLengthBy2]float32, numCaptureChannels),
-		Y2:                              make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		E2:                              make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		R2:                              make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		R2Unbounded:                     make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		S2Linear:                        make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		Y:                               make([]FftData, numCaptureChannels),
-		E:                               make([]FftData, numCaptureChannels),
-		comfortNoise:                    make([]FftData, numCaptureChannels),
-		highBandComfortNoise:            make([]FftData, numCaptureChannels),
-		subtractorOutput:                make([]SubtractorOutput, numCaptureChannels),
+	*e = EchoRemover{}
+	e.config = *config
+	e.optimization = optimization
+	e.sampleRateHz = sampleRateHz
+	e.numRenderChannels = numRenderChannels
+	e.numCaptureChannels = numCaptureChannels
+	e.captureOutputUsed = true
+	e.refinedFilterOutputLastSelected = true
+	e.metrics.resetMetrics()
+	if n := numCaptureChannels; n > inlineChannels {
+		e.more = &erMore{
+			channels:             make([]erChannel, n),
+			Y2:                   make([][FftLengthBy2Plus1]float32, n),
+			E2:                   make([][FftLengthBy2Plus1]float32, n),
+			R2:                   make([][FftLengthBy2Plus1]float32, n),
+			R2Unbounded:          make([][FftLengthBy2Plus1]float32, n),
+			S2Linear:             make([][FftLengthBy2Plus1]float32, n),
+			Y:                    make([]FftData, n),
+			E:                    make([]FftData, n),
+			comfortNoise:         make([]FftData, n),
+			highBandComfortNoise: make([]FftData, n),
+			subtractorOutput:     make([]SubtractorOutput, n),
+		}
 	}
-	cfg := e.config
-	e.useCoarseFilterOutput = cfg.Filter.EnableCoarseFilterOutputUsage
-	e.subtractor = NewSubtractor(cfg, numRenderChannels, numCaptureChannels, optimization)
-	e.suppressionGain = NewSuppressionGain(cfg, optimization, sampleRateHz, numCaptureChannels)
-	e.cng = NewComfortNoiseGenerator(cfg, optimization, numCaptureChannels)
-	e.suppressionFilter = NewSuppressionFilter(optimization, sampleRateHz, numCaptureChannels)
-	e.renderSignalAnalyzer = NewRenderSignalAnalyzer(cfg)
-	e.residualEchoEstimator = NewResidualEchoEstimator(cfg, numRenderChannels)
-	e.aecState = NewAecState(cfg, numCaptureChannels)
-	return e
+	e.useCoarseFilterOutput = config.Filter.EnableCoarseFilterOutputUsage
+	e.subtractor.init(config, numRenderChannels, numCaptureChannels, optimization)
+	e.suppressionGain.init(config, optimization, sampleRateHz, numCaptureChannels)
+	e.cng.init(config, optimization, numCaptureChannels)
+	e.suppressionFilter.init(optimization, sampleRateHz, numCaptureChannels)
+	e.renderSignalAnalyzer = RenderSignalAnalyzer{strongPeakFreezeDuration: config.Filter.Refined.LengthBlocks}
+	e.residualEchoEstimator.init(config, numRenderChannels)
+	e.aecState.initDefault(&e.config, numCaptureChannels)
 }
 
 // GetMetrics returns the current metrics. DelayMs is left at zero; the
@@ -119,6 +159,21 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 	x := renderBuffer.GetBlock(0)
 	y := capture
 	nch := e.numCaptureChannels
+	var more erMore
+	if e.more != nil {
+		more = *e.more
+	}
+	channels := channelState(&e.channels, nch, more.channels)
+	Y2 := channelState(&e.Y2, nch, more.Y2)
+	E2 := channelState(&e.E2, nch, more.E2)
+	R2 := channelState(&e.R2, nch, more.R2)
+	R2Unbounded := channelState(&e.R2Unbounded, nch, more.R2Unbounded)
+	S2Linear := channelState(&e.S2Linear, nch, more.S2Linear)
+	Y := channelState(&e.Y, nch, more.Y)
+	E := channelState(&e.E, nch, more.E)
+	comfortNoise := channelState(&e.comfortNoise, nch, more.comfortNoise)
+	highBandComfortNoise := channelState(&e.highBandComfortNoise, nch, more.highBandComfortNoise)
+	subtractorOutput := channelState(&e.subtractorOutput, nch, more.subtractorOutput)
 
 	e.aecState.UpdateCaptureSaturation(captureSignalSaturation)
 
@@ -154,65 +209,66 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 	}
 
 	// Perform linear echo cancellation.
-	e.subtractor.Process(renderBuffer, y, e.renderSignalAnalyzer, e.aecState, e.subtractorOutput)
+	e.subtractor.Process(renderBuffer, y, &e.renderSignalAnalyzer, &e.aecState, subtractorOutput)
 
 	// Compute spectra.
-	for ch := 0; ch < nch; ch++ {
-		e.formLinearFilterOutput(&e.subtractorOutput[ch], &e.e[ch])
+	for ch := range channels {
+		c := &channels[ch]
+		e.formLinearFilterOutput(&subtractorOutput[ch], &c.e)
 		// WindowedPaddedFft of y and of e, as a pair.
 		y0 := y.View(0, ch)
-		e.fft.PaddedFft(y0, e.yOld[ch][:], e.e[ch][:], e.eOld[ch][:], &e.Y[ch], &e.E[ch])
-		copy(e.yOld[ch][:], y0)
-		e.eOld[ch] = e.e[ch]
-		erLinearEchoPower(&e.E[ch], &e.Y[ch], &e.S2Linear[ch])
-		e.Y[ch].Spectrum(e.optimization, e.Y2[ch][:])
-		e.E[ch].Spectrum(e.optimization, e.E2[ch][:])
+		e.fft.PaddedFft(y0, c.yOld[:], c.e[:], c.eOld[:], &Y[ch], &E[ch])
+		copy(c.yOld[:], y0)
+		c.eOld = c.e
+		erLinearEchoPower(&E[ch], &Y[ch], &S2Linear[ch])
+		Y[ch].Spectrum(e.optimization, Y2[ch][:])
+		E[ch].Spectrum(e.optimization, E2[ch][:])
 	}
 
 	// Optionally return the linear filter output.
 	if linearOutput != nil {
 		for ch := 0; ch < nch; ch++ {
-			copy(linearOutput.View(0, ch), e.e[ch][:])
+			copy(linearOutput.View(0, ch), channels[ch].e[:])
 		}
 	}
 
 	// Update the AEC state information.
 	e.aecState.Update(externalDelay, e.subtractor.FilterFrequencyResponses(), e.subtractor.FilterImpulseResponses(),
-		renderBuffer, e.E2, e.Y2, e.subtractorOutput)
+		renderBuffer, E2, Y2, subtractorOutput)
 
 	// Choose the linear output.
-	YFft := e.Y
+	YFft := Y
 	if e.aecState.UseLinearFilterOutput() {
-		YFft = e.E
+		YFft = E
 	}
 
 	// Estimate the comfort noise.
-	e.cng.Compute(e.aecState.SaturatedCapture(), e.Y2, e.comfortNoise, e.highBandComfortNoise)
+	e.cng.Compute(e.aecState.SaturatedCapture(), Y2, comfortNoise, highBandComfortNoise)
 
 	// Only do the below processing if the output of the audio processing
 	// module is used.
 	G := &e.G
 	if e.captureOutputUsed {
 		// Estimate the residual echo power.
-		e.residualEchoEstimator.Estimate(e.aecState, renderBuffer, e.S2Linear, e.Y2,
-			e.suppressionGain.IsDominantNearend(), e.R2, e.R2Unbounded)
+		e.residualEchoEstimator.Estimate(&e.aecState, renderBuffer, S2Linear, Y2,
+			e.suppressionGain.IsDominantNearend(), R2, R2Unbounded)
 
 		// Suppressor nearend estimate.
 		if e.aecState.UsableLinearEstimate() {
 			// E2 is bound by Y2.
 			for ch := 0; ch < nch; ch++ {
-				kernStdMin(e.E2[ch][:], e.Y2[ch][:], e.E2[ch][:])
+				kernStdMin(E2[ch][:], Y2[ch][:], E2[ch][:])
 			}
 		}
-		nearendSpectrum := e.Y2
+		nearendSpectrum := Y2
 		if e.aecState.UsableLinearEstimate() {
-			nearendSpectrum = e.E2
+			nearendSpectrum = E2
 		}
 
 		// Suppressor echo estimate.
-		echoSpectrum := e.R2
+		echoSpectrum := R2
 		if e.aecState.UsableLinearEstimate() {
-			echoSpectrum = e.S2Linear
+			echoSpectrum = S2Linear
 		}
 
 		// Determine if the suppressor should assume clock drift.
@@ -220,16 +276,16 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 
 		// Compute preferred gains.
 		var highBandsGain float32
-		e.suppressionGain.GetGain(nearendSpectrum, echoSpectrum, e.R2, e.R2Unbounded, e.cng.NoiseSpectrum(),
-			e.renderSignalAnalyzer, e.aecState, &x, clockDrift, &highBandsGain, G)
+		e.suppressionGain.GetGain(nearendSpectrum, echoSpectrum, R2, R2Unbounded, e.cng.NoiseSpectrum(),
+			&e.renderSignalAnalyzer, &e.aecState, &x, clockDrift, &highBandsGain, G)
 
-		e.suppressionFilter.ApplyGain(e.comfortNoise, e.highBandComfortNoise, G, highBandsGain, YFft, y)
+		e.suppressionFilter.ApplyGain(comfortNoise, highBandComfortNoise, G, highBandsGain, YFft, y)
 	} else {
 		*G = [FftLengthBy2Plus1]float32{}
 	}
 
 	// Update the metrics.
-	e.metrics.Update(e.aecState, &e.cng.NoiseSpectrum()[0], G)
+	e.metrics.Update(&e.aecState, &e.cng.NoiseSpectrum()[0], G)
 }
 
 // UpdateEchoLeakageStatus reports whether echo leakage is detected in the
