@@ -74,10 +74,13 @@ func FloatToFloatS16Slice(src, dest []float32) {
 	}
 	n := len(src)
 	dest = dest[:n]
+	i := 0
+	if bsHasAVX2 {
+		i = bsClampScale256(src, dest, 1, -1, 32768)
+	}
 	hi := archsimd.BroadcastFloat32x4(1)
 	lo := archsimd.BroadcastFloat32x4(-1)
 	scale := archsimd.BroadcastFloat32x4(32768)
-	i := 0
 	for ; i+4 <= n; i += 4 {
 		v := archsimd.LoadFloat32x4Array((*[4]float32)(src[i : i+4]))
 		bsClamp4(v, hi, lo).Mul(scale).StoreArray((*[4]float32)(dest[i : i+4]))
@@ -94,13 +97,50 @@ func FloatS16ToFloatSlice(src, dest []float32) {
 	}
 	n := len(src)
 	dest = dest[:n]
+	i := 0
+	if bsHasAVX2 {
+		i = bsClampScale256(src, dest, 32768, -32768, 1.0/32768)
+	}
 	hi := archsimd.BroadcastFloat32x4(32768)
 	lo := archsimd.BroadcastFloat32x4(-32768)
 	scale := archsimd.BroadcastFloat32x4(1.0 / 32768)
-	i := 0
 	for ; i+4 <= n; i += 4 {
 		v := archsimd.LoadFloat32x4Array((*[4]float32)(src[i : i+4]))
 		bsClamp4(v, hi, lo).Mul(scale).StoreArray((*[4]float32)(dest[i : i+4]))
 	}
 	floatS16ToFloatSliceRef(src[i:], dest[i:])
+}
+
+// bsClamp8 is bsClamp4 on eight samples.
+func bsClamp8(v, hi, lo archsimd.Float32x8) archsimd.Float32x8 {
+	v = hi.IfElse(v.Greater(hi), v)
+	return lo.IfElse(v.Less(lo), v)
+}
+
+// bsClampScale256 sets dest = max(min(src, hi), lo) * scale for the leading
+// multiple of eight samples, sixteen per step, and returns their number. It
+// is the 256-bit body of the two float conversions; it does not inline, so
+// its VZEROUPPER comes before the caller's 128-bit and scalar remainder.
+//
+//go:noinline
+func bsClampScale256(src, dest []float32, hi, lo, scale float32) int {
+	dest = dest[:len(src)]
+	hv := archsimd.BroadcastFloat32x8(hi)
+	lv := archsimd.BroadcastFloat32x8(lo)
+	sv := archsimd.BroadcastFloat32x8(scale)
+	i := 0
+	for ; i+16 <= len(src); i += 16 {
+		p := (*[16]float32)(src[i : i+16])
+		q := (*[16]float32)(dest[i : i+16])
+		a := archsimd.LoadFloat32x8Array((*[8]float32)(p[0:8]))
+		b := archsimd.LoadFloat32x8Array((*[8]float32)(p[8:16]))
+		bsClamp8(a, hv, lv).Mul(sv).StoreArray((*[8]float32)(q[0:8]))
+		bsClamp8(b, hv, lv).Mul(sv).StoreArray((*[8]float32)(q[8:16]))
+	}
+	for ; i+8 <= len(src); i += 8 {
+		v := archsimd.LoadFloat32x8Array((*[8]float32)(src[i : i+8]))
+		bsClamp8(v, hv, lv).Mul(sv).StoreArray((*[8]float32)(dest[i : i+8]))
+	}
+	archsimd.ClearAVXUpperBits()
+	return i
 }
