@@ -191,15 +191,17 @@ func TestPointerWords(t *testing.T) {
 	if strconv.IntSize != 64 {
 		t.Skip("the bounds are for 64-bit pointers")
 	}
-	const maxWords, maxEnd = 84, 34000
+	// The sizes depend on the build (the FFT scratch does), so the end of
+	// the pointers is bounded relative to the size.
+	const maxWords, maxEndPercent = 84, 60
 	typ := reflect.TypeOf(EchoCanceller{})
 	words, end := pointerWords(typ)
 	t.Logf("%d pointer words, the last one ends at byte %d of %d", words, end, typ.Size())
 	if words > maxWords {
 		t.Errorf("%d pointer words per canceller, want at most %d", words, maxWords)
 	}
-	if end > maxEnd {
-		t.Errorf("the pointers of a canceller end at byte %d, want at most %d", end, maxEnd)
+	if end*100 > typ.Size()*maxEndPercent {
+		t.Errorf("the pointers of a canceller end at byte %d of %d, want at most %d%%", end, typ.Size(), maxEndPercent)
 	}
 }
 

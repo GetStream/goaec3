@@ -6,8 +6,9 @@ name: bench
 # differ in CPU from job to job, so every job also builds the merge base with
 # main and alternates base and head runs on the same machine; the summary
 # reports the Go/C++ ratio and the head/base ratio of that job, the CPU
-# model, the internal/aec3, filter bank and FFT kernel benchmarks of both, and a CPU profile of
-# the Go side. The lane is checked bit-exact on the runner before timing.
+# model, the internal/aec3, filter bank and FFT kernel benchmarks of both, a
+# garbage collection cycle with 1000 live cancellers of both, and a CPU
+# profile of the Go side. The lane is checked bit-exact on the runner before timing.
 
 on:
   workflow_dispatch:
@@ -167,6 +168,28 @@ jobs:
           else
             go run golang.org/x/perf/cmd/benchstat@v0.0.0-20250813145418-2f7363a06fe1 kern.txt | tee kernstat.txt
           fi
+      # One garbage collection cycle with 1000 live cancellers on one P, base
+      # against head (the benchmark of the base may lack mark-ns/op).
+      - name: GC mark
+        run: |
+          go test -c -o gc.test .
+          : >gc.txt
+          : >basegc.txt
+          if [ -n "$BASE" ]; then
+            (cd "$RUNNER_TEMP/base" && go test -c -o "$GITHUB_WORKSPACE/basegc.test" .)
+          fi
+          for _ in $(seq 5); do
+            if [ -n "$BASE" ]; then
+              ./basegc.test -test.run '^$' -test.bench 'BenchmarkGCMark' -test.cpu 1 -test.benchtime 200x -test.count 1 | grep '^Benchmark' | tee -a basegc.txt
+            fi
+            ./gc.test -test.run '^$' -test.bench 'BenchmarkGCMark' -test.cpu 1 -test.benchtime 200x -test.count 1 | grep '^Benchmark' | tee -a gc.txt
+          done
+          ./gc.test -test.run 'TestNewFootprint|TestPointerSlots|TestPointerWords' -test.v | grep 'memory_test' | tee footprint.txt
+          if [ -n "$BASE" ]; then
+            go run golang.org/x/perf/cmd/benchstat@v0.0.0-20250813145418-2f7363a06fe1 basegc.txt gc.txt | tee gcstat.txt
+          else
+            go run golang.org/x/perf/cmd/benchstat@v0.0.0-20250813145418-2f7363a06fe1 gc.txt | tee gcstat.txt
+          fi
       - name: Profile
         run: |
           ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc/.*/go' \
@@ -222,6 +245,14 @@ jobs:
             echo '```'
             echo "</details>"
             echo
+            echo "<details><summary>GC cycle with 1000 live cancellers, one P (base vs head)</summary>"
+            echo
+            echo '```'
+            cat gcstat.txt
+            cat footprint.txt
+            echo '```'
+            echo "</details>"
+            echo
             echo "<details><summary>Profile (Go side)</summary>"
             echo
             echo '```'
@@ -254,6 +285,10 @@ jobs:
             kern.txt
             basekern.txt
             kernstat.txt
+            gc.txt
+            basegc.txt
+            gcstat.txt
+            footprint.txt
             cpu.txt
             cpu.pprof
             pprof.txt
