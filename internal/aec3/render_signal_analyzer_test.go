@@ -220,14 +220,75 @@ func BenchmarkRsaCountNarrowBands(b *testing.B) {
 		}
 		sink += c[3]
 	})
-	b.Run("select", func(b *testing.B) {
-		var c [FftLengthBy2 - 1]int
+	b.Run("kernel", func(b *testing.B) {
+		var c [FftLengthBy2]int32
 		for i := 0; i < b.N; i++ {
-			rsaCountNarrowBands(&xs[i&1023], &c)
+			kernNarrowBands(&xs[i&1023], &c)
 		}
-		sink += c[3]
+		sink += int(c[3])
+	})
+	b.Run("peak", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			sink += kernPeakBin(&xs[i&1023])
+		}
+	})
+	b.Run("peakGeneric", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			sink += kernPeakBinGeneric(&xs[i&1023])
+		}
 	})
 	if sink == 1 {
 		b.Log(sink)
+	}
+}
+
+// TestKernPeakBinAndNarrowBands checks the two analyzer kernels against
+// their references on spectra with peaks, ties, signed zeros, infinities and
+// NaNs, and on spectra whose first bins are NaN.
+func TestKernPeakBinAndNarrowBands(t *testing.T) {
+	rng := rand.New(rand.NewSource(19))
+	late := 0
+	for trial := 0; trial < 200000; trial++ {
+		var x [FftLengthBy2Plus1]float32
+		rsaTestSpectrum(rng, &x)
+		switch trial % 8 {
+		case 0:
+			x[rng.Intn(4)] = float32(math.NaN())
+		case 1:
+			// The maximum in the last bins, also as a tie.
+			x[FftLengthBy2-rng.Intn(3)] = float32(math.Inf(1))
+			if rng.Intn(2) == 0 {
+				x[rng.Intn(FftLengthBy2Plus1)] = float32(math.Inf(1))
+			}
+		case 2:
+			for k := range x {
+				x[k] = float32(rng.Intn(3))
+			}
+		}
+		got, want := kernPeakBin(&x), kernPeakBinGeneric(&x)
+		if got != want {
+			t.Fatalf("trial %d: peak bin %d, want %d (%v)", trial, got, want, x)
+		}
+		if want >= FftLengthBy2-4 {
+			late++
+		}
+		var gn, wn [FftLengthBy2]int32
+		for k := range gn {
+			gn[k] = -int32(rng.Intn(2))
+			wn[k] = gn[k]
+		}
+		kernNarrowBands(&x, &gn)
+		kernNarrowBandsGeneric(&x, &wn)
+		if gn != wn {
+			t.Fatalf("trial %d: narrow bands %v, want %v (%v)", trial, gn, wn, x)
+		}
+		for k := 1; k < FftLengthBy2; k++ {
+			if wn[k-1] == 0 && x[k] > 3*stdMax(x[k-1], x[k+1]) {
+				t.Fatalf("trial %d: bin %d not marked", trial, k)
+			}
+		}
+	}
+	if late < 1000 {
+		t.Fatalf("only %d peaks in the last bins", late)
 	}
 }

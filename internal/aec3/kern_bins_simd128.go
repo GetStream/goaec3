@@ -625,3 +625,135 @@ func kernReverbScalar(r, p []float32, s, d float32) {
 		r[j] = (r[j] + float32(p[j]*s)) * d
 	}
 }
+
+// kernErlUpdate evaluates the update and the release of every bin and
+// selects per lane. Bin 0 shares the first vector: its ERL is replaced by
+// the caller (erl[0] = erl[1]) and its hold counter is put back to zero.
+func kernErlUpdate(X2, Y2, erl *[FftLengthBy2Plus1]float32, hold *[FftLengthBy2]int32) {
+	if !kernHas128 {
+		kernErlUpdateGeneric(X2, Y2, erl, hold)
+		return
+	}
+	x2Min := archsimd.BroadcastFloat32x4(stErlX2Min)
+	c01 := archsimd.BroadcastFloat32x4(0.1)
+	two := archsimd.BroadcastFloat32x4(2)
+	minErl := archsimd.BroadcastFloat32x4(stMinErl)
+	maxErl := archsimd.BroadcastFloat32x4(stMaxErl)
+	hold1000 := archsimd.BroadcastInt32x4(1000)
+	one := archsimd.BroadcastInt32x4(1)
+	var zero archsimd.Int32x4
+	f := func(k int) {
+		_ = x2Min // a captured vector makes the compiler inline the closure
+		x := kernLd4(X2, k)
+		e := kernLd4(erl, k)
+		hp := (*[4]int32)(hold[k : k+4])
+		h := archsimd.LoadInt32x4Array(hp)
+		newErl := kernLd4(Y2, k).Div(x)
+		update := x.Greater(x2Min).And(newErl.Less(e))
+		e = vStdMax(e.Add(c01.Mul(newErl.Sub(e))), minErl).IfElse(update, e)
+		h = hold1000.IfElse(update, h).Sub(one)
+		h.StoreArray(hp)
+		kernSt4(erl, k, vStdMin(maxErl, two.Mul(e)).IfElse(h.LessEqual(zero), e))
+	}
+	g := func(k int) {
+		_ = x2Min
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
+	hold[0] = 0
+}
+
+// kernPeakBin keeps the first maximum of each lane and its bin, then picks
+// the lane with the largest maximum and, among equals, the lowest bin. A
+// later NaN never exceeds a lane maximum, as in the scalar search; a NaN in
+// the first vector makes a lane maximum NaN, and that case runs the scalar
+// search.
+func kernPeakBin(x *[FftLengthBy2Plus1]float32) int {
+	if !kernHas128 {
+		return kernPeakBinGeneric(x)
+	}
+	best := kernLd4(x, 0)
+	bins := archsimd.LoadInt32x4Array(&[4]int32{0, 1, 2, 3})
+	bestBins := bins
+	four := archsimd.BroadcastInt32x4(4)
+	f := func(k int) {
+		_ = four // a captured vector makes the compiler inline the closure
+		v := kernLd4(x, k)
+		bins = bins.Add(four)
+		gt := v.Greater(best)
+		best = v.IfElse(gt, best)
+		bestBins = bins.IfElse(gt, bestBins)
+	}
+	f(4)
+	f(8)
+	f(12)
+	f(16)
+	f(20)
+	f(24)
+	f(28)
+	f(32)
+	f(36)
+	f(40)
+	f(44)
+	f(48)
+	f(52)
+	f(56)
+	f(60)
+	var v [4]float32
+	var b [4]int32
+	best.StoreArray(&v)
+	bestBins.StoreArray(&b)
+	if v[0] != v[0] || v[1] != v[1] || v[2] != v[2] || v[3] != v[3] {
+		return kernPeakBinGeneric(x)
+	}
+	p := 0
+	for l := 1; l < 4; l++ {
+		if v[l] > v[p] || v[l] == v[p] && b[l] < b[p] {
+			p = l
+		}
+	}
+	if x[FftLengthBy2] > v[p] {
+		return FftLengthBy2
+	}
+	return int(b[p])
+}
+
+// kernNarrowBands compares four bins at a time; the last step covers bins
+// 60 to 63 and overlaps the one before, which the OR allows.
+func kernNarrowBands(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32) {
+	if !kernHas128 {
+		kernNarrowBandsGeneric(x, narrow)
+		return
+	}
+	three := archsimd.BroadcastFloat32x4(3)
+	f := func(k int) {
+		_ = three // a captured vector makes the compiler inline the closure
+		// Bins k+1 to k+4: x[k:k+4] and x[k+2:k+6] are their neighbours.
+		lo := archsimd.LoadFloat32x4Array((*[4]float32)(x[k : k+4]))
+		mid := archsimd.LoadFloat32x4Array((*[4]float32)(x[k+1 : k+5]))
+		hi := archsimd.LoadFloat32x4Array((*[4]float32)(x[k+2 : k+6]))
+		np := (*[4]int32)(narrow[k : k+4])
+		m := mid.Greater(three.Mul(vStdMax(lo, hi))).ToInt32x4()
+		archsimd.LoadInt32x4Array(np).Or(m).StoreArray(np)
+	}
+	g := func(k int) {
+		_ = three
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	f(48)
+	f(52)
+	f(56)
+	f(59)
+}

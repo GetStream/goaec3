@@ -217,3 +217,100 @@ func TestKernReferencesMatchSpec(t *testing.T) {
 		kernCheckExact(t, "Fir3", got, want)
 	}
 }
+
+// kernErlUpdateSpec transcribes the bin loops of ErlEstimator::Update with
+// the C++ layout of the hold counters (hold_counters_[k - 1] for bin k).
+func kernErlUpdateSpec(X2, Y2, erl *[FftLengthBy2Plus1]float32, holdCounters *[FftLengthBy2Minus1]int32) {
+	const x2Min float32 = 44015068.0
+	for k := 1; k < FftLengthBy2; k++ {
+		if X2[k] > x2Min {
+			newErl := Y2[k] / X2[k]
+			if newErl < erl[k] {
+				holdCounters[k-1] = 1000
+				erl[k] += float32(0.1 * (newErl - erl[k]))
+				erl[k] = stdMax(erl[k], stMinErl)
+			}
+		}
+	}
+	for i := range holdCounters {
+		holdCounters[i]--
+	}
+	for i, a := range holdCounters {
+		if a <= 0 {
+			erl[i+1] = stdMin(stMaxErl, 2*erl[i+1])
+		}
+	}
+}
+
+// TestKernErlUpdate checks the kernel and its reference against the
+// transcription: every ERL bin but bin 0 (which the caller replaces) and
+// every hold counter, over render powers around the update threshold, hold
+// counters around the release and ERLs around their bounds.
+func TestKernErlUpdate(t *testing.T) {
+	rng := rand.New(rand.NewSource(41))
+	updates, releases := 0, 0
+	for trial := 0; trial < 20000; trial++ {
+		var X2, Y2, erl [FftLengthBy2Plus1]float32
+		var hold [FftLengthBy2]int32
+		var spec [FftLengthBy2Minus1]int32
+		for k := range X2 {
+			X2[k] = float32(44015068.0 * math.Exp(4*rng.NormFloat64()))
+			Y2[k] = X2[k] * float32(math.Exp(3*rng.NormFloat64()))
+			erl[k] = float32(math.Exp(3 * rng.NormFloat64()))
+			switch rng.Intn(12) {
+			case 0:
+				X2[k] = 44015068.0
+			case 1:
+				X2[k] = 0
+			case 2:
+				erl[k] = stMaxErl
+			case 3:
+				erl[k] = stMinErl
+			case 4:
+				Y2[k] = 0
+			case 5:
+				erl[k] = 600
+			}
+		}
+		if trial%3 == 0 {
+			copy(X2[:], kernEdgeVec(rng, FftLengthBy2Plus1))
+			copy(Y2[:], kernEdgeVec(rng, FftLengthBy2Plus1))
+		}
+		for k := 1; k < FftLengthBy2; k++ {
+			switch rng.Intn(4) {
+			case 0:
+				hold[k] = int32(rng.Intn(5)) - 2
+			case 1:
+				hold[k] = int32(rng.Intn(1001))
+			case 2:
+				hold[k] = math.MinInt32 + int32(rng.Intn(3))
+			}
+			spec[k-1] = hold[k]
+		}
+		gErl, wErl, rErl := erl, erl, erl
+		gHold, rHold := hold, hold
+		kernErlUpdate(&X2, &Y2, &gErl, &gHold)
+		kernErlUpdateGeneric(&X2, &Y2, &rErl, &rHold)
+		kernErlUpdateSpec(&X2, &Y2, &wErl, &spec)
+		gErl[0], rErl[0] = wErl[0], wErl[0]
+		kernCheckExact(t, "ErlUpdate", gErl[:], wErl[:])
+		kernCheckExact(t, "ErlUpdateGeneric", rErl[:], wErl[:])
+		if gHold[0] != 0 || rHold[0] != 0 {
+			t.Fatalf("hold[0] = %d, %d", gHold[0], rHold[0])
+		}
+		for k := 1; k < FftLengthBy2; k++ {
+			if gHold[k] != spec[k-1] || rHold[k] != spec[k-1] {
+				t.Fatalf("trial %d hold[%d] = %d (kernel), %d (reference), want %d", trial, k, gHold[k], rHold[k], spec[k-1])
+			}
+			if spec[k-1] == 999 {
+				updates++
+			}
+			if spec[k-1] <= 0 {
+				releases++
+			}
+		}
+	}
+	if updates < 10000 || releases < 10000 {
+		t.Fatalf("%d updates and %d releases", updates, releases)
+	}
+}

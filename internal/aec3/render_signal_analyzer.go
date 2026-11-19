@@ -31,28 +31,16 @@ func (r *RenderSignalAnalyzer) identifySmallNarrowBandRegions(renderBuffer *Rend
 		r.narrowBandCounters = [FftLengthBy2 - 1]int{}
 		return
 	}
-	var channelCounters [FftLengthBy2 - 1]int
+	// narrow[k-1] is all ones when bin k is a narrow band in some channel
+	// (the C++ counts the channels and tests the count against zero).
+	var narrow [FftLengthBy2]int32
 	X2 := renderBuffer.Spectrum(delayPartitions)
 	for ch := range X2 {
-		rsaCountNarrowBands(&X2[ch], &channelCounters)
+		kernNarrowBands(&X2[ch], &narrow)
 	}
 	for k := range r.narrowBandCounters {
 		// Increment, or reset to zero, without a branch.
-		inc := 0
-		if channelCounters[k] > 0 {
-			inc = 1
-		}
-		r.narrowBandCounters[k] = (r.narrowBandCounters[k] + 1) * inc
-	}
-}
-
-// rsaCountNarrowBands increments counters[k-1] for each bin k in
-// [1, FftLengthBy2) with x[k] > 3*std::max(x[k-1], x[k+1]). The bins are
-// independent and the outcome is data dependent, so the comparisons become
-// selects instead of branches.
-func rsaCountNarrowBands(x *[FftLengthBy2Plus1]float32, counters *[FftLengthBy2 - 1]int) {
-	for k := 1; k < FftLengthBy2; k++ {
-		counters[k-1] += rsaB2i(x[k] > 3*rsaMax(x[k-1], x[k+1]))
+		r.narrowBandCounters[k] = (r.narrowBandCounters[k] + 1) & int(narrow[k])
 	}
 }
 
@@ -86,17 +74,12 @@ func (r *RenderSignalAnalyzer) identifyStrongNarrowBandComponent(renderBuffer *R
 	for channel := 0; channel < xLatest.NumChannels(); channel++ {
 		X2Latest := &renderBuffer.Spectrum(0)[channel]
 
-		// Identify the spectral peak (first maximum). The peak search and
-		// the max folds below form serial dependency chains whose branches
-		// predict well, so they stay branches.
-		peakBin := 0
-		for k := 1; k < FftLengthBy2Plus1; k++ {
-			if X2Latest[k] > X2Latest[peakBin] {
-				peakBin = k
-			}
-		}
+		// Identify the spectral peak (first maximum).
+		peakBin := kernPeakBin(X2Latest)
 
 		// Compute the level around the peak.
+		// The max folds below form serial dependency chains whose branches
+		// predict well, so they stay branches.
 		var nonPeakPower float32
 		for k := max(0, peakBin-14); k < peakBin-4; k++ {
 			nonPeakPower = stdMax(X2Latest[k], nonPeakPower)

@@ -345,3 +345,55 @@ func kernReverbScalarGeneric(r, p []float32, s, d float32) {
 		r[k] = (r[k] + float32(p[k]*s)) * d
 	}
 }
+
+// stErlX2Min is the render power above which ErlEstimator::Update updates a
+// bin: WGN of power -46 dBFS.
+const stErlX2Min float32 = 44015068.0
+
+// kernErlUpdateGeneric is the bin update of ErlEstimator::Update for bins
+// [1, FftLengthBy2): the three loops of the C++ (update, decrement of the
+// hold counters, release) touch one bin each, so they run per bin here.
+// hold[k] is the hold counter of bin k (hold_counters_[k - 1]); hold[0] is
+// unused and stays zero.
+func kernErlUpdateGeneric(X2, Y2, erl *[FftLengthBy2Plus1]float32, hold *[FftLengthBy2]int32) {
+	for k := 1; k < FftLengthBy2; k++ {
+		e, h := erl[k], hold[k]
+		if X2[k] > stErlX2Min {
+			newErl := Y2[k] / X2[k]
+			if newErl < e {
+				h = 1000
+				e += float32(0.1 * (newErl - e))
+				e = stdMax(e, stMinErl)
+			}
+		}
+		h--
+		hold[k] = h
+		if h <= 0 {
+			e = stdMin(stMaxErl, 2*e)
+		}
+		erl[k] = e
+	}
+}
+
+// kernPeakBinGeneric is the spectral peak search of
+// RenderSignalAnalyzer::IdentifyStrongNarrowBandComponent: the first bin
+// that no later bin exceeds, searched with "x[k] > x[peak]" from bin 0.
+func kernPeakBinGeneric(x *[FftLengthBy2Plus1]float32) int {
+	peakBin := 0
+	for k := 1; k < FftLengthBy2Plus1; k++ {
+		if x[k] > x[peakBin] {
+			peakBin = k
+		}
+	}
+	return peakBin
+}
+
+// kernNarrowBandsGeneric sets narrow[k-1] to all ones for every bin k in
+// [1, FftLengthBy2) with x[k] > 3*std::max(x[k-1], x[k+1]) and leaves the
+// other elements as they are (RenderSignalAnalyzer's
+// IdentifySmallNarrowBandRegions). narrow[FftLengthBy2-1] is not written.
+func kernNarrowBandsGeneric(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32) {
+	for k := 1; k < FftLengthBy2; k++ {
+		narrow[k-1] |= -int32(rsaB2i(x[k] > 3*rsaMax(x[k-1], x[k+1])))
+	}
+}

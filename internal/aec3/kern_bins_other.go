@@ -65,3 +65,13 @@ func kernCoarseMu(X2 *[FftLengthBy2Plus1]float32, gate, rate float32, mu *[FftLe
 }
 
 func kernReverbScalar(r, p []float32, s, d float32) { kernReverbScalarGeneric(r, p, s, d) }
+
+func kernErlUpdate(X2, Y2, erl *[FftLengthBy2Plus1]float32, hold *[FftLengthBy2]int32) {
+	kernErlUpdateGeneric(X2, Y2, erl, hold)
+}
+
+func kernPeakBin(x *[FftLengthBy2Plus1]float32) int { return kernPeakBinGeneric(x) }
+
+func kernNarrowBands(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32) {
+	kernNarrowBandsGeneric(x, narrow)
+}
