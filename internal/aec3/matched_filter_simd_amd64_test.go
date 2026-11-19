@@ -28,4 +28,5 @@ func TestDlyAvx2KernelsForced(t *testing.T) {
 	defer func() { dlyUseFma = saved }()
 	TestDlyMatchedFilterKernelsMatchReference(t)
 	TestDlyMatchedFilterCoreLanesMatchReference(t)
+	TestDlyMatchedFilterAccErrCoresMatchReference(t)
 }

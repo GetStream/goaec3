@@ -94,7 +94,7 @@ func TestSrcMatchedFilterCoreParity(t *testing.T) {
 						x := srcSpeechLike(rng, xSize, 5000)
 						hGo, hC := make([]float32, hSize), make([]float32, hSize)
 						accGo, accC := make([]float32, hSize/4), make([]float32, hSize/4)
-						scrGo, scrC := make([]float32, hSize), make([]float32, hSize)
+						scrGo, scrC := make([]float32, hSize+16), make([]float32, hSize) // the Go cores take the windows of a whole call
 						thr := float32(hSize) * 150 * 150
 						for call := 0; call < 60; call++ {
 							y := srcSpeechLike(rng, 16, 5000)

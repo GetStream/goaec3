@@ -184,7 +184,7 @@ func TestDlyMatchedFilterCoreParity(t *testing.T) {
 				hC := make([]float32, hSize)
 				accGo := make([]float32, hSize/4)
 				accC := make([]float32, hSize/4)
-				scrGo := make([]float32, hSize)
+				scrGo := make([]float32, hSize+16) // the Go cores take the windows of a whole call
 				scrC := make([]float32, hSize)
 				thr := float32(hSize) * 150 * 150
 				for call := 0; call < 60; call++ {

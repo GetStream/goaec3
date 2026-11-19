@@ -288,6 +288,65 @@ func TestDlyQuietSkipStateMatchesNoSkip(t *testing.T) {
 	t.Logf("total: skipped %d, ran %d, lag reports %d", total.skipped, total.ran, total.reported)
 }
 
+// TestDlyMatchedFilterPairedUpdateMatchesUnpaired runs Update with the
+// filter cores two at a time (through the two-filter kernels of every lane)
+// and one at a time, on the same loud and quiet render, and requires
+// identical state after every block.
+func TestDlyMatchedFilterPairedUpdateMatchesUnpaired(t *testing.T) {
+	saved := [3]bool{dlyPairNeon, dlyPairSse2, dlyPairAvx2}
+	defer func() { dlyPairNeon, dlyPairSse2, dlyPairAvx2 = saved[0], saved[1], saved[2] }()
+	numBlocks := 3000
+	if testing.Short() {
+		numBlocks = 600
+	}
+	for _, opt := range []Aec3Optimization{OptNeon, OptSse2, OptAvx2} {
+		for _, factor := range []int{4, 8} {
+			for _, preEcho := range []bool{false, true} {
+				limit := float32(150)
+				if factor == 8 {
+					limit = 20
+				}
+				sub := BlockSize / factor
+				newFilter := func() *MatchedFilter {
+					return NewMatchedFilter(opt, sub, MatchedFilterWindowSizeSubBlocks, 5,
+						MatchedFilterAlignmentShiftSizeSubBlocks, limit, 0.7, 0.3, 0.2, preEcho)
+				}
+				paired, single := newFilter(), newFilter()
+				s := newDlyQuietScene(int64(300+int(opt)+factor), factor, 5, math.Float32frombits(paired.quietLimitBits))
+				reported := 0
+				for blk := 0; blk < numBlocks; blk++ {
+					mode := dlyQuietLoud
+					if blk%400 > 300 {
+						mode = dlyQuietBarelyAbove
+					}
+					y := s.block(mode, limit)
+					if s.rng.Intn(40) == 0 {
+						y[s.rng.Intn(len(y))] = 32700
+					}
+					slow := s.rng.Intn(3) == 0
+					dlyPairNeon, dlyPairSse2, dlyPairAvx2 = true, true, true
+					paired.Update(s.buf, y, slow)
+					dlyPairNeon, dlyPairSse2, dlyPairAvx2 = false, false, false
+					single.Update(s.buf, y, slow)
+					if d := dlyQuietStateDiff(paired, single); d != "" {
+						t.Fatalf("opt %d ds%d preEcho %v block %d: %s", opt, factor, preEcho, blk, d)
+					}
+					if single.hasReportedLagEstimate {
+						reported++
+					}
+					if s.rng.Intn(500) == 0 {
+						paired.Reset(false)
+						single.Reset(false)
+					}
+				}
+				if reported < numBlocks/10 {
+					t.Errorf("opt %d ds%d preEcho %v: only %d lag reports", opt, factor, preEcho, reported)
+				}
+			}
+		}
+	}
+}
+
 // TestDlyQuietLimitIsTight checks that the limit is not needlessly low: a
 // render buffer of constant magnitude 1.001 times the excitation limit
 // updates the filters, so it must not count as quiet, and the limit is
