@@ -617,3 +617,11 @@ func dlyAxpyDotS2Sum(g int, hA, xaA, xbA []float32, alphaA float32,
 	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) bool {
 	return false
 }
+
+// dlyCoreLaneKernel runs the MatchedFilterCore loop of the lane with group
+// size g on one filter where the lane has its own core, and reports whether
+// it did; no lane of this build has one.
+func dlyCoreLaneKernel(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
+	filtersUpdated *bool, errorSum *float32) bool {
+	return false
+}

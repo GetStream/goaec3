@@ -62,16 +62,6 @@ func dlyAxpyDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
 	dlyAxpyDotS2NeonRef(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
 }
 
-// dlyX2Wrapped is dlyX2WrappedRef; the SSE2 and AVX2 lanes accumulate
-// several windows at a time.
-func dlyX2Wrapped(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) {
-	if (g == 8 && dlyUseAvx) || (g == 16 && dlyUseFma) {
-		dlyX2WrappedMulti(g, x, hSize, lo, r, out)
-		return
-	}
-	dlyX2WrappedRef(g, x, hSize, lo, r, out)
-}
-
 // dlySqStreams is the number of stretches dlySqMulti accumulates at once:
 // three for the SSE2 lane and two for the AVX2 lane.
 func dlySqStreams(g int) int {
@@ -93,55 +83,6 @@ func dlySqMulti(g int, x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMa
 }
 
 // SSE2 lane.
-
-func dlyDotSSse2(h, x []float32, acc *[8]float32) {
-	if !dlyUseAvx {
-		dlyDotSSse2Ref(h, x, acc)
-		return
-	}
-	n := len(h) &^ 7
-	h = h[:n:n]
-	x = x[:n:n]
-	s := dlyLd4((*[4]float32)(acc[0:4]))
-	s4 := dlyLd4((*[4]float32)(acc[4:8]))
-	for i := 0; i < n-7; i += 8 {
-		hh := (*[8]float32)(h[i : i+8])
-		xx := (*[8]float32)(x[i : i+8])
-		s = s.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(dlyLd4((*[4]float32)(xx[0:4]))))
-		s4 = s4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(dlyLd4((*[4]float32)(xx[4:8]))))
-	}
-	s.StoreArray((*[4]float32)(acc[0:4]))
-	s4.StoreArray((*[4]float32)(acc[4:8]))
-}
-
-// dlyAxpyDotSSse2 equals dlyAxpyRef(h, xa, alpha) followed by
-// dlyDotSSse2Ref(h, xb, acc) for len(h) a multiple of 8.
-func dlyAxpyDotSSse2(h, xa, xb []float32, alpha float32, acc *[8]float32) {
-	if !dlyUseAvx {
-		dlyAxpyDotSSse2Ref(h, xa, xb, alpha, acc)
-		return
-	}
-	n := len(h) &^ 7
-	h = h[:n:n]
-	xa = xa[:n:n]
-	xb = xb[:n:n]
-	a := archsimd.BroadcastFloat32x4(alpha)
-	s := dlyLd4((*[4]float32)(acc[0:4]))
-	s4 := dlyLd4((*[4]float32)(acc[4:8]))
-	for i := 0; i < n-7; i += 8 {
-		hh := (*[8]float32)(h[i : i+8])
-		aa := (*[8]float32)(xa[i : i+8])
-		bb := (*[8]float32)(xb[i : i+8])
-		hk := dlyLd4((*[4]float32)(hh[0:4])).Add(a.Mul(dlyLd4((*[4]float32)(aa[0:4]))))
-		hk4 := dlyLd4((*[4]float32)(hh[4:8])).Add(a.Mul(dlyLd4((*[4]float32)(aa[4:8]))))
-		hk.StoreArray((*[4]float32)(hh[0:4]))
-		hk4.StoreArray((*[4]float32)(hh[4:8]))
-		s = s.Add(hk.Mul(dlyLd4((*[4]float32)(bb[0:4]))))
-		s4 = s4.Add(hk4.Mul(dlyLd4((*[4]float32)(bb[4:8]))))
-	}
-	s.StoreArray((*[4]float32)(acc[0:4]))
-	s4.StoreArray((*[4]float32)(acc[4:8]))
-}
 
 func dlySqSse2(x []float32, acc *[8]float32) {
 	if !dlyUseAvx {
@@ -303,51 +244,6 @@ func dlyX2ReduceAvx2(accErr bool, lanes *[dlyX2Run + 15]float32, r int, out *[dl
 	}
 }
 
-// The Sum kernels run a dot product (or update and dot product) over all
-// of h from zero accumulators and return dlyReduceS(acc, 0) without storing
-// the accumulators.
-
-func dlyDotSSumSse2(h, x []float32) float32 {
-	if !dlyUseAvx {
-		return dlyDotSSumSse2Ref(h, x)
-	}
-	n := len(h) &^ 7
-	h = h[:n:n]
-	x = x[:n:n]
-	var s, s4 archsimd.Float32x4
-	for i := 0; i < n-7; i += 8 {
-		hh := (*[8]float32)(h[i : i+8])
-		xx := (*[8]float32)(x[i : i+8])
-		s = s.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(dlyLd4((*[4]float32)(xx[0:4]))))
-		s4 = s4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(dlyLd4((*[4]float32)(xx[4:8]))))
-	}
-	return 0 + dlyHsumSSse2(s, s4).GetElem(0)
-}
-
-func dlyAxpyDotSSumSse2(h, xa, xb []float32, alpha float32) float32 {
-	if !dlyUseAvx {
-		return dlyAxpyDotSSumSse2Ref(h, xa, xb, alpha)
-	}
-	n := len(h) &^ 7
-	h = h[:n:n]
-	xa = xa[:n:n]
-	xb = xb[:n:n]
-	a := archsimd.BroadcastFloat32x4(alpha)
-	var s, s4 archsimd.Float32x4
-	for i := 0; i < n-7; i += 8 {
-		hh := (*[8]float32)(h[i : i+8])
-		aa := (*[8]float32)(xa[i : i+8])
-		bb := (*[8]float32)(xb[i : i+8])
-		hk := dlyLd4((*[4]float32)(hh[0:4])).Add(a.Mul(dlyLd4((*[4]float32)(aa[0:4]))))
-		hk4 := dlyLd4((*[4]float32)(hh[4:8])).Add(a.Mul(dlyLd4((*[4]float32)(aa[4:8]))))
-		hk.StoreArray((*[4]float32)(hh[0:4]))
-		hk4.StoreArray((*[4]float32)(hh[4:8]))
-		s = s.Add(hk.Mul(dlyLd4((*[4]float32)(bb[0:4]))))
-		s4 = s4.Add(hk4.Mul(dlyLd4((*[4]float32)(bb[4:8]))))
-	}
-	return 0 + dlyHsumSSse2(s, s4).GetElem(0)
-}
-
 // dlyAccErrSse2 gathers the two sub-group sums of a group with haddps-style
 // permutes; the running sum and the errors stay scalar.
 func dlyAccErrSse2(h, x []float32, y float32, accErr []float32) float32 {
@@ -453,65 +349,6 @@ func dlyAxpy(h, x []float32, alpha float32) {
 
 // AVX2 lane.
 
-func dlyDotSAvx2(h, x []float32, acc *[16]float32) {
-	if !dlyUseFma {
-		dlyDotSAvx2Ref(h, x, acc)
-		return
-	}
-	n := len(h) &^ 15
-	h = h[:n:n]
-	x = x[:n:n]
-	s := dlyLd8((*[8]float32)(acc[0:8]))
-	s8 := dlyLd8((*[8]float32)(acc[8:16]))
-	for i := 0; i < n-15; i += 16 {
-		hh := (*[16]float32)(h[i : i+16])
-		xx := (*[16]float32)(x[i : i+16])
-		s = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(dlyLd8((*[8]float32)(xx[0:8])), s)
-		s8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(dlyLd8((*[8]float32)(xx[8:16])), s8)
-	}
-	s.StoreArray((*[8]float32)(acc[0:8]))
-	s8.StoreArray((*[8]float32)(acc[8:16]))
-	archsimd.ClearAVXUpperBits()
-}
-
-// dlyAxpyFmaDotSAvx2 equals dlyAxpyFmaRef(h, xa, alpha) followed by
-// dlyDotSAvx2Ref(h, xb, acc) for len(h) a multiple of 16.
-func dlyAxpyFmaDotSAvx2(h, xa, xb []float32, alpha float32, acc *[16]float32) {
-	if !dlyUseFma {
-		dlyAxpyFmaDotSAvx2Ref(h, xa, xb, alpha, acc)
-		return
-	}
-	dlyAxpyFmaDotSAvx2Lanes(h, xa, xb, alpha, acc)
-}
-
-// dlyAxpyFmaDotSAvx2Lanes is dlyAxpyFmaDotSAvx2; it does not inline, so
-// alpha does not cross the VZEROUPPER in its caller as a float32.
-//
-//go:noinline
-func dlyAxpyFmaDotSAvx2Lanes(h, xa, xb []float32, alpha float32, acc *[16]float32) {
-	n := len(h) &^ 15
-	h = h[:n:n]
-	xa = xa[:n:n]
-	xb = xb[:n:n]
-	a := archsimd.BroadcastFloat32x8(alpha)
-	s := dlyLd8((*[8]float32)(acc[0:8]))
-	s8 := dlyLd8((*[8]float32)(acc[8:16]))
-	for i := 0; i < n-15; i += 16 {
-		hh := (*[16]float32)(h[i : i+16])
-		aa := (*[16]float32)(xa[i : i+16])
-		bb := (*[16]float32)(xb[i : i+16])
-		hk := dlyLd8((*[8]float32)(aa[0:8])).MulAdd(a, dlyLd8((*[8]float32)(hh[0:8])))
-		hk8 := dlyLd8((*[8]float32)(aa[8:16])).MulAdd(a, dlyLd8((*[8]float32)(hh[8:16])))
-		hk.StoreArray((*[8]float32)(hh[0:8]))
-		hk8.StoreArray((*[8]float32)(hh[8:16]))
-		s = hk.MulAdd(dlyLd8((*[8]float32)(bb[0:8])), s)
-		s8 = hk8.MulAdd(dlyLd8((*[8]float32)(bb[8:16])), s8)
-	}
-	s.StoreArray((*[8]float32)(acc[0:8]))
-	s8.StoreArray((*[8]float32)(acc[8:16]))
-	archsimd.ClearAVXUpperBits()
-}
-
 func dlySqAvx2(x []float32, acc *[16]float32) {
 	if !dlyUseFma {
 		dlySqAvx2Ref(x, acc)
@@ -530,68 +367,6 @@ func dlySqAvx2(x []float32, acc *[16]float32) {
 	}
 	q.StoreArray((*[8]float32)(acc[0:8]))
 	q8.StoreArray((*[8]float32)(acc[8:16]))
-	archsimd.ClearAVXUpperBits()
-}
-
-func dlyDotSSumAvx2(h, x []float32) float32 {
-	if !dlyUseFma {
-		return dlyDotSSumAvx2Ref(h, x)
-	}
-	var r [4]float32
-	dlyDotSSumAvx2Lanes(h, x, &r)
-	return 0 + r[0]
-}
-
-// dlyDotSSumAvx2Lanes stores the reduced sum of dlyDotSSumAvx2 in r[0].
-//
-//go:noinline
-func dlyDotSSumAvx2Lanes(h, x []float32, r *[4]float32) {
-	n := len(h) &^ 15
-	h = h[:n:n]
-	x = x[:n:n]
-	var s, s8 archsimd.Float32x8
-	for i := 0; i < n-15; i += 16 {
-		hh := (*[16]float32)(h[i : i+16])
-		xx := (*[16]float32)(x[i : i+16])
-		s = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(dlyLd8((*[8]float32)(xx[0:8])), s)
-		s8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(dlyLd8((*[8]float32)(xx[8:16])), s8)
-	}
-	dlyHsumSAvx2(s, s8).StoreArray(r)
-	archsimd.ClearAVXUpperBits()
-}
-
-func dlyAxpyFmaDotSSumAvx2(h, xa, xb []float32, alpha float32) float32 {
-	if !dlyUseFma {
-		return dlyAxpyFmaDotSSumAvx2Ref(h, xa, xb, alpha)
-	}
-	var r [4]float32
-	dlyAxpyFmaDotSSumAvx2Lanes(h, xa, xb, alpha, &r)
-	return 0 + r[0]
-}
-
-// dlyAxpyFmaDotSSumAvx2Lanes stores the reduced sum of
-// dlyAxpyFmaDotSSumAvx2 in r[0].
-//
-//go:noinline
-func dlyAxpyFmaDotSSumAvx2Lanes(h, xa, xb []float32, alpha float32, r *[4]float32) {
-	n := len(h) &^ 15
-	h = h[:n:n]
-	xa = xa[:n:n]
-	xb = xb[:n:n]
-	a := archsimd.BroadcastFloat32x8(alpha)
-	var s, s8 archsimd.Float32x8
-	for i := 0; i < n-15; i += 16 {
-		hh := (*[16]float32)(h[i : i+16])
-		aa := (*[16]float32)(xa[i : i+16])
-		bb := (*[16]float32)(xb[i : i+16])
-		hk := dlyLd8((*[8]float32)(aa[0:8])).MulAdd(a, dlyLd8((*[8]float32)(hh[0:8])))
-		hk8 := dlyLd8((*[8]float32)(aa[8:16])).MulAdd(a, dlyLd8((*[8]float32)(hh[8:16])))
-		hk.StoreArray((*[8]float32)(hh[0:8]))
-		hk8.StoreArray((*[8]float32)(hh[8:16]))
-		s = hk.MulAdd(dlyLd8((*[8]float32)(bb[0:8])), s)
-		s8 = hk8.MulAdd(dlyLd8((*[8]float32)(bb[8:16])), s8)
-	}
-	dlyHsumSAvx2(s, s8).StoreArray(r)
 	archsimd.ClearAVXUpperBits()
 }
 
@@ -790,161 +565,6 @@ func dlyPeakLanes256(p []float32, mv *[16]float32, iv *[16]int32) bool {
 	return true
 }
 
-// dlyPairSse2 and dlyPairAvx2 select the two-filter kernels for the SSE2
-// and AVX2 lanes.
-var dlyPairSse2, dlyPairAvx2 = false, false
-
-// dlyDotS2Sse2 is dlyDotSSse2 for two filters of the same length at once.
-func dlyDotS2Sse2(hA, xA []float32, accA *[8]float32, hB, xB []float32, accB *[8]float32) {
-	if !dlyUseAvx {
-		dlyDotS2Sse2Ref(hA, xA, accA, hB, xB, accB)
-		return
-	}
-	n := len(hA) &^ 7
-	hA, xA, hB, xB = hA[:n:n], xA[:n:n], hB[:n:n], xB[:n:n]
-	sA := dlyLd4((*[4]float32)(accA[0:4]))
-	sA4 := dlyLd4((*[4]float32)(accA[4:8]))
-	sB := dlyLd4((*[4]float32)(accB[0:4]))
-	sB4 := dlyLd4((*[4]float32)(accB[4:8]))
-	for i := 0; i < n-7; i += 8 {
-		hh := (*[8]float32)(hA[i : i+8])
-		bb := (*[8]float32)(xA[i : i+8])
-		gg := (*[8]float32)(hB[i : i+8])
-		dd := (*[8]float32)(xB[i : i+8])
-		sA = sA.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(dlyLd4((*[4]float32)(bb[0:4]))))
-		sA4 = sA4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(dlyLd4((*[4]float32)(bb[4:8]))))
-		sB = sB.Add(dlyLd4((*[4]float32)(gg[0:4])).Mul(dlyLd4((*[4]float32)(dd[0:4]))))
-		sB4 = sB4.Add(dlyLd4((*[4]float32)(gg[4:8])).Mul(dlyLd4((*[4]float32)(dd[4:8]))))
-	}
-	sA.StoreArray((*[4]float32)(accA[0:4]))
-	sA4.StoreArray((*[4]float32)(accA[4:8]))
-	sB.StoreArray((*[4]float32)(accB[0:4]))
-	sB4.StoreArray((*[4]float32)(accB[4:8]))
-}
-
-// dlyAxpyDotS2Sse2 is dlyAxpyDotSSse2 for two filters of the same length at
-// once.
-func dlyAxpyDotS2Sse2(hA, xaA, xbA []float32, alphaA float32, accA *[8]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[8]float32) {
-	if !dlyUseAvx {
-		dlyAxpyDotS2Sse2Ref(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
-		return
-	}
-	n := len(hA) &^ 7
-	hA, xaA, xbA, hB, xaB, xbB = hA[:n:n], xaA[:n:n], xbA[:n:n], hB[:n:n], xaB[:n:n], xbB[:n:n]
-	aA := archsimd.BroadcastFloat32x4(alphaA)
-	aB := archsimd.BroadcastFloat32x4(alphaB)
-	sA := dlyLd4((*[4]float32)(accA[0:4]))
-	sA4 := dlyLd4((*[4]float32)(accA[4:8]))
-	sB := dlyLd4((*[4]float32)(accB[0:4]))
-	sB4 := dlyLd4((*[4]float32)(accB[4:8]))
-	for i := 0; i < n-7; i += 8 {
-		hh := (*[8]float32)(hA[i : i+8])
-		aa := (*[8]float32)(xaA[i : i+8])
-		bb := (*[8]float32)(xbA[i : i+8])
-		gg := (*[8]float32)(hB[i : i+8])
-		cc := (*[8]float32)(xaB[i : i+8])
-		dd := (*[8]float32)(xbB[i : i+8])
-		hk := dlyLd4((*[4]float32)(hh[0:4])).Add(aA.Mul(dlyLd4((*[4]float32)(aa[0:4]))))
-		hk4 := dlyLd4((*[4]float32)(hh[4:8])).Add(aA.Mul(dlyLd4((*[4]float32)(aa[4:8]))))
-		gk := dlyLd4((*[4]float32)(gg[0:4])).Add(aB.Mul(dlyLd4((*[4]float32)(cc[0:4]))))
-		gk4 := dlyLd4((*[4]float32)(gg[4:8])).Add(aB.Mul(dlyLd4((*[4]float32)(cc[4:8]))))
-		hk.StoreArray((*[4]float32)(hh[0:4]))
-		hk4.StoreArray((*[4]float32)(hh[4:8]))
-		gk.StoreArray((*[4]float32)(gg[0:4]))
-		gk4.StoreArray((*[4]float32)(gg[4:8]))
-		sA = sA.Add(hk.Mul(dlyLd4((*[4]float32)(bb[0:4]))))
-		sA4 = sA4.Add(hk4.Mul(dlyLd4((*[4]float32)(bb[4:8]))))
-		sB = sB.Add(gk.Mul(dlyLd4((*[4]float32)(dd[0:4]))))
-		sB4 = sB4.Add(gk4.Mul(dlyLd4((*[4]float32)(dd[4:8]))))
-	}
-	sA.StoreArray((*[4]float32)(accA[0:4]))
-	sA4.StoreArray((*[4]float32)(accA[4:8]))
-	sB.StoreArray((*[4]float32)(accB[0:4]))
-	sB4.StoreArray((*[4]float32)(accB[4:8]))
-}
-
-// dlyDotS2Avx2 is dlyDotSAvx2 for two filters of the same length at once.
-func dlyDotS2Avx2(hA, xA []float32, accA *[16]float32, hB, xB []float32, accB *[16]float32) {
-	if !dlyUseFma {
-		dlyDotS2Avx2Ref(hA, xA, accA, hB, xB, accB)
-		return
-	}
-	n := len(hA) &^ 15
-	hA, xA, hB, xB = hA[:n:n], xA[:n:n], hB[:n:n], xB[:n:n]
-	sA := dlyLd8((*[8]float32)(accA[0:8]))
-	sA8 := dlyLd8((*[8]float32)(accA[8:16]))
-	sB := dlyLd8((*[8]float32)(accB[0:8]))
-	sB8 := dlyLd8((*[8]float32)(accB[8:16]))
-	for i := 0; i < n-15; i += 16 {
-		hh := (*[16]float32)(hA[i : i+16])
-		bb := (*[16]float32)(xA[i : i+16])
-		gg := (*[16]float32)(hB[i : i+16])
-		dd := (*[16]float32)(xB[i : i+16])
-		sA = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(dlyLd8((*[8]float32)(bb[0:8])), sA)
-		sA8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(dlyLd8((*[8]float32)(bb[8:16])), sA8)
-		sB = dlyLd8((*[8]float32)(gg[0:8])).MulAdd(dlyLd8((*[8]float32)(dd[0:8])), sB)
-		sB8 = dlyLd8((*[8]float32)(gg[8:16])).MulAdd(dlyLd8((*[8]float32)(dd[8:16])), sB8)
-	}
-	sA.StoreArray((*[8]float32)(accA[0:8]))
-	sA8.StoreArray((*[8]float32)(accA[8:16]))
-	sB.StoreArray((*[8]float32)(accB[0:8]))
-	sB8.StoreArray((*[8]float32)(accB[8:16]))
-	archsimd.ClearAVXUpperBits()
-}
-
-// dlyAxpyFmaDotS2Avx2 is dlyAxpyFmaDotSAvx2 for two filters of the same
-// length at once.
-func dlyAxpyFmaDotS2Avx2(hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[16]float32) {
-	if !dlyUseFma {
-		dlyAxpyFmaDotS2Avx2Ref(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
-		return
-	}
-	dlyAxpyFmaDotS2Avx2Lanes(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
-}
-
-// dlyAxpyFmaDotS2Avx2Lanes is dlyAxpyFmaDotS2Avx2; it does not inline, so
-// the alphas do not cross the VZEROUPPER in its caller as float32 values.
-//
-//go:noinline
-func dlyAxpyFmaDotS2Avx2Lanes(hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[16]float32) {
-	n := len(hA) &^ 15
-	hA, xaA, xbA, hB, xaB, xbB = hA[:n:n], xaA[:n:n], xbA[:n:n], hB[:n:n], xaB[:n:n], xbB[:n:n]
-	aA := archsimd.BroadcastFloat32x8(alphaA)
-	aB := archsimd.BroadcastFloat32x8(alphaB)
-	sA := dlyLd8((*[8]float32)(accA[0:8]))
-	sA8 := dlyLd8((*[8]float32)(accA[8:16]))
-	sB := dlyLd8((*[8]float32)(accB[0:8]))
-	sB8 := dlyLd8((*[8]float32)(accB[8:16]))
-	for i := 0; i < n-15; i += 16 {
-		hh := (*[16]float32)(hA[i : i+16])
-		aa := (*[16]float32)(xaA[i : i+16])
-		bb := (*[16]float32)(xbA[i : i+16])
-		gg := (*[16]float32)(hB[i : i+16])
-		cc := (*[16]float32)(xaB[i : i+16])
-		dd := (*[16]float32)(xbB[i : i+16])
-		hk := dlyLd8((*[8]float32)(aa[0:8])).MulAdd(aA, dlyLd8((*[8]float32)(hh[0:8])))
-		hk8 := dlyLd8((*[8]float32)(aa[8:16])).MulAdd(aA, dlyLd8((*[8]float32)(hh[8:16])))
-		gk := dlyLd8((*[8]float32)(cc[0:8])).MulAdd(aB, dlyLd8((*[8]float32)(gg[0:8])))
-		gk8 := dlyLd8((*[8]float32)(cc[8:16])).MulAdd(aB, dlyLd8((*[8]float32)(gg[8:16])))
-		hk.StoreArray((*[8]float32)(hh[0:8]))
-		hk8.StoreArray((*[8]float32)(hh[8:16]))
-		gk.StoreArray((*[8]float32)(gg[0:8]))
-		gk8.StoreArray((*[8]float32)(gg[8:16]))
-		sA = hk.MulAdd(dlyLd8((*[8]float32)(bb[0:8])), sA)
-		sA8 = hk8.MulAdd(dlyLd8((*[8]float32)(bb[8:16])), sA8)
-		sB = gk.MulAdd(dlyLd8((*[8]float32)(dd[0:8])), sB)
-		sB8 = gk8.MulAdd(dlyLd8((*[8]float32)(dd[8:16])), sB8)
-	}
-	sA.StoreArray((*[8]float32)(accA[0:8]))
-	sA8.StoreArray((*[8]float32)(accA[8:16]))
-	sB.StoreArray((*[8]float32)(accB[0:8]))
-	sB8.StoreArray((*[8]float32)(accB[8:16]))
-	archsimd.ClearAVXUpperBits()
-}
-
 func dlyAxpyDotDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
 	hB, xB []float32, accB *[4]float32) {
 	dlyAxpyDotDotS2NeonRef(hA, xaA, xbA, alphaA, accA, hB, xB, accB)
@@ -954,134 +574,421 @@ func dlyX2Lanes2(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
 	dlyX2Lanes2Ref(g, xA, xB, n, lanesA, lanesB)
 }
 
-// dlyDotS2Sum and dlyAxpyDotS2Sum are the two-filter Sum kernels of the
-// lane with group size g: dlyDotSSum (dlyAxpyDotSSum) for two filters at
-// once, with the reduced sums before their addition to the zero tail in
-// out[0] and out[2]. They report false where the lane has none.
+// The plain-core kernels of dlyCoreLanes run their references in the SSE2
+// and AVX2 lanes (see dlyCoreSimple).
 
-func dlyDotS2Sum(g int, hA, xA, hB, xB []float32, out *[4]float32) bool {
-	switch {
-	case g == 8 && dlyUseAvx:
-		dlyDotS2SumSse2(hA, xA, hB, xB, out)
-	case g == 16 && dlyUseFma:
-		dlyDotS2SumAvx2(hA, xA, hB, xB, out)
-	default:
-		return false
-	}
-	return true
+func dlyDotSSse2(h, x []float32, acc *[8]float32) { dlyDotSSse2Ref(h, x, acc) }
+
+func dlyAxpyDotSSse2(h, xa, xb []float32, alpha float32, acc *[8]float32) {
+	dlyAxpyDotSSse2Ref(h, xa, xb, alpha, acc)
 }
+
+func dlyDotSAvx2(h, x []float32, acc *[16]float32) { dlyDotSAvx2Ref(h, x, acc) }
+
+func dlyAxpyFmaDotSAvx2(h, xa, xb []float32, alpha float32, acc *[16]float32) {
+	dlyAxpyFmaDotSAvx2Ref(h, xa, xb, alpha, acc)
+}
+
+func dlyDotSSumSse2(h, x []float32) float32 { return dlyDotSSumSse2Ref(h, x) }
+
+func dlyAxpyDotSSumSse2(h, xa, xb []float32, alpha float32) float32 {
+	return dlyAxpyDotSSumSse2Ref(h, xa, xb, alpha)
+}
+
+func dlyDotSSumAvx2(h, x []float32) float32 { return dlyDotSSumAvx2Ref(h, x) }
+
+func dlyAxpyFmaDotSSumAvx2(h, xa, xb []float32, alpha float32) float32 {
+	return dlyAxpyFmaDotSSumAvx2Ref(h, xa, xb, alpha)
+}
+
+func dlyX2Wrapped(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) {
+	dlyX2WrappedRef(g, x, hSize, lo, r, out)
+}
+
+// dlyPairSse2 and dlyPairAvx2 select the two-filter kernels for the SSE2
+// and AVX2 lanes; there are none.
+var dlyPairSse2, dlyPairAvx2 = false, false
+
+func dlyDotS2Sse2(hA, xA []float32, accA *[8]float32, hB, xB []float32, accB *[8]float32) {
+	dlyDotS2Sse2Ref(hA, xA, accA, hB, xB, accB)
+}
+
+func dlyAxpyDotS2Sse2(hA, xaA, xbA []float32, alphaA float32, accA *[8]float32,
+	hB, xaB, xbB []float32, alphaB float32, accB *[8]float32) {
+	dlyAxpyDotS2Sse2Ref(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
+}
+
+func dlyDotS2Avx2(hA, xA []float32, accA *[16]float32, hB, xB []float32, accB *[16]float32) {
+	dlyDotS2Avx2Ref(hA, xA, accA, hB, xB, accB)
+}
+
+func dlyAxpyFmaDotS2Avx2(hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
+	hB, xaB, xbB []float32, alphaB float32, accB *[16]float32) {
+	dlyAxpyFmaDotS2Avx2Ref(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
+}
+
+// dlyDotS2Sum and dlyAxpyDotS2Sum are the two-filter Sum kernels; these
+// lanes have none.
+
+func dlyDotS2Sum(g int, hA, xA, hB, xB []float32, out *[4]float32) bool { return false }
 
 func dlyAxpyDotS2Sum(g int, hA, xaA, xbA []float32, alphaA float32,
 	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) bool {
-	switch {
-	case g == 8 && dlyUseAvx:
-		dlyAxpyDotS2SumSse2(hA, xaA, xbA, alphaA, hB, xaB, xbB, alphaB, out)
-	case g == 16 && dlyUseFma:
-		dlyAxpyFmaDotS2SumAvx2(hA, xaA, xbA, alphaA, hB, xaB, xbB, alphaB, out)
-	default:
-		return false
-	}
-	return true
+	return false
 }
 
-func dlyDotS2SumSse2(hA, xA, hB, xB []float32, out *[4]float32) {
-	n := len(hA) &^ 7
-	hA, xA, hB, xB = hA[:n:n], xA[:n:n], hB[:n:n], xB[:n:n]
-	var sA, sA4, sB, sB4 archsimd.Float32x4
+// Plain cores of the SSE2 and AVX2 lanes.
+//
+// On x86 the MatchedFilterCore loop is bound by its loads and stores, not
+// by the accumulator chains: accumulating x*x next to h*x costs nothing
+// there, while a separate x*x pass does, and two filters in step run no
+// faster than one after the other. With their archsimd kernels, the two
+// lanes therefore run dlyCoreSimple, whose kernels keep the layout of the
+// C++ loop (h*x and x*x side by side); the references of these lanes, and
+// the NEON lane, run dlyCoreLanes.
+//
+// Accumulator layouts of the kernels below:
+//   - SSE2  (*[16]float32): [0:4] s_128, [4:8] s_128_4, [8:12] x2_sum_128,
+//     [12:16] x2_sum_128_4.
+//   - AVX2  (*[32]float32): [0:8] s_256, [8:16] s_256_8, [16:24] x2_sum_256,
+//     [24:32] x2_sum_256_8.
+
+// dlyCoreLaneKernel runs the MatchedFilterCore loop of the lane with group
+// size g on one filter where the lane has its own core, and reports whether
+// it did.
+func dlyCoreLaneKernel(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
+	filtersUpdated *bool, errorSum *float32) bool {
+	if (g == 8 && dlyUseAvx) || (g == 16 && dlyUseFma) {
+		dlyCoreSimple(g, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum)
+		return true
+	}
+	return false
+}
+
+// dlyCoreSimple runs the MatchedFilterCore loop of the SSE2 (g = 8) or AVX2
+// (g = 16) lane on one filter. The update of a sample is deferred and fused
+// into the next sample's dot product when neither sample wraps around the
+// circular buffer and h is a whole number of groups, so one update-and-dot
+// kernel call covers all of h. Otherwise the pending update runs as its own
+// pass first and the dot product follows the C++ chunk loop. The update of
+// every element is the same operation either way.
+func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
+	filtersUpdated *bool, errorSum *float32) {
+	hSize := len(h)
+	xSize := len(x)
+	var pend dlyPendingAxpy
+	pendWhole := false // the pending update covers h with one x stretch at pendStart
+	pendStart, pendChunk1 := 0, 0
+	var acc [32]float32
+	for i := range y {
+		var x2Sum, s float32
+		chunk1 := min(hSize, xSize-xStartIndex)
+		chunk2 := hSize - chunk1
+		v1 := chunk1 &^ (g - 1)
+		reduced := false
+		if v1 == hSize {
+			// One stretch, no tails: the Sum kernels reduce in registers.
+			xb := x[xStartIndex : xStartIndex+hSize]
+			if pend.active && pendWhole {
+				xa := x[pendStart : pendStart+hSize]
+				if g == 8 {
+					s, x2Sum = dlyAxpyDotSse2Sum(h, xa, xb, pend.alpha)
+				} else {
+					s, x2Sum = dlyAxpyFmaDotAvx2Sum(h, xa, xb, pend.alpha)
+				}
+			} else {
+				if pend.active {
+					pend.set(pendStart, pendChunk1, hSize, pend.alpha, g == 16)
+					pend.apply(h, x, 0, hSize)
+				}
+				if g == 8 {
+					s, x2Sum = dlyDotSse2Sum(h, xb)
+				} else {
+					s, x2Sum = dlyDotAvx2Sum(h, xb)
+				}
+			}
+			reduced = true
+		} else {
+			dlyZeroAcc32(&acc)
+			if pend.active {
+				pend.set(pendStart, pendChunk1, hSize, pend.alpha, g == 16)
+				pend.apply(h, x, 0, hSize)
+			}
+			dlyLaneDotX2(g, h[:v1], x[xStartIndex:xStartIndex+v1], &acc)
+			for k := v1; k < chunk1; k++ {
+				xk := x[xStartIndex+k]
+				x2Sum += float32(xk * xk)
+				s += float32(h[k] * xk)
+			}
+			v2 := chunk2 &^ (g - 1)
+			dlyLaneDotX2(g, h[chunk1:chunk1+v2], x[:v2], &acc)
+			for k := chunk1 + v2; k < hSize; k++ {
+				xk := x[k-chunk1]
+				x2Sum += float32(xk * xk)
+				s += float32(h[k] * xk)
+			}
+		}
+		switch {
+		case reduced:
+		case g == 8:
+			s, x2Sum = dlyReduceSse2((*[16]float32)(acc[:16]), s, x2Sum)
+		default:
+			s, x2Sum = dlyReduceAvx2(&acc, s, x2Sum)
+		}
+
+		e := y[i] - s
+		*errorSum += float32(e * e)
+		pend.active = false
+		if x2Sum > x2SumThreshold && !dlySaturated(y[i]) {
+			alpha := float32(smoothing*e) / x2Sum
+			pend.active = true
+			pend.alpha = alpha
+			pendWhole = chunk1 == hSize
+			pendStart, pendChunk1 = xStartIndex, chunk1
+			*filtersUpdated = true
+		}
+		if xStartIndex > 0 {
+			xStartIndex--
+		} else {
+			xStartIndex = xSize - 1
+		}
+	}
+	if pend.active {
+		pend.set(pendStart, pendChunk1, hSize, pend.alpha, g == 16)
+		pend.apply(h, x, 0, hSize)
+	}
+}
+
+// dlyLaneDotX2 runs the dot kernel of the lane with group size g on the
+// lane's accumulators, which occupy the front of acc.
+func dlyLaneDotX2(g int, h, x []float32, acc *[32]float32) {
+	if g == 8 {
+		dlyDotSse2(h, x, (*[16]float32)(acc[:16]))
+		return
+	}
+	dlyDotAvx2(h, x, acc)
+}
+
+func dlyDotSse2(h, x []float32, acc *[16]float32) {
+	n := len(h)
+	x = x[:n:n]
+	s := dlyLd4((*[4]float32)(acc[0:4]))
+	s4 := dlyLd4((*[4]float32)(acc[4:8]))
+	x2 := dlyLd4((*[4]float32)(acc[8:12]))
+	x24 := dlyLd4((*[4]float32)(acc[12:16]))
 	for i := 0; i < n-7; i += 8 {
-		hh := (*[8]float32)(hA[i : i+8])
-		bb := (*[8]float32)(xA[i : i+8])
-		gg := (*[8]float32)(hB[i : i+8])
-		dd := (*[8]float32)(xB[i : i+8])
-		sA = sA.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(dlyLd4((*[4]float32)(bb[0:4]))))
-		sA4 = sA4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(dlyLd4((*[4]float32)(bb[4:8]))))
-		sB = sB.Add(dlyLd4((*[4]float32)(gg[0:4])).Mul(dlyLd4((*[4]float32)(dd[0:4]))))
-		sB4 = sB4.Add(dlyLd4((*[4]float32)(gg[4:8])).Mul(dlyLd4((*[4]float32)(dd[4:8]))))
+		hh := (*[8]float32)(h[i : i+8])
+		xx := (*[8]float32)(x[i : i+8])
+		xk := dlyLd4((*[4]float32)(xx[0:4]))
+		xk4 := dlyLd4((*[4]float32)(xx[4:8]))
+		x2 = x2.Add(xk.Mul(xk))
+		x24 = x24.Add(xk4.Mul(xk4))
+		s = s.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(xk))
+		s4 = s4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(xk4))
 	}
-	tA, tB := dlyHsumSSse2(sA, sA4), dlyHsumSSse2(sB, sB4)
-	tA.ConcatPermuteScalars(0, 0, 4, 4, tB).StoreArray(out)
+	s.StoreArray((*[4]float32)(acc[0:4]))
+	s4.StoreArray((*[4]float32)(acc[4:8]))
+	x2.StoreArray((*[4]float32)(acc[8:12]))
+	x24.StoreArray((*[4]float32)(acc[12:16]))
 }
 
-func dlyAxpyDotS2SumSse2(hA, xaA, xbA []float32, alphaA float32,
-	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) {
-	n := len(hA) &^ 7
-	hA, xaA, xbA, hB, xaB, xbB = hA[:n:n], xaA[:n:n], xbA[:n:n], hB[:n:n], xaB[:n:n], xbB[:n:n]
-	aA := archsimd.BroadcastFloat32x4(alphaA)
-	aB := archsimd.BroadcastFloat32x4(alphaB)
-	var sA, sA4, sB, sB4 archsimd.Float32x4
-	for i := 0; i < n-7; i += 8 {
-		hh := (*[8]float32)(hA[i : i+8])
-		aa := (*[8]float32)(xaA[i : i+8])
-		bb := (*[8]float32)(xbA[i : i+8])
-		gg := (*[8]float32)(hB[i : i+8])
-		cc := (*[8]float32)(xaB[i : i+8])
-		dd := (*[8]float32)(xbB[i : i+8])
-		hk := dlyLd4((*[4]float32)(hh[0:4])).Add(aA.Mul(dlyLd4((*[4]float32)(aa[0:4]))))
-		hk4 := dlyLd4((*[4]float32)(hh[4:8])).Add(aA.Mul(dlyLd4((*[4]float32)(aa[4:8]))))
-		gk := dlyLd4((*[4]float32)(gg[0:4])).Add(aB.Mul(dlyLd4((*[4]float32)(cc[0:4]))))
-		gk4 := dlyLd4((*[4]float32)(gg[4:8])).Add(aB.Mul(dlyLd4((*[4]float32)(cc[4:8]))))
-		hk.StoreArray((*[4]float32)(hh[0:4]))
-		hk4.StoreArray((*[4]float32)(hh[4:8]))
-		gk.StoreArray((*[4]float32)(gg[0:4]))
-		gk4.StoreArray((*[4]float32)(gg[4:8]))
-		sA = sA.Add(hk.Mul(dlyLd4((*[4]float32)(bb[0:4]))))
-		sA4 = sA4.Add(hk4.Mul(dlyLd4((*[4]float32)(bb[4:8]))))
-		sB = sB.Add(gk.Mul(dlyLd4((*[4]float32)(dd[0:4]))))
-		sB4 = sB4.Add(gk4.Mul(dlyLd4((*[4]float32)(dd[4:8]))))
-	}
-	tA, tB := dlyHsumSSse2(sA, sA4), dlyHsumSSse2(sB, sB4)
-	tA.ConcatPermuteScalars(0, 0, 4, 4, tB).StoreArray(out)
-}
-
-//go:noinline
-func dlyDotS2SumAvx2(hA, xA, hB, xB []float32, out *[4]float32) {
-	n := len(hA) &^ 15
-	hA, xA, hB, xB = hA[:n:n], xA[:n:n], hB[:n:n], xB[:n:n]
-	var sA, sA8, sB, sB8 archsimd.Float32x8
+func dlyDotAvx2(h, x []float32, acc *[32]float32) {
+	n := len(h)
+	x = x[:n:n]
+	s := dlyLd8((*[8]float32)(acc[0:8]))
+	s8 := dlyLd8((*[8]float32)(acc[8:16]))
+	x2 := dlyLd8((*[8]float32)(acc[16:24]))
+	x28 := dlyLd8((*[8]float32)(acc[24:32]))
 	for i := 0; i < n-15; i += 16 {
-		hh := (*[16]float32)(hA[i : i+16])
-		bb := (*[16]float32)(xA[i : i+16])
-		gg := (*[16]float32)(hB[i : i+16])
-		dd := (*[16]float32)(xB[i : i+16])
-		sA = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(dlyLd8((*[8]float32)(bb[0:8])), sA)
-		sA8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(dlyLd8((*[8]float32)(bb[8:16])), sA8)
-		sB = dlyLd8((*[8]float32)(gg[0:8])).MulAdd(dlyLd8((*[8]float32)(dd[0:8])), sB)
-		sB8 = dlyLd8((*[8]float32)(gg[8:16])).MulAdd(dlyLd8((*[8]float32)(dd[8:16])), sB8)
+		hh := (*[16]float32)(h[i : i+16])
+		xx := (*[16]float32)(x[i : i+16])
+		xk := dlyLd8((*[8]float32)(xx[0:8]))
+		xk8 := dlyLd8((*[8]float32)(xx[8:16]))
+		s = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(xk, s)
+		s8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(xk8, s8)
+		x2 = xk.MulAdd(xk, x2)
+		x28 = xk8.MulAdd(xk8, x28)
 	}
-	tA, tB := dlyHsumSAvx2(sA, sA8), dlyHsumSAvx2(sB, sB8)
-	tA.ConcatPermuteScalars(0, 0, 4, 4, tB).StoreArray(out)
+	s.StoreArray((*[8]float32)(acc[0:8]))
+	s8.StoreArray((*[8]float32)(acc[8:16]))
+	x2.StoreArray((*[8]float32)(acc[16:24]))
+	x28.StoreArray((*[8]float32)(acc[24:32]))
 	archsimd.ClearAVXUpperBits()
 }
 
+// dlyZeroAcc32 clears the lane accumulators with 256-bit stores. The AVX2
+// kernels load them as 256-bit vectors, and a load cannot be forwarded from
+// the two narrower stores a Go zero value is written with: it would wait
+// for them to reach the cache at the start of every capture sample.
+//
+// It does not inline, so its ClearAVXUpperBits does not make the caller's
+// float32 values cross a VZEROUPPER (see dlyReduceAvx2Lanes).
+//
 //go:noinline
-func dlyAxpyFmaDotS2SumAvx2(hA, xaA, xbA []float32, alphaA float32,
-	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) {
-	n := len(hA) &^ 15
-	hA, xaA, xbA, hB, xaB, xbB = hA[:n:n], xaA[:n:n], xbA[:n:n], hB[:n:n], xaB[:n:n], xbB[:n:n]
-	aA := archsimd.BroadcastFloat32x8(alphaA)
-	aB := archsimd.BroadcastFloat32x8(alphaB)
-	var sA, sA8, sB, sB8 archsimd.Float32x8
+func dlyZeroAcc32(acc *[32]float32) {
+	var z archsimd.Float32x8
+	z.StoreArray((*[8]float32)(acc[0:8]))
+	z.StoreArray((*[8]float32)(acc[8:16]))
+	z.StoreArray((*[8]float32)(acc[16:24]))
+	z.StoreArray((*[8]float32)(acc[24:32]))
+	archsimd.ClearAVXUpperBits()
+}
+
+// dlyHsumSse2 reduces the SSE2 lane accumulators as dlyReduceSse2Ref does,
+// with the x2 and s sums side by side: lanes 0 and 1 of the result run
+// ((v0 + v1) + v2) + v3 for x2 and for s.
+func dlyHsumSse2(s, s4, x2, x24 archsimd.Float32x4) archsimd.Float32x4 {
+	a := x2.Add(x24).ToBits()
+	b := s.Add(s4).ToBits()
+	lo := a.InterleaveLo(b).BitsToFloat32() // a0 b0 a1 b1
+	hi := a.InterleaveHi(b).BitsToFloat32() // a2 b2 a3 b3
+	t := lo.Add(lo.ConcatPermuteScalars(2, 3, 6, 7, lo))
+	t = t.Add(hi)
+	return t.Add(hi.ConcatPermuteScalars(2, 3, 6, 7, hi))
+}
+
+// dlyHsumAvx2 reduces the AVX2 lane accumulators as hsum_ab does
+// (dlyReduceAvx2Ref): pairwise sums of a = x2_sum_256 + x2_sum_256_8 and
+// b = s_256 + s_256_8, the x2 sum in lane 0 and the s sum in lane 1.
+func dlyHsumAvx2(s, s8, x2, x28 archsimd.Float32x8) archsimd.Float32x4 {
+	p := x2.Add(x28).ConcatAddPairsGrouped(s.Add(s8)) // a01 a23 b01 b23 | a45 a67 b45 b67
+	lo, hi := p.GetLo(), p.GetHi()
+	// t lanes: (a01 + a23), (b01 + b23), (a45 + a67), (b45 + b67).
+	t := lo.ConcatPermuteScalars(0, 2, 4, 6, hi).Add(lo.ConcatPermuteScalars(1, 3, 5, 7, hi))
+	return t.Add(t.ConcatPermuteScalars(2, 3, 6, 7, t))
+}
+
+func dlyReduceSse2(acc *[16]float32, s, x2Sum float32) (float32, float32) {
+	t := dlyHsumSse2(dlyLd4((*[4]float32)(acc[0:4])), dlyLd4((*[4]float32)(acc[4:8])),
+		dlyLd4((*[4]float32)(acc[8:12])), dlyLd4((*[4]float32)(acc[12:16])))
+	r0, r1 := t.GetElem(0), t.GetElem(1)
+	return s + r1, x2Sum + r0
+}
+
+func dlyReduceAvx2(acc *[32]float32, s, x2Sum float32) (float32, float32) {
+	var r [4]float32
+	dlyReduceAvx2Lanes(acc, &r)
+	return s + r[1], x2Sum + r[0]
+}
+
+// dlyReduceAvx2Lanes stores dlyHsumAvx2 of the accumulators in r.
+//
+// The 256-bit kernels that produce a float32 store it to the caller's
+// memory and return nothing: a float32 live across ClearAVXUpperBits is
+// spilled with a 4-byte store and restored with a 16-byte load, which the
+// CPU cannot forward from that store.
+//
+//go:noinline
+func dlyReduceAvx2Lanes(acc *[32]float32, r *[4]float32) {
+	dlyHsumAvx2(dlyLd8((*[8]float32)(acc[0:8])), dlyLd8((*[8]float32)(acc[8:16])),
+		dlyLd8((*[8]float32)(acc[16:24])), dlyLd8((*[8]float32)(acc[24:32]))).StoreArray(r)
+	archsimd.ClearAVXUpperBits()
+}
+
+func dlyDotSse2Sum(h, x []float32) (s, x2Sum float32) {
+	n := len(h)
+	x = x[:n:n]
+	var sv, s4, x2, x24 archsimd.Float32x4
+	for i := 0; i < n-7; i += 8 {
+		hh := (*[8]float32)(h[i : i+8])
+		xx := (*[8]float32)(x[i : i+8])
+		xk := dlyLd4((*[4]float32)(xx[0:4]))
+		xk4 := dlyLd4((*[4]float32)(xx[4:8]))
+		x2 = x2.Add(xk.Mul(xk))
+		x24 = x24.Add(xk4.Mul(xk4))
+		sv = sv.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(xk))
+		s4 = s4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(xk4))
+	}
+	t := dlyHsumSse2(sv, s4, x2, x24)
+	r0, r1 := t.GetElem(0), t.GetElem(1)
+	return 0 + r1, 0 + r0
+}
+
+func dlyAxpyDotSse2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
+	n := len(h)
+	xa = xa[:n:n]
+	xb = xb[:n:n]
+	a := archsimd.BroadcastFloat32x4(alpha)
+	var sv, s4, x2, x24 archsimd.Float32x4
+	for i := 0; i < n-7; i += 8 {
+		hh := (*[8]float32)(h[i : i+8])
+		aa := (*[8]float32)(xa[i : i+8])
+		bb := (*[8]float32)(xb[i : i+8])
+		hk := dlyLd4((*[4]float32)(hh[0:4])).Add(a.Mul(dlyLd4((*[4]float32)(aa[0:4]))))
+		hk4 := dlyLd4((*[4]float32)(hh[4:8])).Add(a.Mul(dlyLd4((*[4]float32)(aa[4:8]))))
+		hk.StoreArray((*[4]float32)(hh[0:4]))
+		hk4.StoreArray((*[4]float32)(hh[4:8]))
+		xk := dlyLd4((*[4]float32)(bb[0:4]))
+		xk4 := dlyLd4((*[4]float32)(bb[4:8]))
+		x2 = x2.Add(xk.Mul(xk))
+		x24 = x24.Add(xk4.Mul(xk4))
+		sv = sv.Add(hk.Mul(xk))
+		s4 = s4.Add(hk4.Mul(xk4))
+	}
+	t := dlyHsumSse2(sv, s4, x2, x24)
+	r0, r1 := t.GetElem(0), t.GetElem(1)
+	return 0 + r1, 0 + r0
+}
+
+func dlyDotAvx2Sum(h, x []float32) (s, x2Sum float32) {
+	var r [4]float32
+	dlyDotAvx2SumLanes(h, x, &r)
+	return 0 + r[1], 0 + r[0]
+}
+
+// dlyDotAvx2SumLanes stores the reduced lane sums of dlyDotAvx2Sum in r
+// (see dlyReduceAvx2Lanes).
+//
+//go:noinline
+func dlyDotAvx2SumLanes(h, x []float32, r *[4]float32) {
+	n := len(h)
+	x = x[:n:n]
+	var sv, s8, x2, x28 archsimd.Float32x8
 	for i := 0; i < n-15; i += 16 {
-		hh := (*[16]float32)(hA[i : i+16])
-		aa := (*[16]float32)(xaA[i : i+16])
-		bb := (*[16]float32)(xbA[i : i+16])
-		gg := (*[16]float32)(hB[i : i+16])
-		cc := (*[16]float32)(xaB[i : i+16])
-		dd := (*[16]float32)(xbB[i : i+16])
-		hk := dlyLd8((*[8]float32)(aa[0:8])).MulAdd(aA, dlyLd8((*[8]float32)(hh[0:8])))
-		hk8 := dlyLd8((*[8]float32)(aa[8:16])).MulAdd(aA, dlyLd8((*[8]float32)(hh[8:16])))
-		gk := dlyLd8((*[8]float32)(cc[0:8])).MulAdd(aB, dlyLd8((*[8]float32)(gg[0:8])))
-		gk8 := dlyLd8((*[8]float32)(cc[8:16])).MulAdd(aB, dlyLd8((*[8]float32)(gg[8:16])))
+		hh := (*[16]float32)(h[i : i+16])
+		xx := (*[16]float32)(x[i : i+16])
+		xk := dlyLd8((*[8]float32)(xx[0:8]))
+		xk8 := dlyLd8((*[8]float32)(xx[8:16]))
+		sv = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(xk, sv)
+		s8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(xk8, s8)
+		x2 = xk.MulAdd(xk, x2)
+		x28 = xk8.MulAdd(xk8, x28)
+	}
+	dlyHsumAvx2(sv, s8, x2, x28).StoreArray(r)
+	archsimd.ClearAVXUpperBits()
+}
+
+func dlyAxpyFmaDotAvx2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
+	var r [4]float32
+	dlyAxpyFmaDotAvx2SumLanes(h, xa, xb, alpha, &r)
+	return 0 + r[1], 0 + r[0]
+}
+
+// dlyAxpyFmaDotAvx2SumLanes stores the reduced lane sums of
+// dlyAxpyFmaDotAvx2Sum in r (see dlyReduceAvx2Lanes).
+//
+//go:noinline
+func dlyAxpyFmaDotAvx2SumLanes(h, xa, xb []float32, alpha float32, r *[4]float32) {
+	n := len(h)
+	xa = xa[:n:n]
+	xb = xb[:n:n]
+	a := archsimd.BroadcastFloat32x8(alpha)
+	var sv, s8, x2, x28 archsimd.Float32x8
+	for i := 0; i < n-15; i += 16 {
+		hh := (*[16]float32)(h[i : i+16])
+		aa := (*[16]float32)(xa[i : i+16])
+		bb := (*[16]float32)(xb[i : i+16])
+		hk := dlyLd8((*[8]float32)(aa[0:8])).MulAdd(a, dlyLd8((*[8]float32)(hh[0:8])))
+		hk8 := dlyLd8((*[8]float32)(aa[8:16])).MulAdd(a, dlyLd8((*[8]float32)(hh[8:16])))
 		hk.StoreArray((*[8]float32)(hh[0:8]))
 		hk8.StoreArray((*[8]float32)(hh[8:16]))
-		gk.StoreArray((*[8]float32)(gg[0:8]))
-		gk8.StoreArray((*[8]float32)(gg[8:16]))
-		sA = hk.MulAdd(dlyLd8((*[8]float32)(bb[0:8])), sA)
-		sA8 = hk8.MulAdd(dlyLd8((*[8]float32)(bb[8:16])), sA8)
-		sB = gk.MulAdd(dlyLd8((*[8]float32)(dd[0:8])), sB)
-		sB8 = gk8.MulAdd(dlyLd8((*[8]float32)(dd[8:16])), sB8)
+		xk := dlyLd8((*[8]float32)(bb[0:8]))
+		xk8 := dlyLd8((*[8]float32)(bb[8:16]))
+		sv = hk.MulAdd(xk, sv)
+		s8 = hk8.MulAdd(xk8, s8)
+		x2 = xk.MulAdd(xk, x2)
+		x28 = xk8.MulAdd(xk8, x28)
 	}
-	tA, tB := dlyHsumSAvx2(sA, sA8), dlyHsumSAvx2(sB, sB8)
-	tA.ConcatPermuteScalars(0, 0, 4, 4, tB).StoreArray(out)
+	dlyHsumAvx2(sv, s8, x2, x28).StoreArray(r)
 	archsimd.ClearAVXUpperBits()
 }

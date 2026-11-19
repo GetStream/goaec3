@@ -626,8 +626,8 @@ func (f *dlyLaneFilter) run(g int, x []float32) {
 	f.s = dlyReduceS(g, &f.acc, f.sTail)
 }
 
-// dlyPairs reports whether the lane with group size g runs two filters
-// through its two-filter kernels.
+// dlyPairs reports whether the lane with group size g runs two filters in
+// step through its two-filter kernels.
 func dlyPairs(g int) bool {
 	switch g {
 	case 4:
@@ -829,6 +829,9 @@ func dlyCoreLanes(g int, fa, fb *dlyLaneFilter, x2SumThreshold, smoothing float3
 // size g on one filter.
 func dlyCoreLane(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32) {
+	if dlyCoreLaneKernel(g, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum) {
+		return
+	}
 	var f dlyLaneFilter
 	f.h, f.xStart, f.errorSum = h, xStartIndex, *errorSum
 	dlyCoreLanes(g, &f, nil, x2SumThreshold, smoothing, x, y)

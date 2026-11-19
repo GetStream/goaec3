@@ -430,8 +430,6 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 	}{
 		{"NeonTwo", 4, 100, false}, {"NeonPair", 4, 100, true},
 		{"NeonWrapTwo", 4, len(x) - 300, false}, {"NeonWrapPair", 4, len(x) - 300, true},
-		{"Sse2Two", 8, 100, false}, {"Sse2Pair", 8, 100, true},
-		{"Avx2Two", 16, 100, false}, {"Avx2Pair", 16, 100, true},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			saved := [3]bool{dlyPairNeon, dlyPairSse2, dlyPairAvx2}
@@ -465,7 +463,6 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 			}
 		})
 	}
-	dlyBenchKernels(b, x, h0)
 }
 
 func BenchmarkMaxSquarePeakIndex(b *testing.B) {
