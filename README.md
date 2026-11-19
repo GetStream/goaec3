@@ -77,7 +77,7 @@ for {
 | Configuration | The full `EchoCanceller3Config` (134 fields), defaults and `Validate` as in C++ |
 | Outputs | Echo-cancelled capture, optional linear filter output, ERL/ERLE/delay metrics |
 | SIMD | `simd/archsimd`: arm64 NEON, amd64 SSE2 and AVX2/FMA; pure-Go and `purego` fallbacks |
-| Assembly | None |
+| Assembly, `unsafe` | None (outside the cgo test oracle) |
 | Allocation | Zero in steady state |
 
 ## Public API
@@ -163,18 +163,14 @@ float conversion included), on identical converged echo input, against
 libwebrtc m141's `EchoCanceller3` driven through `webrtc::AudioBuffer`
 (release build, NEON). Apple M4 Max, Go 1.27.4, median of 6 runs:
 
-| Case | goaec3, `GOEXPERIMENT=simd` | libwebrtc, prebuilt | libwebrtc, from source (clang `-O2`) | goaec3, pure Go |
-| --- | --- | --- | --- | --- |
-| 16 kHz mono | **57 µs** | 64 µs | 61–65 µs | 220 µs |
-| 48 kHz mono | **64 µs** | 75 µs | 68–71 µs | 257 µs |
-| 48 kHz stereo | **91 µs** | 101 µs | 94–96 µs | 378 µs |
+| Case | goaec3, `GOEXPERIMENT=simd` | libwebrtc, prebuilt | goaec3, pure Go |
+| --- | --- | --- | --- |
+| 16 kHz mono | **44.7 µs** | 66.7 µs | 91.6 µs |
+| 48 kHz mono | **49.6 µs** | 73.6 µs | 101.6 µs |
+| 48 kHz stereo | **75.7 µs** | 100.4 µs | 163.1 µs |
 
-(The from-source column is the range of two runs of the C++ reference built
-by `make oracle-src`.)
-
-On arm64 with `GOEXPERIMENT=simd`, goaec3 is 10–14% faster than the prebuilt
-libwebrtc and 2–12% faster than the same C++ built from source with clang
-`-O2`, while producing the same output bit for bit; that is under 1% of one
+On Apple silicon with `GOEXPERIMENT=simd`, goaec3 takes 0.67–0.75× the time
+of libwebrtc, producing the same output bit for bit; that is under 0.5% of one
 core per stream at 16 kHz. Zero allocations per frame in every case.
 
 On real x86 and Linux arm64 hardware (GitHub-hosted runners,
@@ -183,16 +179,16 @@ On real x86 and Linux arm64 hardware (GitHub-hosted runners,
 
 | Lane, CPU | 16 kHz mono | 48 kHz mono | 48 kHz stereo | goaec3 / libwebrtc |
 | --- | --- | --- | --- | --- |
-| amd64 AVX2, Intel Xeon 6975P-C | 43.1 µs | 49.9 µs | 72.3 µs | 1.12–1.15× |
-| amd64 SSE2, AMD EPYC 7763 | 67.8 µs | 76.4 µs | 113 µs | 1.06–1.17× |
-| arm64 NEON, Neoverse-N2 | 68.1 µs | 76.9 µs | 115 µs | 1.00–1.05× |
+| arm64 NEON, Neoverse-N2 | 63.2 µs | 70.6 µs | 106.4 µs | 0.92–0.97× |
+| amd64 AVX2, AMD EPYC 9V74 | 39.8 µs | 45.1 µs | 68.5 µs | 0.97–1.02× |
+| amd64 SSE2, AMD EPYC 9V74 | 53.3 µs | 59.2 µs | 83.1 µs | 1.02–1.03× |
 
-So with `GOEXPERIMENT=simd` goaec3 is faster than libwebrtc on Apple silicon,
-level with it on Linux arm64 servers, and 6–17% slower on amd64 (other AMD
-EPYC runners: 1.08–1.18×), all bit-exact. Without `GOEXPERIMENT=simd` the
-same lanes run as plain Go: about 2–3× libwebrtc on arm64 and 2.8–3.6× on the
-amd64 SSE2 lane; the amd64 AVX2 lane is about 9× because its fused
-multiply-adds then run in software. Build with the experiment.
+So with `GOEXPERIMENT=simd` goaec3 is faster than libwebrtc on arm64 and
+level with it on amd64 (within ±3% across runner CPUs), all bit-exact.
+Without `GOEXPERIMENT=simd` the same lanes run as plain, memory-safe Go: about
+1.4–1.6× libwebrtc on Apple silicon, 2.1–2.4× on Neoverse-N2 and on the amd64
+SSE2 lane, and 4.6–5.2× on the amd64 AVX2 lane, whose fused multiply-adds then
+run in software. Build with the experiment.
 
 ```sh
 GOEXPERIMENT=simd go test -tags webrtc_oracle -run '^$' -bench BenchmarkEc3VsLibwebrtc ./internal/webrtcoracle/
