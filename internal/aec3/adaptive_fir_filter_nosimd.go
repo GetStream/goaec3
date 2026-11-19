@@ -48,3 +48,11 @@ func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 }
 
 func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) { afirMaxAbsUpdateGo(ir, h) }
+
+// afirHasX86FreqResp is false: this build has no SSE2 or AVX2 partition
+// kernel for the frequency response.
+func afirHasX86FreqResp(Aec3Optimization) bool { return false }
+
+func afirFreqRespPartitionX86(Aec3Optimization, []FftData, *[FftLengthBy2Plus1]float32) {
+	panic("aec3: no x86 frequency response kernel")
+}

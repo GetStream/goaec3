@@ -156,6 +156,27 @@ func TestAfirFreqRespLaneSemantics(t *testing.T) {
 			l.ref(&h, &want)
 			kernCheckExact(t, fmt.Sprintf("freqresp lane %d", l.opt), got[:], want[:])
 		}
+		for _, opt := range []Aec3Optimization{OptSse2, OptAvx2} {
+			if !afirHasX86FreqResp(opt) {
+				continue
+			}
+			hs := make([]FftData, 1+rng.Intn(3))
+			for i := range hs {
+				mmEdgeFft(rng, &hs[i])
+			}
+			var got, want [FftLengthBy2Plus1]float32
+			copy(got[:], kernEdgeVec(rng, FftLengthBy2Plus1))
+			afirFreqRespPartitionX86(opt, hs, &got)
+			for i := range hs {
+				if opt == OptSse2 {
+					afirFreqRespBlockSse2Go(&hs[i], &want)
+				} else {
+					afirFreqRespBlockAvx2Go(&hs[i], &want)
+				}
+				afirFreqRespBinsGo(&hs[i], &want, FftLengthBy2, FftLengthBy2Plus1)
+			}
+			kernCheckExact(t, fmt.Sprintf("freqresp partition x86 lane %d", opt), got[:], want[:])
+		}
 		if afirHasNeonFreqResp {
 			hs := make([]FftData, 1+rng.Intn(3))
 			for i := range hs {

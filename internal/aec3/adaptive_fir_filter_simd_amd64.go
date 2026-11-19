@@ -317,3 +317,59 @@ func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) {
 		b.IfElse(a.Abs().Less(b.Abs()), a).StoreArray(p)
 	}
 }
+
+// afirHasX86FreqResp reports whether afirFreqRespPartitionX86 runs the
+// lane: SSE2 with AVX (VEX encoding), AVX2 with FMA.
+func afirHasX86FreqResp(opt Aec3Optimization) bool {
+	return opt == OptSse2 && afirHasAVX || opt == OptAvx2 && afirHasAVX2FMA
+}
+
+// afirFreqRespPartitionX86 computes one partition of
+// ComputeFrequencyResponse_Sse2 or _Avx2: H2 = +0, then
+// H2 = _mm_max_ps(H2, |H[ch]|^2) for every channel in order (bin 64 with
+// std::max), with sixteen bins held in registers across the channels
+// instead of being cleared, loaded and stored per channel.
+func afirFreqRespPartitionX86(opt Aec3Optimization, hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
+	if opt == OptAvx2 {
+		for k := 0; k < FftLengthBy2; k += 16 {
+			var a0, a1 archsimd.Float32x8
+			for c := range hs {
+				h := &hs[c]
+				re := (*[16]float32)(h.Re[k : k+16])
+				im := (*[16]float32)(h.Im[k : k+16])
+				re0, re1 := archsimd.LoadFloat32x8Array((*[8]float32)(re[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(re[8:16]))
+				im0, im1 := archsimd.LoadFloat32x8Array((*[8]float32)(im[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(im[8:16]))
+				n0 := im0.MulAdd(im0, re0.Mul(re0))
+				n1 := im1.MulAdd(im1, re1.Mul(re1))
+				a0 = a0.IfElse(a0.Greater(n0), n0)
+				a1 = a1.IfElse(a1.Greater(n1), n1)
+			}
+			o := (*[16]float32)(h2[k : k+16])
+			a0.StoreArray((*[8]float32)(o[0:8]))
+			a1.StoreArray((*[8]float32)(o[8:16]))
+		}
+		archsimd.ClearAVXUpperBits()
+	} else {
+		for k := 0; k < FftLengthBy2; k += 8 {
+			var a0, a1 archsimd.Float32x4
+			for c := range hs {
+				h := &hs[c]
+				re := (*[8]float32)(h.Re[k : k+8])
+				im := (*[8]float32)(h.Im[k : k+8])
+				re0, re1 := archsimd.LoadFloat32x4Array((*[4]float32)(re[0:4])), archsimd.LoadFloat32x4Array((*[4]float32)(re[4:8]))
+				im0, im1 := archsimd.LoadFloat32x4Array((*[4]float32)(im[0:4])), archsimd.LoadFloat32x4Array((*[4]float32)(im[4:8]))
+				n0 := re0.Mul(re0).Add(im0.Mul(im0))
+				n1 := re1.Mul(re1).Add(im1.Mul(im1))
+				a0 = a0.IfElse(a0.Greater(n0), n0)
+				a1 = a1.IfElse(a1.Greater(n1), n1)
+			}
+			o := (*[8]float32)(h2[k : k+8])
+			a0.StoreArray((*[4]float32)(o[0:4]))
+			a1.StoreArray((*[4]float32)(o[4:8]))
+		}
+	}
+	h2[FftLengthBy2] = 0
+	for c := range hs {
+		afirFreqRespBinsGo(&hs[c], h2, FftLengthBy2, FftLengthBy2Plus1)
+	}
+}

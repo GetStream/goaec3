@@ -48,6 +48,15 @@ func afirComputeFrequencyResponseSimd(opt Aec3Optimization, numPartitions int, H
 		}
 		return
 	}
+	if afirHasX86FreqResp(opt) {
+		for p := 0; p < numPartitions; p++ {
+			afirFreqRespPartitionX86(opt, H.At(p), &H2[p])
+		}
+		for i := numPartitions; i < len(H2); i++ {
+			H2[i] = [FftLengthBy2Plus1]float32{}
+		}
+		return
+	}
 	for i := range H2 {
 		H2[i] = [FftLengthBy2Plus1]float32{}
 	}
