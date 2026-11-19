@@ -19,6 +19,14 @@ func Fft(a *[128]float32) { fft(a) }
 // same lane as Fft.
 func InverseFft(a *[128]float32) { inverseFft(a) }
 
+// FftPair computes Fft(a) and Fft(b). Each result is bit-identical to the
+// single transform; where the CPU has 256-bit vectors the two run in one
+// pass. a and b must not overlap.
+func FftPair(a, b *[128]float32, s *PairScratch) { fftPair(a, b, s) }
+
+// InverseFftPair computes InverseFft(a) and InverseFft(b) like FftPair.
+func InverseFftPair(a, b *[128]float32, s *PairScratch) { inverseFftPair(a, b, s) }
+
 // fftScalar is the scalar C path of OouraFft::Fft.
 func fftScalar(a *[128]float32) {
 	bitrv2(a)

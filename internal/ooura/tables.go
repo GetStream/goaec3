@@ -107,4 +107,5 @@ func init() {
 	rdftWk1i[0] = negZero
 	rdftWk2i[0] = negZero
 	rdftWk3i[0] = negZero
+	initPairTables()
 }

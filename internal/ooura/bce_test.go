@@ -25,6 +25,11 @@ var boundsCheckFree = map[string][]string{
 		"bitrv2Cft1stSimd", "cftmdlSimd", "cftfsubTailSimd", "cftbsubTailSimd",
 		"rftfsubSimd", "rftbsubSimd", "fftSimd", "inverseFftSimd",
 	},
+	"simd/amd64": {
+		"bitrv2Cft1stPair", "cftmdlPair", "cftfsubTailPair", "cftbsubTailScatter",
+		"rftfsubScatter", "rftbsubGather", "rftfsubEnd", "rftbsubBegin",
+		"fftPairSimd", "inverseFftPairSimd",
+	},
 }
 
 // TestNoBoundsChecks compiles the package for arm64 and amd64 and fails if
@@ -67,6 +72,7 @@ func TestNoBoundsChecks(t *testing.T) {
 			want := append([]string(nil), boundsCheckFree[""]...)
 			if exp == "simd" {
 				want = append(want, boundsCheckFree["simd"]...)
+				want = append(want, boundsCheckFree["simd/"+arch]...)
 			}
 			var bad []string
 			for _, name := range want {

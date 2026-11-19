@@ -115,3 +115,45 @@ func (f *Aec3Fft) PaddedFft(x, xOld []float32, window Window, X *FftData) {
 	}
 	f.Fft(&fft, X)
 }
+
+// aec3FftPair runs two transforms of Aec3Fft at a time (ooura.FftPair): each
+// result is bit-identical to the single transform, and builds with 256-bit
+// vectors compute the two in one pass. The zero value is ready to use.
+type aec3FftPair struct {
+	scratch ooura.PairScratch
+	x0, x1  [FftLength]float32
+}
+
+// Fft is Aec3Fft.Fft for (x0, X0) and (x1, X1).
+func (p *aec3FftPair) Fft(x0, x1 *[FftLength]float32, X0, X1 *FftData) {
+	ooura.FftPair(x0, x1, &p.scratch)
+	X0.CopyFromPackedArray(x0)
+	X1.CopyFromPackedArray(x1)
+}
+
+// Ifft is Aec3Fft.Ifft for (X0, x0) and (X1, x1).
+func (p *aec3FftPair) Ifft(X0, X1 *FftData, x0, x1 *[FftLength]float32) {
+	X0.CopyToPackedArray(x0)
+	X1.CopyToPackedArray(x1)
+	ooura.InverseFftPair(x0, x1, &p.scratch)
+}
+
+// ZeroPaddedFft is Aec3Fft.ZeroPaddedFft with the Hanning window for
+// (x0, X0) and (x1, X1).
+func (p *aec3FftPair) ZeroPaddedFft(x0, x1 []float32, X0, X1 *FftData) {
+	clear(p.x0[:FftLengthBy2])
+	clear(p.x1[:FftLengthBy2])
+	vectorMultiply(x0[:FftLengthBy2], hanning64[:], p.x0[FftLengthBy2:])
+	vectorMultiply(x1[:FftLengthBy2], hanning64[:], p.x1[FftLengthBy2:])
+	p.Fft(&p.x0, &p.x1, X0, X1)
+}
+
+// PaddedFft is Aec3Fft.PaddedFft with the square root Hanning window for
+// (x0, xOld0, X0) and (x1, xOld1, X1).
+func (p *aec3FftPair) PaddedFft(x0, xOld0, x1, xOld1 []float32, X0, X1 *FftData) {
+	vectorMultiply(xOld0[:FftLengthBy2], sqrtHanning128[:FftLengthBy2], p.x0[:FftLengthBy2])
+	vectorMultiply(x0[:FftLengthBy2], sqrtHanning128[FftLengthBy2:], p.x0[FftLengthBy2:])
+	vectorMultiply(xOld1[:FftLengthBy2], sqrtHanning128[:FftLengthBy2], p.x1[:FftLengthBy2])
+	vectorMultiply(x1[:FftLengthBy2], sqrtHanning128[FftLengthBy2:], p.x1[FftLengthBy2:])
+	p.Fft(&p.x0, &p.x1, X0, X1)
+}

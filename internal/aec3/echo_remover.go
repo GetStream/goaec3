@@ -12,7 +12,7 @@ type EchoControlMetrics struct {
 // EchoRemover removes the echo from the capture signal.
 type EchoRemover struct {
 	config                          *EchoCanceller3Config // shared, never modified
-	fft                             Aec3Fft
+	fft                             aec3FftPair
 	optimization                    Aec3Optimization
 	sampleRateHz                    int
 	numRenderChannels               int
@@ -159,8 +159,11 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 	// Compute spectra.
 	for ch := 0; ch < nch; ch++ {
 		e.formLinearFilterOutput(&e.subtractorOutput[ch], &e.e[ch])
-		erWindowedPaddedFft(&e.fft, y.View(0, ch), e.yOld[ch][:], &e.Y[ch])
-		erWindowedPaddedFft(&e.fft, e.e[ch][:], e.eOld[ch][:], &e.E[ch])
+		// WindowedPaddedFft of y and of e, as a pair.
+		y0 := y.View(0, ch)
+		e.fft.PaddedFft(y0, e.yOld[ch][:], e.e[ch][:], e.eOld[ch][:], &e.Y[ch], &e.E[ch])
+		copy(e.yOld[ch][:], y0)
+		e.eOld[ch] = e.e[ch]
 		erLinearEchoPower(&e.E[ch], &e.Y[ch], &e.S2Linear[ch])
 		e.Y[ch].Spectrum(e.optimization, e.Y2[ch][:])
 		e.E[ch].Spectrum(e.optimization, e.E2[ch][:])
@@ -292,11 +295,4 @@ func erSignalTransition(from, to *[BlockSize]float32, out *[FftLengthBy2]float32
 		out[k] = float32(a*to[k]) + float32((1-a)*from[k])
 	}
 	copy(out[transitionSize:], to[transitionSize:])
-}
-
-// erWindowedPaddedFft computes a windowed (square root Hanning) padded FFT
-// and updates the related memory.
-func erWindowedPaddedFft(fft *Aec3Fft, v, vOld []float32, V *FftData) {
-	fft.PaddedFft(v, vOld, WindowSqrtHanning, V)
-	copy(vOld, v)
 }

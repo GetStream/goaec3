@@ -621,6 +621,39 @@ func (f *AdaptiveFirFilter) constrainAndUpdateImpulseResponse(impulseResponse *[
 	f.partitionToConstrain = afirNextPartition(f.partitionToConstrain, f.currentSizePartitions)
 }
 
+// afirConstrainPair is refined.constrainAndUpdateImpulseResponse(
+// impulseResponse) followed by coarse.constrain(), with the transforms of
+// the two filters run as pairs. The filters have the same number of render
+// channels and share no state.
+func afirConstrainPair(fft *aec3FftPair, refined *AdaptiveFirFilter, impulseResponse *[]float32, coarse *AdaptiveFirFilter) {
+	afirResize(impulseResponse, GetTimeDomainLength(refined.currentSizePartitions))
+	ir := *impulseResponse
+	base := refined.partitionToConstrain * FftLengthBy2
+	irp := (*[FftLengthBy2]float32)(ir[base : base+FftLengthBy2])
+	if refined.numRenderChannels == 0 {
+		clear(irp[:])
+	}
+	hr, hc := &fft.x0, &fft.x1
+	const scale = 1.0 / FftLengthBy2
+	for ch := 0; ch < refined.numRenderChannels; ch++ {
+		hpr := &refined.H.At(refined.partitionToConstrain)[ch]
+		hpc := &coarse.H.At(coarse.partitionToConstrain)[ch]
+		fft.Ifft(hpr, hpc, hr, hc)
+		kernScale(hr[:FftLengthBy2], scale, hr[:FftLengthBy2])
+		clear(hr[FftLengthBy2:])
+		kernScale(hc[:FftLengthBy2], scale, hc[:FftLengthBy2])
+		clear(hc[FftLengthBy2:])
+		if ch == 0 {
+			*irp = [FftLengthBy2]float32(hr[:FftLengthBy2])
+		} else {
+			afirMaxAbsUpdate(irp, (*[FftLengthBy2]float32)(hr[:FftLengthBy2]))
+		}
+		fft.Fft(hr, hc, hpr, hpc)
+	}
+	refined.partitionToConstrain = afirNextPartition(refined.partitionToConstrain, refined.currentSizePartitions)
+	coarse.partitionToConstrain = afirNextPartition(coarse.partitionToConstrain, coarse.currentSizePartitions)
+}
+
 // afirMaxAbsUpdateGo replaces ir[k] by h[k] where fabsf(ir[k]) < fabsf(h[k])
 // (false when either is a NaN).
 func afirMaxAbsUpdateGo(ir, h *[FftLengthBy2]float32) {

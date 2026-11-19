@@ -19,6 +19,18 @@ func subPredictionError(fft *Aec3Fft, S *FftData, y []float32, tmp *[FftLength]f
 	kernSub(y[:BlockSize], s[:], e[:])
 }
 
+// subPredictionErrorPair is subPredictionError for the refined (S0) and the
+// coarse (S1) filter output of one capture signal y.
+func subPredictionErrorPair(fft *aec3FftPair, S0, S1 *FftData, y []float32, tmp0, tmp1 *[FftLength]float32,
+	e0, s0, e1, s1 *[BlockSize]float32) {
+	fft.Ifft(S0, S1, tmp0, tmp1)
+	const scale float32 = 1.0 / FftLengthBy2
+	kernScale(tmp0[FftLengthBy2:], scale, s0[:])
+	kernSub(y[:BlockSize], s0[:], e0[:])
+	kernScale(tmp1[FftLengthBy2:], scale, s1[:])
+	kernSub(y[:BlockSize], s1[:], e1[:])
+}
+
 // subScaleFilterOutput scales the filter output s by factor and recomputes
 // the error e = y - s.
 func subScaleFilterOutput(y []float32, factor float32, e, s []float32) {
@@ -87,7 +99,7 @@ func (m *subFilterMisadjustmentEstimator) Reset() {
 // Subtractor performs the linear echo cancellation with a refined and a
 // coarse adaptive filter per capture channel.
 type Subtractor struct {
-	fft                           Aec3Fft
+	fft                           aec3FftPair
 	optimization                  Aec3Optimization
 	config                        *EchoCanceller3Config // shared, never modified
 	numCaptureChannels            int
@@ -103,12 +115,14 @@ type Subtractor struct {
 	refinedImpulseResponses       [][]float32
 
 	// Per-block scratch.
-	x2Refined     [FftLengthBy2Plus1]float32
-	x2CoarseData  [FftLengthBy2Plus1]float32
-	eCoarseFft    FftData
-	s             FftData
-	erl           [FftLengthBy2Plus1]float32
-	predictionTmp [FftLength]float32
+	x2Refined      [FftLengthBy2Plus1]float32
+	x2CoarseData   [FftLengthBy2Plus1]float32
+	eCoarseFft     FftData
+	s              FftData
+	sCoarse        FftData
+	erl            [FftLengthBy2Plus1]float32
+	predictionTmp  [FftLength]float32
+	predictionTmp2 [FftLength]float32
 }
 
 // NewSubtractor creates a Subtractor. Field trials are fixed at their
@@ -226,12 +240,12 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 		S := &s.s
 		G := S
 
-		// Form the outputs of the refined and coarse filters.
+		// Form the outputs of the refined and coarse filters; the two
+		// inverse transforms run as a pair.
 		s.refinedFilters[ch].Filter(renderBuffer, S)
-		subPredictionError(&s.fft, S, y, &s.predictionTmp, eRefined, &output.SRefined)
-
-		s.coarseFilter[ch].Filter(renderBuffer, S)
-		subPredictionError(&s.fft, S, y, &s.predictionTmp, eCoarse, &output.SCoarse)
+		s.coarseFilter[ch].Filter(renderBuffer, &s.sCoarse)
+		subPredictionErrorPair(&s.fft, S, &s.sCoarse, y, &s.predictionTmp, &s.predictionTmp2,
+			eRefined, &output.SRefined, eCoarse, &output.SCoarse)
 
 		// Compute the signal powers in the subtractor output.
 		output.ComputeMetrics(y)
@@ -253,8 +267,7 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 		}
 
 		// Compute the FFTs of the refined and coarse filter outputs.
-		s.fft.ZeroPaddedFft(eRefined[:], WindowHanning, ERefined)
-		s.fft.ZeroPaddedFft(eCoarse[:], WindowHanning, ECoarse)
+		s.fft.ZeroPaddedFft(eRefined[:], eCoarse[:], ERefined, ECoarse)
 
 		// Compute spectra for future use.
 		ECoarse.Spectrum(s.optimization, output.E2Coarse[:])
@@ -273,8 +286,15 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 		} else {
 			G.Clear()
 		}
-		s.refinedFilters[ch].AdaptWithImpulseResponse(renderBuffer, G, &s.refinedImpulseResponses[ch])
-		s.refinedFilters[ch].ComputeFrequencyResponse(&s.refinedFrequencyResponses[ch])
+		// The C++ constrains the refined filter right here
+		// (Adapt(render_buffer, G, &impulse_response)) and then computes its
+		// frequency response. Both only concern the refined filter, and the
+		// coarse filter update below reads the refined filter only where it
+		// copies it, so the constraint waits for the coarse filter's and
+		// the transforms of the two run as pairs; the frequency response
+		// follows them.
+		s.refinedFilters[ch].adaptAndUpdateSize(renderBuffer, G)
+		refinedConstrained := false
 
 		// Update the coarse filter.
 		if output.E2RefinedSum < output.E2CoarseSum {
@@ -288,13 +308,22 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 			s.coarseFilterResetHangover[ch] = max(s.coarseFilterResetHangover[ch]-1, 0)
 		} else {
 			s.poorCoarseFilterCounters[ch] = 0
+			// The coarse filter takes the constrained refined filter.
+			s.refinedFilters[ch].constrainAndUpdateImpulseResponse(&s.refinedImpulseResponses[ch])
+			refinedConstrained = true
 			s.coarseFilter[ch].SetFilter(s.refinedFilters[ch].SizePartitions(), s.refinedFilters[ch].GetFilter())
 			s.coarseGains[ch].Compute(X2Coarse, renderSignalAnalyzer, ERefined,
 				s.coarseFilter[ch].SizePartitions(), saturatedCapture, G)
 			s.coarseFilterResetHangover[ch] = s.config.Filter.CoarseResetHangoverBlocks
 		}
 
-		s.coarseFilter[ch].Adapt(renderBuffer, G)
+		s.coarseFilter[ch].adaptAndUpdateSize(renderBuffer, G)
+		if refinedConstrained {
+			s.coarseFilter[ch].constrain()
+		} else {
+			afirConstrainPair(&s.fft, s.refinedFilters[ch], &s.refinedImpulseResponses[ch], s.coarseFilter[ch])
+		}
+		s.refinedFilters[ch].ComputeFrequencyResponse(&s.refinedFrequencyResponses[ch])
 
 		// SafeClamp(a, -32768.f, 32767.f); see kernClamp.
 		kernClamp(eRefined[:], -32768, 32767)

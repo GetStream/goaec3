@@ -9,6 +9,7 @@ type SuppressionFilter struct {
 	sampleRateHz       int
 	numCaptureChannels int
 	fft                Aec3Fft
+	fftPair            aec3FftPair
 	eOutputOld         [][][FftLengthBy2]float32 // [band][channel]
 
 	// Scratch.
@@ -56,7 +57,16 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 
 		// Synthesis filterbank.
 		const ifftNormalization float32 = 2.0 / FftLength
-		f.fft.Ifft(E, eExtended)
+		// With more than one band the comfort noise of band 1 is
+		// synthesized too; the two inverse transforms run as a pair. The
+		// transform reads neither Im[0] nor Im[FftLengthBy2], which is all
+		// that FftData::Assign changes in the comfort noise.
+		eNoise := &f.fftPair.x0
+		if numBands > 1 {
+			f.fftPair.Ifft(E, &comfortNoiseHighBand[ch], eExtended, eNoise)
+		} else {
+			f.fft.Ifft(E, eExtended)
+		}
 
 		e0 := e.View(0, ch)
 		e0Old := &f.eOutputOld[0][ch]
@@ -78,12 +88,9 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 
 		// Add comfort noise to band 1.
 		if numBands > 1 {
-			E.Assign(&comfortNoiseHighBand[ch])
-			f.fft.Ifft(E, eExtended)
-
 			e1 := e.View(1, ch)
 			gain := highBandsNoiseScaling * ifftNormalization
-			kernAxpy(eExtended[:FftLengthBy2], gain, e1)
+			kernAxpy(eNoise[:FftLengthBy2], gain, e1)
 		}
 
 		// Delay upper bands to match the delay of the filter bank.
