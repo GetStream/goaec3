@@ -172,7 +172,9 @@ var afirHasTermKernels = afirHasAVX
 func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 	hs = hs[:len(xs)]
 	if afirHasAVX2 {
-		for k := 0; k < FftLengthBy2; k += 16 {
+		var zero archsimd.Float32x8
+		block := func(k int) {
+			_ = zero // a captured vector makes the compiler inline the closure
 			var re0, re1, im0, im1 archsimd.Float32x8
 			for t, x := range xs {
 				h := hs[t]
@@ -194,9 +196,15 @@ func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 			im0.StoreArray((*[8]float32)(s.Im[k : k+8]))
 			im1.StoreArray((*[8]float32)(s.Im[k+8 : k+16]))
 		}
+		block(0)
+		block(16)
+		block(32)
+		block(48)
 		archsimd.ClearAVXUpperBits()
 	} else {
-		for k := 0; k < FftLengthBy2; k += 8 {
+		var zero archsimd.Float32x4
+		block := func(k int) {
+			_ = zero // a captured vector makes the compiler inline the closure
 			var re0, re1, im0, im1 archsimd.Float32x4
 			for t, x := range xs {
 				h := hs[t]
@@ -218,6 +226,14 @@ func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 			im0.StoreArray((*[4]float32)(s.Im[k : k+4]))
 			im1.StoreArray((*[4]float32)(s.Im[k+4 : k+8]))
 		}
+		block(0)
+		block(8)
+		block(16)
+		block(24)
+		block(32)
+		block(40)
+		block(48)
+		block(56)
 	}
 	const n = FftLengthBy2
 	var re, im float32
@@ -234,7 +250,9 @@ func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 func afirAdaptTerms(xs, hs []*FftData, g *FftData) {
 	hs = hs[:len(xs)]
 	if afirHasAVX2 {
-		for k := 0; k < FftLengthBy2; k += 16 {
+		var zero archsimd.Float32x8
+		block := func(k int) {
+			_ = zero // a captured vector makes the compiler inline the closure
 			gr0 := archsimd.LoadFloat32x8Array((*[8]float32)(g.Re[k : k+8]))
 			gr1 := archsimd.LoadFloat32x8Array((*[8]float32)(g.Re[k+8 : k+16]))
 			gi0 := archsimd.LoadFloat32x8Array((*[8]float32)(g.Im[k : k+8]))
@@ -255,9 +273,15 @@ func afirAdaptTerms(xs, hs []*FftData, g *FftData) {
 				archsimd.LoadFloat32x8Array(hi1).Add(xr1.Mul(gi1).Sub(xi1.Mul(gr1))).StoreArray(hi1)
 			}
 		}
+		block(0)
+		block(16)
+		block(32)
+		block(48)
 		archsimd.ClearAVXUpperBits()
 	} else {
-		for k := 0; k < FftLengthBy2; k += 8 {
+		var zero archsimd.Float32x4
+		block := func(k int) {
+			_ = zero // a captured vector makes the compiler inline the closure
 			gr0 := archsimd.LoadFloat32x4Array((*[4]float32)(g.Re[k : k+4]))
 			gr1 := archsimd.LoadFloat32x4Array((*[4]float32)(g.Re[k+4 : k+8]))
 			gi0 := archsimd.LoadFloat32x4Array((*[4]float32)(g.Im[k : k+4]))
@@ -278,6 +302,14 @@ func afirAdaptTerms(xs, hs []*FftData, g *FftData) {
 				archsimd.LoadFloat32x4Array(hi1).Add(xr1.Mul(gi1).Sub(xi1.Mul(gr1))).StoreArray(hi1)
 			}
 		}
+		block(0)
+		block(8)
+		block(16)
+		block(24)
+		block(32)
+		block(40)
+		block(48)
+		block(56)
 	}
 	for t, x := range xs {
 		afirAdaptBinsGo(x, g, hs[t], FftLengthBy2, FftLengthBy2Plus1)
@@ -331,7 +363,9 @@ func afirHasX86FreqResp(opt Aec3Optimization) bool {
 // instead of being cleared, loaded and stored per channel.
 func afirFreqRespPartitionX86(opt Aec3Optimization, hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 	if opt == OptAvx2 {
-		for k := 0; k < FftLengthBy2; k += 16 {
+		var zero archsimd.Float32x8
+		block := func(k int) {
+			_ = zero // a captured vector makes the compiler inline the closure
 			var a0, a1 archsimd.Float32x8
 			for c := range hs {
 				h := &hs[c]
@@ -348,9 +382,15 @@ func afirFreqRespPartitionX86(opt Aec3Optimization, hs []FftData, h2 *[FftLength
 			a0.StoreArray((*[8]float32)(o[0:8]))
 			a1.StoreArray((*[8]float32)(o[8:16]))
 		}
+		block(0)
+		block(16)
+		block(32)
+		block(48)
 		archsimd.ClearAVXUpperBits()
 	} else {
-		for k := 0; k < FftLengthBy2; k += 8 {
+		var zero archsimd.Float32x4
+		block := func(k int) {
+			_ = zero // a captured vector makes the compiler inline the closure
 			var a0, a1 archsimd.Float32x4
 			for c := range hs {
 				h := &hs[c]
@@ -367,6 +407,14 @@ func afirFreqRespPartitionX86(opt Aec3Optimization, hs []FftData, h2 *[FftLength
 			a0.StoreArray((*[4]float32)(o[0:4]))
 			a1.StoreArray((*[4]float32)(o[4:8]))
 		}
+		block(0)
+		block(8)
+		block(16)
+		block(24)
+		block(32)
+		block(40)
+		block(48)
+		block(56)
 	}
 	h2[FftLengthBy2] = 0
 	for c := range hs {
