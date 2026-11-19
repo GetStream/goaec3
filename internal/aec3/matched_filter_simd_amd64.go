@@ -62,8 +62,34 @@ func dlyAxpyDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
 	dlyAxpyDotS2NeonRef(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
 }
 
+// dlyX2Wrapped is dlyX2WrappedRef; the SSE2 and AVX2 lanes accumulate
+// several windows at a time.
 func dlyX2Wrapped(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) {
+	if (g == 8 && dlyUseAvx) || (g == 16 && dlyUseFma) {
+		dlyX2WrappedMulti(g, x, hSize, lo, r, out)
+		return
+	}
 	dlyX2WrappedRef(g, x, hSize, lo, r, out)
+}
+
+// dlySqStreams is the number of stretches dlySqMulti accumulates at once:
+// three for the SSE2 lane and two for the AVX2 lane.
+func dlySqStreams(g int) int {
+	if g == 8 {
+		return 3
+	}
+	return 2
+}
+
+func dlySqMulti(g int, x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32) {
+	switch {
+	case g == 8 && dlyUseAvx:
+		dlySq3Sse2(x, n, offs, acc)
+	case g == 16 && dlyUseFma:
+		dlySq2Avx2(x, n, offs, acc)
+	default:
+		dlySqMultiRef(g, x, n, offs, acc, dlySqStreams(g))
+	}
 }
 
 // SSE2 lane.
@@ -137,15 +163,17 @@ func dlySqSse2(x []float32, acc *[8]float32) {
 	q4.StoreArray((*[4]float32)(acc[4:8]))
 }
 
-// dlySq3Sse2 runs dlySqSse2Ref from zero accumulators on the three
-// stretches x[offs[t]:offs[t]+n] in one loop, so that their chains overlap
-// in time; out[8t:8t+8] receives the lanes of stretch t.
-func dlySq3Sse2(x []float32, n int, offs *[3]int, out *[24]float32) {
+// dlySq3Sse2 runs dlySqSse2Ref on the three stretches x[offs[t]:offs[t]+n]
+// in one loop, so that their chains overlap in time; acc[t] holds the
+// accumulators of stretch t.
+func dlySq3Sse2(x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32) {
 	n &^= 7
 	x0 := x[offs[0]:][:n:n]
 	x1 := x[offs[1]:][:n:n]
 	x2 := x[offs[2]:][:n:n]
-	var q0, q04, q1, q14, q2, q24 archsimd.Float32x4
+	q0, q04 := dlyLd4((*[4]float32)(acc[0][0:4])), dlyLd4((*[4]float32)(acc[0][4:8]))
+	q1, q14 := dlyLd4((*[4]float32)(acc[1][0:4])), dlyLd4((*[4]float32)(acc[1][4:8]))
+	q2, q24 := dlyLd4((*[4]float32)(acc[2][0:4])), dlyLd4((*[4]float32)(acc[2][4:8]))
 	for i := 0; i < n-7; i += 8 {
 		a := (*[8]float32)(x0[i : i+8])
 		b := (*[8]float32)(x1[i : i+8])
@@ -160,24 +188,24 @@ func dlySq3Sse2(x []float32, n int, offs *[3]int, out *[24]float32) {
 		q2 = q2.Add(c0.Mul(c0))
 		q24 = q24.Add(c4.Mul(c4))
 	}
-	q0.StoreArray((*[4]float32)(out[0:4]))
-	q04.StoreArray((*[4]float32)(out[4:8]))
-	q1.StoreArray((*[4]float32)(out[8:12]))
-	q14.StoreArray((*[4]float32)(out[12:16]))
-	q2.StoreArray((*[4]float32)(out[16:20]))
-	q24.StoreArray((*[4]float32)(out[20:24]))
+	q0.StoreArray((*[4]float32)(acc[0][0:4]))
+	q04.StoreArray((*[4]float32)(acc[0][4:8]))
+	q1.StoreArray((*[4]float32)(acc[1][0:4]))
+	q14.StoreArray((*[4]float32)(acc[1][4:8]))
+	q2.StoreArray((*[4]float32)(acc[2][0:4]))
+	q24.StoreArray((*[4]float32)(acc[2][4:8]))
 }
 
-// dlySq2Avx2 runs dlySqAvx2Ref from zero accumulators on the two stretches
-// x[offs[t]:offs[t]+n] in one loop; out[16t:16t+16] receives the lanes of
-// stretch t.
+// dlySq2Avx2 runs dlySqAvx2Ref on the two stretches x[offs[t]:offs[t]+n] in
+// one loop; acc[t] holds the accumulators of stretch t.
 //
 //go:noinline
-func dlySq2Avx2(x []float32, n int, offs *[2]int, out *[32]float32) {
+func dlySq2Avx2(x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32) {
 	n &^= 15
 	x0 := x[offs[0]:][:n:n]
 	x1 := x[offs[1]:][:n:n]
-	var q0, q08, q1, q18 archsimd.Float32x8
+	q0, q08 := dlyLd8((*[8]float32)(acc[0][0:8])), dlyLd8((*[8]float32)(acc[0][8:16]))
+	q1, q18 := dlyLd8((*[8]float32)(acc[1][0:8])), dlyLd8((*[8]float32)(acc[1][8:16]))
 	for i := 0; i < n-15; i += 16 {
 		a := (*[16]float32)(x0[i : i+16])
 		b := (*[16]float32)(x1[i : i+16])
@@ -188,10 +216,10 @@ func dlySq2Avx2(x []float32, n int, offs *[2]int, out *[32]float32) {
 		q1 = b0.MulAdd(b0, q1)
 		q18 = b8.MulAdd(b8, q18)
 	}
-	q0.StoreArray((*[8]float32)(out[0:8]))
-	q08.StoreArray((*[8]float32)(out[8:16]))
-	q1.StoreArray((*[8]float32)(out[16:24]))
-	q18.StoreArray((*[8]float32)(out[24:32]))
+	q0.StoreArray((*[8]float32)(acc[0][0:8]))
+	q08.StoreArray((*[8]float32)(acc[0][8:16]))
+	q1.StoreArray((*[8]float32)(acc[1][0:8]))
+	q18.StoreArray((*[8]float32)(acc[1][8:16]))
 	archsimd.ClearAVXUpperBits()
 }
 
@@ -199,32 +227,9 @@ func dlySq2Avx2(x []float32, n int, offs *[2]int, out *[32]float32) {
 // accumulated in one loop: three groups of eight for the SSE2 lane, two
 // groups of sixteen for the AVX2 lane.
 func dlyX2Lanes(g int, x []float32, n int, lanes []float32) {
-	last := len(lanes) - g
-	switch {
-	case g == 8 && dlyUseAvx:
-		for o := 0; ; o += 24 {
-			offs := [3]int{min(o, last), min(o+8, last), min(o+16, last)}
-			var out [24]float32
-			dlySq3Sse2(x, n, &offs, &out)
-			for t, off := range offs {
-				copy(lanes[off:off+8], out[8*t:8*t+8])
-			}
-			if offs[2] == last {
-				return
-			}
-		}
-	case g == 16 && dlyUseFma:
-		for o := 0; ; o += 32 {
-			offs := [2]int{min(o, last), min(o+16, last)}
-			var out [32]float32
-			dlySq2Avx2(x, n, &offs, &out)
-			for t, off := range offs {
-				copy(lanes[off:off+16], out[16*t:16*t+16])
-			}
-			if offs[1] == last {
-				return
-			}
-		}
+	if (g == 8 && dlyUseAvx) || (g == 16 && dlyUseFma) {
+		dlyX2LanesMulti(g, x, n, lanes)
+		return
 	}
 	dlyX2LanesRef(g, x, n, lanes)
 }
@@ -937,5 +942,146 @@ func dlyAxpyFmaDotS2Avx2Lanes(hA, xaA, xbA []float32, alphaA float32, accA *[16]
 	sA8.StoreArray((*[8]float32)(accA[8:16]))
 	sB.StoreArray((*[8]float32)(accB[0:8]))
 	sB8.StoreArray((*[8]float32)(accB[8:16]))
+	archsimd.ClearAVXUpperBits()
+}
+
+func dlyAxpyDotDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
+	hB, xB []float32, accB *[4]float32) {
+	dlyAxpyDotDotS2NeonRef(hA, xaA, xbA, alphaA, accA, hB, xB, accB)
+}
+
+func dlyX2Lanes2(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
+	dlyX2Lanes2Ref(g, xA, xB, n, lanesA, lanesB)
+}
+
+// dlyDotS2Sum and dlyAxpyDotS2Sum are the two-filter Sum kernels of the
+// lane with group size g: dlyDotSSum (dlyAxpyDotSSum) for two filters at
+// once, with the reduced sums before their addition to the zero tail in
+// out[0] and out[2]. They report false where the lane has none.
+
+func dlyDotS2Sum(g int, hA, xA, hB, xB []float32, out *[4]float32) bool {
+	switch {
+	case g == 8 && dlyUseAvx:
+		dlyDotS2SumSse2(hA, xA, hB, xB, out)
+	case g == 16 && dlyUseFma:
+		dlyDotS2SumAvx2(hA, xA, hB, xB, out)
+	default:
+		return false
+	}
+	return true
+}
+
+func dlyAxpyDotS2Sum(g int, hA, xaA, xbA []float32, alphaA float32,
+	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) bool {
+	switch {
+	case g == 8 && dlyUseAvx:
+		dlyAxpyDotS2SumSse2(hA, xaA, xbA, alphaA, hB, xaB, xbB, alphaB, out)
+	case g == 16 && dlyUseFma:
+		dlyAxpyFmaDotS2SumAvx2(hA, xaA, xbA, alphaA, hB, xaB, xbB, alphaB, out)
+	default:
+		return false
+	}
+	return true
+}
+
+func dlyDotS2SumSse2(hA, xA, hB, xB []float32, out *[4]float32) {
+	n := len(hA) &^ 7
+	hA, xA, hB, xB = hA[:n:n], xA[:n:n], hB[:n:n], xB[:n:n]
+	var sA, sA4, sB, sB4 archsimd.Float32x4
+	for i := 0; i < n-7; i += 8 {
+		hh := (*[8]float32)(hA[i : i+8])
+		bb := (*[8]float32)(xA[i : i+8])
+		gg := (*[8]float32)(hB[i : i+8])
+		dd := (*[8]float32)(xB[i : i+8])
+		sA = sA.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(dlyLd4((*[4]float32)(bb[0:4]))))
+		sA4 = sA4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(dlyLd4((*[4]float32)(bb[4:8]))))
+		sB = sB.Add(dlyLd4((*[4]float32)(gg[0:4])).Mul(dlyLd4((*[4]float32)(dd[0:4]))))
+		sB4 = sB4.Add(dlyLd4((*[4]float32)(gg[4:8])).Mul(dlyLd4((*[4]float32)(dd[4:8]))))
+	}
+	tA, tB := dlyHsumSSse2(sA, sA4), dlyHsumSSse2(sB, sB4)
+	tA.ConcatPermuteScalars(0, 0, 4, 4, tB).StoreArray(out)
+}
+
+func dlyAxpyDotS2SumSse2(hA, xaA, xbA []float32, alphaA float32,
+	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) {
+	n := len(hA) &^ 7
+	hA, xaA, xbA, hB, xaB, xbB = hA[:n:n], xaA[:n:n], xbA[:n:n], hB[:n:n], xaB[:n:n], xbB[:n:n]
+	aA := archsimd.BroadcastFloat32x4(alphaA)
+	aB := archsimd.BroadcastFloat32x4(alphaB)
+	var sA, sA4, sB, sB4 archsimd.Float32x4
+	for i := 0; i < n-7; i += 8 {
+		hh := (*[8]float32)(hA[i : i+8])
+		aa := (*[8]float32)(xaA[i : i+8])
+		bb := (*[8]float32)(xbA[i : i+8])
+		gg := (*[8]float32)(hB[i : i+8])
+		cc := (*[8]float32)(xaB[i : i+8])
+		dd := (*[8]float32)(xbB[i : i+8])
+		hk := dlyLd4((*[4]float32)(hh[0:4])).Add(aA.Mul(dlyLd4((*[4]float32)(aa[0:4]))))
+		hk4 := dlyLd4((*[4]float32)(hh[4:8])).Add(aA.Mul(dlyLd4((*[4]float32)(aa[4:8]))))
+		gk := dlyLd4((*[4]float32)(gg[0:4])).Add(aB.Mul(dlyLd4((*[4]float32)(cc[0:4]))))
+		gk4 := dlyLd4((*[4]float32)(gg[4:8])).Add(aB.Mul(dlyLd4((*[4]float32)(cc[4:8]))))
+		hk.StoreArray((*[4]float32)(hh[0:4]))
+		hk4.StoreArray((*[4]float32)(hh[4:8]))
+		gk.StoreArray((*[4]float32)(gg[0:4]))
+		gk4.StoreArray((*[4]float32)(gg[4:8]))
+		sA = sA.Add(hk.Mul(dlyLd4((*[4]float32)(bb[0:4]))))
+		sA4 = sA4.Add(hk4.Mul(dlyLd4((*[4]float32)(bb[4:8]))))
+		sB = sB.Add(gk.Mul(dlyLd4((*[4]float32)(dd[0:4]))))
+		sB4 = sB4.Add(gk4.Mul(dlyLd4((*[4]float32)(dd[4:8]))))
+	}
+	tA, tB := dlyHsumSSse2(sA, sA4), dlyHsumSSse2(sB, sB4)
+	tA.ConcatPermuteScalars(0, 0, 4, 4, tB).StoreArray(out)
+}
+
+//go:noinline
+func dlyDotS2SumAvx2(hA, xA, hB, xB []float32, out *[4]float32) {
+	n := len(hA) &^ 15
+	hA, xA, hB, xB = hA[:n:n], xA[:n:n], hB[:n:n], xB[:n:n]
+	var sA, sA8, sB, sB8 archsimd.Float32x8
+	for i := 0; i < n-15; i += 16 {
+		hh := (*[16]float32)(hA[i : i+16])
+		bb := (*[16]float32)(xA[i : i+16])
+		gg := (*[16]float32)(hB[i : i+16])
+		dd := (*[16]float32)(xB[i : i+16])
+		sA = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(dlyLd8((*[8]float32)(bb[0:8])), sA)
+		sA8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(dlyLd8((*[8]float32)(bb[8:16])), sA8)
+		sB = dlyLd8((*[8]float32)(gg[0:8])).MulAdd(dlyLd8((*[8]float32)(dd[0:8])), sB)
+		sB8 = dlyLd8((*[8]float32)(gg[8:16])).MulAdd(dlyLd8((*[8]float32)(dd[8:16])), sB8)
+	}
+	tA, tB := dlyHsumSAvx2(sA, sA8), dlyHsumSAvx2(sB, sB8)
+	tA.ConcatPermuteScalars(0, 0, 4, 4, tB).StoreArray(out)
+	archsimd.ClearAVXUpperBits()
+}
+
+//go:noinline
+func dlyAxpyFmaDotS2SumAvx2(hA, xaA, xbA []float32, alphaA float32,
+	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) {
+	n := len(hA) &^ 15
+	hA, xaA, xbA, hB, xaB, xbB = hA[:n:n], xaA[:n:n], xbA[:n:n], hB[:n:n], xaB[:n:n], xbB[:n:n]
+	aA := archsimd.BroadcastFloat32x8(alphaA)
+	aB := archsimd.BroadcastFloat32x8(alphaB)
+	var sA, sA8, sB, sB8 archsimd.Float32x8
+	for i := 0; i < n-15; i += 16 {
+		hh := (*[16]float32)(hA[i : i+16])
+		aa := (*[16]float32)(xaA[i : i+16])
+		bb := (*[16]float32)(xbA[i : i+16])
+		gg := (*[16]float32)(hB[i : i+16])
+		cc := (*[16]float32)(xaB[i : i+16])
+		dd := (*[16]float32)(xbB[i : i+16])
+		hk := dlyLd8((*[8]float32)(aa[0:8])).MulAdd(aA, dlyLd8((*[8]float32)(hh[0:8])))
+		hk8 := dlyLd8((*[8]float32)(aa[8:16])).MulAdd(aA, dlyLd8((*[8]float32)(hh[8:16])))
+		gk := dlyLd8((*[8]float32)(cc[0:8])).MulAdd(aB, dlyLd8((*[8]float32)(gg[0:8])))
+		gk8 := dlyLd8((*[8]float32)(cc[8:16])).MulAdd(aB, dlyLd8((*[8]float32)(gg[8:16])))
+		hk.StoreArray((*[8]float32)(hh[0:8]))
+		hk8.StoreArray((*[8]float32)(hh[8:16]))
+		gk.StoreArray((*[8]float32)(gg[0:8]))
+		gk8.StoreArray((*[8]float32)(gg[8:16]))
+		sA = hk.MulAdd(dlyLd8((*[8]float32)(bb[0:8])), sA)
+		sA8 = hk8.MulAdd(dlyLd8((*[8]float32)(bb[8:16])), sA8)
+		sB = gk.MulAdd(dlyLd8((*[8]float32)(dd[0:8])), sB)
+		sB8 = gk8.MulAdd(dlyLd8((*[8]float32)(dd[8:16])), sB8)
+	}
+	tA, tB := dlyHsumSAvx2(sA, sA8), dlyHsumSAvx2(sB, sB8)
+	tA.ConcatPermuteScalars(0, 0, 4, 4, tB).StoreArray(out)
 	archsimd.ClearAVXUpperBits()
 }

@@ -448,28 +448,24 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 			}
 		})
 	}
-}
-
-// BenchmarkMatchedFilterCoreX2Sums times the x*x sums of the 16 samples of one
-// sub-block for one filter: from the shared lane chains (windows that do
-// not wrap) and from the chunk loops (windows that wrap).
-func BenchmarkMatchedFilterCoreX2Sums(b *testing.B) {
-	rng := rand.New(rand.NewSource(4))
-	x := dlyRandSlice(rng, GetDownSampledBufferSize(4, 5), 3000)
+	// The x*x sums of the 16 samples of one sub-block for one filter: from
+	// the shared lane chains (windows that do not wrap) and from the chunk
+	// loops (windows that wrap).
 	for _, g := range []int{4, 8, 16} {
-		b.Run(fmt.Sprintf("Lanes%d", g), func(b *testing.B) {
+		b.Run(fmt.Sprintf("X2Lanes%d", g), func(b *testing.B) {
 			var out [dlyX2Run]float32
 			for i := 0; i < b.N; i++ {
-				dlyX2Sums(g, false, x[100:100+512+15], 512, 16, &out)
+				dlyX2Sums(g, false, x[100:], 512, 16, &out)
 			}
 		})
-		b.Run(fmt.Sprintf("Wrapped%d", g), func(b *testing.B) {
+		b.Run(fmt.Sprintf("X2Wrapped%d", g), func(b *testing.B) {
 			var out [dlyX2Run]float32
 			for i := 0; i < b.N; i++ {
 				dlyX2Wrapped(g, x, 512, len(x)-300, 16, &out)
 			}
 		})
 	}
+	dlyBenchKernels(b, x, h0)
 }
 
 func BenchmarkMaxSquarePeakIndex(b *testing.B) {

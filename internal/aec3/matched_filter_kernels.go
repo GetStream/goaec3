@@ -607,6 +607,12 @@ func dlyAxpyDotS2NeonRef(hA, xaA, xbA []float32, alphaA float32, accA *[4]float3
 	dlyAxpyDotSNeonRef(hB, xaB, xbB, alphaB, accB)
 }
 
+func dlyAxpyDotDotS2NeonRef(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
+	hB, xB []float32, accB *[4]float32) {
+	dlyAxpyDotSNeonRef(hA, xaA, xbA, alphaA, accA)
+	dlyDotSNeonRef(hB, xB, accB)
+}
+
 func dlyDotS2Sse2Ref(hA, xA []float32, accA *[8]float32, hB, xB []float32, accB *[8]float32) {
 	dlyDotSSse2Ref(hA, xA, accA)
 	dlyDotSSse2Ref(hB, xB, accB)

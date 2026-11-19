@@ -150,6 +150,44 @@ func dlyAxpyDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
 	sB.StoreArray(accB)
 }
 
+// dlyAxpyDotDotS2Neon is dlyAxpyDotSNeon on the filter A and dlyDotSNeon
+// on the filter B, of the same length, at once.
+func dlyAxpyDotDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
+	hB, xB []float32, accB *[4]float32) {
+	n := len(hA) &^ 3
+	hA, xaA, xbA, hB, xB = hA[:n:n], xaA[:n:n], xbA[:n:n], hB[:n:n], xB[:n:n]
+	aA := archsimd.BroadcastFloat32x4(alphaA)
+	sA := dlyLd4(accA)
+	sB := dlyLd4(accB)
+	i := 0
+	for ; i < n-7; i += 8 {
+		hh := (*[8]float32)(hA[i : i+8])
+		aa := (*[8]float32)(xaA[i : i+8])
+		bb := (*[8]float32)(xbA[i : i+8])
+		gg := (*[8]float32)(hB[i : i+8])
+		dd := (*[8]float32)(xB[i : i+8])
+		h0 := dlyLd4((*[4]float32)(hh[0:4])).Add(aA.Mul(dlyLd4((*[4]float32)(aa[0:4]))))
+		h1 := dlyLd4((*[4]float32)(hh[4:8])).Add(aA.Mul(dlyLd4((*[4]float32)(aa[4:8]))))
+		h0.StoreArray((*[4]float32)(hh[0:4]))
+		h1.StoreArray((*[4]float32)(hh[4:8]))
+		p0 := h0.Mul(dlyLd4((*[4]float32)(bb[0:4])))
+		p1 := h1.Mul(dlyLd4((*[4]float32)(bb[4:8])))
+		q0 := dlyLd4((*[4]float32)(gg[0:4])).Mul(dlyLd4((*[4]float32)(dd[0:4])))
+		q1 := dlyLd4((*[4]float32)(gg[4:8])).Mul(dlyLd4((*[4]float32)(dd[4:8])))
+		sA = sA.Add(p0).Add(p1)
+		sB = sB.Add(q0).Add(q1)
+	}
+	for ; i < n-3; i += 4 {
+		hp := (*[4]float32)(hA[i : i+4])
+		hk := dlyLd4(hp).Add(aA.Mul(dlyLd4((*[4]float32)(xaA[i : i+4]))))
+		hk.StoreArray(hp)
+		sA = sA.Add(hk.Mul(dlyLd4((*[4]float32)(xbA[i : i+4]))))
+		sB = sB.Add(dlyLd4((*[4]float32)(hB[i : i+4])).Mul(dlyLd4((*[4]float32)(xB[i : i+4]))))
+	}
+	sA.StoreArray(accA)
+	sB.StoreArray(accB)
+}
+
 // dlyPairNeon selects the two-filter kernels for the NEON lane.
 var dlyPairNeon = true
 
@@ -165,20 +203,20 @@ func dlySqNeon(x []float32, acc *[4]float32) {
 }
 
 // dlySq5Neon runs dlySqNeonRef on the five stretches x[offs[t]:offs[t]+n]
-// in one loop, so that their chains overlap in time; acc[4t:4t+4] holds the
+// in one loop, so that their chains overlap in time; acc[t] holds the
 // accumulators of stretch t.
-func dlySq5Neon(x []float32, n int, offs *[5]int, acc *[20]float32) {
+func dlySq5Neon(x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32) {
 	n &^= 3
 	x0 := x[offs[0]:][:n:n]
 	x1 := x[offs[1]:][:n:n]
 	x2 := x[offs[2]:][:n:n]
 	x3 := x[offs[3]:][:n:n]
 	x4 := x[offs[4]:][:n:n]
-	q0 := dlyLd4((*[4]float32)(acc[0:4]))
-	q1 := dlyLd4((*[4]float32)(acc[4:8]))
-	q2 := dlyLd4((*[4]float32)(acc[8:12]))
-	q3 := dlyLd4((*[4]float32)(acc[12:16]))
-	q4 := dlyLd4((*[4]float32)(acc[16:20]))
+	q0 := dlyLd4((*[4]float32)(acc[0][0:4]))
+	q1 := dlyLd4((*[4]float32)(acc[1][0:4]))
+	q2 := dlyLd4((*[4]float32)(acc[2][0:4]))
+	q3 := dlyLd4((*[4]float32)(acc[3][0:4]))
+	q4 := dlyLd4((*[4]float32)(acc[4][0:4]))
 	for i := 0; i < n-3; i += 4 {
 		v0 := dlyLd4((*[4]float32)(x0[i : i+4]))
 		v1 := dlyLd4((*[4]float32)(x1[i : i+4]))
@@ -191,11 +229,29 @@ func dlySq5Neon(x []float32, n int, offs *[5]int, acc *[20]float32) {
 		q3 = q3.Add(v3.Mul(v3))
 		q4 = q4.Add(v4.Mul(v4))
 	}
-	q0.StoreArray((*[4]float32)(acc[0:4]))
-	q1.StoreArray((*[4]float32)(acc[4:8]))
-	q2.StoreArray((*[4]float32)(acc[8:12]))
-	q3.StoreArray((*[4]float32)(acc[12:16]))
-	q4.StoreArray((*[4]float32)(acc[16:20]))
+	q0.StoreArray((*[4]float32)(acc[0][0:4]))
+	q1.StoreArray((*[4]float32)(acc[1][0:4]))
+	q2.StoreArray((*[4]float32)(acc[2][0:4]))
+	q3.StoreArray((*[4]float32)(acc[3][0:4]))
+	q4.StoreArray((*[4]float32)(acc[4][0:4]))
+}
+
+// dlySqStreams is the number of stretches dlySqMulti accumulates at once:
+// five for the NEON lane, whose kernel it is; the other lanes run their
+// references.
+func dlySqStreams(g int) int {
+	if g == 4 {
+		return 5
+	}
+	return 2
+}
+
+func dlySqMulti(g int, x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32) {
+	if g == 4 {
+		dlySq5Neon(x, n, offs, acc)
+		return
+	}
+	dlySqMultiRef(g, x, n, offs, acc, 2)
 }
 
 // dlySqSlideNeon stores in out[a], for a < 16, the lane chain that starts
@@ -248,80 +304,85 @@ func dlyX2Lanes(g int, x []float32, n int, lanes []float32) {
 		copy(lanes[last:], out[16:20])
 		return
 	}
-	for o := 0; ; o += 20 {
-		var offs [5]int
-		for t := range offs {
-			offs[t] = min(o+4*t, last)
-		}
-		var acc [20]float32
-		dlySq5Neon(x, n, &offs, &acc)
-		for t, off := range offs {
-			copy(lanes[off:off+4], acc[4*t:4*t+4])
-		}
-		if offs[4] == last {
-			return
-		}
+	dlyX2LanesMulti(g, x, n, lanes)
+}
+
+// dlySqSlide2Neon is dlySqSlideNeon on two stretches at once.
+func dlySqSlide2Neon(xA, xB []float32, n, last int, outA, outB *[20]float32) {
+	n &^= 3
+	xs := xA[: n+12 : n+12]
+	xa := xA[last:][:n:n]
+	ys := xB[: n+12 : n+12]
+	ya := xB[last:][:n:n]
+	var q0, q1, q2, q3, qa, r0, r1, r2, r3, ra archsimd.Float32x4
+	v := dlyLd4((*[4]float32)(xs[0:4]))
+	s0 := v.Mul(v)
+	v = dlyLd4((*[4]float32)(xs[4:8]))
+	s1 := v.Mul(v)
+	v = dlyLd4((*[4]float32)(xs[8:12]))
+	s2 := v.Mul(v)
+	v = dlyLd4((*[4]float32)(ys[0:4]))
+	t0 := v.Mul(v)
+	v = dlyLd4((*[4]float32)(ys[4:8]))
+	t1 := v.Mul(v)
+	v = dlyLd4((*[4]float32)(ys[8:12]))
+	t2 := v.Mul(v)
+	for i := 0; i < n-3; i += 4 {
+		v3 := dlyLd4((*[4]float32)(xs[i+12 : i+16]))
+		va := dlyLd4((*[4]float32)(xa[i : i+4]))
+		w3 := dlyLd4((*[4]float32)(ys[i+12 : i+16]))
+		wa := dlyLd4((*[4]float32)(ya[i : i+4]))
+		s3 := v3.Mul(v3)
+		t3 := w3.Mul(w3)
+		q0 = q0.Add(s0)
+		q1 = q1.Add(s1)
+		q2 = q2.Add(s2)
+		q3 = q3.Add(s3)
+		qa = qa.Add(va.Mul(va))
+		r0 = r0.Add(t0)
+		r1 = r1.Add(t1)
+		r2 = r2.Add(t2)
+		r3 = r3.Add(t3)
+		ra = ra.Add(wa.Mul(wa))
+		s0, s1, s2 = s1, s2, s3
+		t0, t1, t2 = t1, t2, t3
 	}
+	q0.StoreArray((*[4]float32)(outA[0:4]))
+	q1.StoreArray((*[4]float32)(outA[4:8]))
+	q2.StoreArray((*[4]float32)(outA[8:12]))
+	q3.StoreArray((*[4]float32)(outA[12:16]))
+	qa.StoreArray((*[4]float32)(outA[16:20]))
+	r0.StoreArray((*[4]float32)(outB[0:4]))
+	r1.StoreArray((*[4]float32)(outB[4:8]))
+	r2.StoreArray((*[4]float32)(outB[8:12]))
+	r3.StoreArray((*[4]float32)(outB[12:16]))
+	ra.StoreArray((*[4]float32)(outB[16:20]))
+}
+
+// dlyX2Lanes2 is dlyX2Lanes2Ref; the NEON lane interleaves the chains of the
+// two stretches.
+func dlyX2Lanes2(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
+	last := len(lanesA) - 4
+	if g != 4 || len(lanesB) != len(lanesA) || n < 4 || last < 12 || last > 16 || len(xA) < n+12 || len(xB) < n+12 {
+		dlyX2Lanes2Ref(g, xA, xB, n, lanesA, lanesB)
+		return
+	}
+	var outA, outB [20]float32
+	dlySqSlide2Neon(xA, xB, n, last, &outA, &outB)
+	copy(lanesA[:16], outA[:16])
+	copy(lanesA[last:], outA[16:20])
+	copy(lanesB[:16], outB[:16])
+	copy(lanesB[last:], outB[16:20])
 }
 
 // dlyX2Wrapped is dlyX2WrappedRef; the NEON lane accumulates five windows
-// at a time. Each window is two stretches of whole groups (up to the end of
-// the buffer, then from its start) that feed its accumulators in that
-// order; the stretches of the five windows are cut at each other's ends, so
-// that every call of the five-stretch kernel advances all of them by the
-// same length.
+// at a time.
 func dlyX2Wrapped(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) {
 	if g != 4 {
 		dlyX2WrappedRef(g, x, hSize, lo, r, out)
 		return
 	}
-	for t0 := 0; t0 < r; t0 += 5 {
-		k := min(5, r-t0)
-		var acc [20]float32
-		var pos, rem [5][2]int
-		var seg [5]int
-		for t := range pos {
-			// Windows beyond the last one repeat it; their sums are unused.
-			a := lo + t0 + min(t, k-1)
-			chunk1 := min(hSize, len(x)-a)
-			pos[t] = [2]int{a, 0}
-			rem[t] = [2]int{chunk1 &^ 3, (hSize - chunk1) &^ 3}
-		}
-		for {
-			n := hSize
-			for t := range seg {
-				for seg[t] < 2 && rem[t][seg[t]] == 0 {
-					seg[t]++
-				}
-				if seg[t] == 2 {
-					n = 0
-					break
-				}
-				n = min(n, rem[t][seg[t]])
-			}
-			if n == 0 {
-				break
-			}
-			var offs [5]int
-			for t := range offs {
-				offs[t] = pos[t][seg[t]]
-				pos[t][seg[t]] += n
-				rem[t][seg[t]] -= n
-			}
-			dlySq5Neon(x, n, &offs, &acc)
-		}
-		for t := 0; t < k; t++ {
-			// What is left of a window once another one has ended.
-			var q [16]float32
-			copy(q[:4], acc[4*t:4*t+4])
-			for ; seg[t] < 2; seg[t]++ {
-				p, n := pos[t][seg[t]], rem[t][seg[t]]
-				dlySqNeon(x[p:p+n], (*[4]float32)(q[:4]))
-			}
-			a := lo + t0 + t
-			out[t0+t] = dlyReduceX2(4, false, &q, dlyX2Tails(4, x, hSize, a))
-		}
-	}
+	dlyX2WrappedMulti(g, x, hSize, lo, r, out)
 }
 
 // dlyAccErrNeon keeps four groups per iteration: the SumAllElements
@@ -543,4 +604,16 @@ func dlyDotS2Avx2(hA, xA []float32, accA *[16]float32, hB, xB []float32, accB *[
 func dlyAxpyFmaDotS2Avx2(hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
 	hB, xaB, xbB []float32, alphaB float32, accB *[16]float32) {
 	dlyAxpyFmaDotS2Avx2Ref(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
+}
+
+// dlyDotS2Sum and dlyAxpyDotS2Sum are the two-filter Sum kernels of the
+// lane with group size g: dlyDotSSum (dlyAxpyDotSSum) for two filters at
+// once, with the reduced sums before their addition to the zero tail in
+// out[0] and out[2]. They report false where the lane has none.
+
+func dlyDotS2Sum(g int, hA, xA, hB, xB []float32, out *[4]float32) bool { return false }
+
+func dlyAxpyDotS2Sum(g int, hA, xaA, xbA []float32, alphaA float32,
+	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) bool {
+	return false
 }

@@ -199,6 +199,16 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 			if mg > 0 && len(x) > mg {
 				lanes := make([]float32, min(len(x)-mg+g, g+rng.Intn(24)))
 				dlyX2Lanes(g, x, mg, lanes)
+				lanesM := make([]float32, len(lanes))
+				dlyX2LanesMulti(g, x, mg, lanesM)
+				dlyRequireBits(t, "x2 lanes multi", lanesM, lanes)
+				lanesA := make([]float32, len(lanes))
+				lanesB := make([]float32, len(lanes))
+				dlyX2Lanes2(g, x, x[len(x)-mg-len(lanes)+g:], mg, lanesA, lanesB)
+				lanesC := make([]float32, len(lanes))
+				dlyX2LanesRef(g, x[len(x)-mg-len(lanes)+g:], mg, lanesC)
+				dlyRequireBits(t, "x2 lanes pair A", lanesA, lanes)
+				dlyRequireBits(t, "x2 lanes pair B", lanesB, lanesC)
 				for a0 := range lanes {
 					var w [1]float32
 					for m := 0; m < mg/g; m++ {
@@ -269,6 +279,9 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 				dlyX2Wrapped(g, xw, n, lo, r, &got)
 				dlyX2WrappedRef(g, xw, n, lo, r, &ref)
 				dlyRequireBits(t, "x2 wrapped", got[:r], ref[:r])
+				var multi [dlyX2Run]float32
+				dlyX2WrappedMulti(g, xw, n, lo, r, &multi)
+				dlyRequireBits(t, "x2 wrapped multi", multi[:r], ref[:r])
 				for i := 0; i < r; i++ {
 					a := lo + i
 					var lanes [16]float32
@@ -315,6 +328,16 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 				dlyAxpyFmaDotSAvx2Ref(hC, xa, x, alpha, &c)
 				dlyAxpyFmaDotSAvx2Ref(hD, xaB, xB, alphaB, &d)
 			}
+			var out [4]float32
+			if dlyDotS2Sum(g, hA, x, hB, xB, &out) {
+				dlyRequireBits(t, "dot pair sum", []float32{0 + out[0], 0 + out[2]},
+					[]float32{dlyDotSSum(g, hC, x), dlyDotSSum(g, hD, xB)})
+			}
+			if dlyAxpyDotS2Sum(g, hA, xa, x, alpha, hB, xaB, xB, alphaB, &out) {
+				sC := dlyAxpyDotSSum(g, hC, xa, x, alpha)
+				sD := dlyAxpyDotSSum(g, hD, xaB, xB, alphaB)
+				dlyRequireBits(t, "axpyDot pair sum", []float32{0 + out[0], 0 + out[2]}, []float32{sC, sD})
+			}
 			dlyRequireBits(t, "pair h A", hA, hC)
 			dlyRequireBits(t, "pair h B", hB, hD)
 			dlyRequireBits(t, "pair acc A", a[:], c[:])
@@ -342,6 +365,9 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 			dlyAxpyDotS2Neon(hA, xa, x, alpha, (*[4]float32)(a[:4]), hB, xaB, xB, alphaB, (*[4]float32)(b[:4]))
 			dlyAxpyDotSNeonRef(hC, xa, x, alpha, (*[4]float32)(c[:4]))
 			dlyAxpyDotSNeonRef(hD, xaB, xB, alphaB, (*[4]float32)(d[:4]))
+			dlyAxpyDotDotS2Neon(hA, xa, x, alpha, (*[4]float32)(a[:4]), hB, xB, (*[4]float32)(b[:4]))
+			dlyAxpyDotSNeonRef(hC, xa, x, alpha, (*[4]float32)(c[:4]))
+			dlyDotSNeonRef(hD, xB, (*[4]float32)(d[:4]))
 			dlyRequireBits(t, "axpyDot2 h A", hA, hC)
 			dlyRequireBits(t, "axpyDot2 h B", hB, hD)
 			dlyRequireBits(t, "axpyDot2 A", a[:], c[:])
@@ -403,7 +429,11 @@ func TestDlyFmaTryMatchesFmaf(t *testing.T) {
 		}
 		return float32(rng.NormFloat64() * math.Pow(10, float64(rng.Intn(12)-6)))
 	}
-	for i := 0; i < 3000000; i++ {
+	iterations := 3000000
+	if testing.Short() {
+		iterations = 200000
+	}
+	for i := 0; i < iterations; i++ {
 		a, b, c := randF(), randF(), randF()
 		check(a, b, c)
 		if i%4 == 0 {

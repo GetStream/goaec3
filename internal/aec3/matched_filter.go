@@ -226,6 +226,44 @@ func dlyX2Sums(g int, accErr bool, x []float32, n, r int, out *[dlyX2Run]float32
 	dlyX2Reduce(g, accErr, &lanes, r, out)
 }
 
+// dlyX2Lanes2Ref is dlyX2Lanes for two stretches of the same length.
+func dlyX2Lanes2Ref(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
+	dlyX2Lanes(g, xA, n, lanesA)
+	dlyX2Lanes(g, xB, n, lanesB)
+}
+
+// x2TableRun returns the run of samples that the next table of x*x sums
+// from dlyX2Sums covers, the start index lo of the last of them and their
+// number r, when the current sample needs such a table: its window does not
+// wrap, the filter length is a multiple of g, and no table holds its sum.
+func (f *dlyLaneFilter) x2TableRun(g int, x []float32, left int) (lo, r int, ok bool) {
+	hSize, xs := len(f.h), f.xStart
+	if xs+hSize > len(x) || hSize&(g-1) != 0 || (xs >= f.x2Lo && xs < f.x2Hi) {
+		return 0, 0, false
+	}
+	// The samples that follow have the start indices below xs, down to
+	// zero; none of their windows wraps.
+	r = min(left, xs+1, dlyX2Run)
+	return xs + 1 - r, r, true
+}
+
+// dlyX2Tables2 fills the tables of x*x sums of two filters in one go when
+// both need one for runs of the same length, so that a kernel can
+// interleave their lane chains.
+func dlyX2Tables2(g int, fa, fb *dlyLaneFilter, x []float32, left int) {
+	loA, rA, okA := fa.x2TableRun(g, x, left)
+	loB, rB, okB := fb.x2TableRun(g, x, left)
+	if !okA || !okB || rA != rB || len(fa.h) != len(fb.h) {
+		return
+	}
+	var lanesA, lanesB [dlyX2Run + 15]float32
+	dlyX2Lanes2(g, x[loA:], x[loB:], len(fa.h), lanesA[:rA+g-1], lanesB[:rA+g-1])
+	dlyX2Reduce(g, false, &lanesA, rA, &fa.x2)
+	dlyX2Reduce(g, false, &lanesB, rA, &fb.x2)
+	fa.x2Lo, fa.x2Hi = loA, loA+rA
+	fb.x2Lo, fb.x2Hi = loB, loB+rA
+}
+
 // dlyX2ReduceRef stores in out[j], for j < r, the reduction of the g lanes
 // lanes[j:j+g] (dlyReduceX2 with a zero tail).
 func dlyX2ReduceRef(g int, accErr bool, lanes *[dlyX2Run + 15]float32, r int, out *[dlyX2Run]float32) {
@@ -261,6 +299,93 @@ func dlyX2WrappedRef(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float3
 		dlySq(g, x[a:a+v1], &q)
 		dlySq(g, x[:v2], &q)
 		out[t] = dlyReduceX2(g, false, &q, dlyX2Tails(g, x, hSize, a))
+	}
+}
+
+// dlyMaxStreams is the largest number of stretches a lane's multi-stretch
+// x*x kernel (dlySqMulti) accumulates at once.
+const dlyMaxStreams = 5
+
+// dlySqMultiRef runs dlySq on the k stretches x[offs[t]:offs[t]+n] with the
+// accumulators acc[t].
+func dlySqMultiRef(g int, x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32, k int) {
+	for t := 0; t < k; t++ {
+		dlySq(g, x[offs[t]:offs[t]+n], &acc[t])
+	}
+}
+
+// dlyX2LanesMulti is dlyX2LanesRef with the chains of dlySqStreams(g)
+// groups of g lanes accumulated in one loop.
+func dlyX2LanesMulti(g int, x []float32, n int, lanes []float32) {
+	k := dlySqStreams(g)
+	last := len(lanes) - g
+	for o := 0; ; o += k * g {
+		var offs [dlyMaxStreams]int
+		for t := range offs {
+			offs[t] = min(o+g*min(t, k-1), last)
+		}
+		var acc [dlyMaxStreams][16]float32
+		dlySqMulti(g, x, n, &offs, &acc)
+		for t := 0; t < k; t++ {
+			copy(lanes[offs[t]:offs[t]+g], acc[t][:g])
+		}
+		if offs[k-1] == last {
+			return
+		}
+	}
+}
+
+// dlyX2WrappedMulti is dlyX2WrappedRef with dlySqStreams(g) windows
+// accumulated at a time. Each window is two stretches of whole groups (up to
+// the end of the buffer, then from its start) that feed its accumulators in
+// that order; the stretches of the windows of one batch are cut at each
+// other's ends, so that every call of the multi-stretch kernel advances all
+// of them by the same length.
+func dlyX2WrappedMulti(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) {
+	streams := dlySqStreams(g)
+	for t0 := 0; t0 < r; t0 += streams {
+		k := min(streams, r-t0)
+		var acc [dlyMaxStreams][16]float32
+		var pos, rem [dlyMaxStreams][2]int
+		var seg [dlyMaxStreams]int
+		for t := range pos {
+			// Windows beyond the last one repeat it; their sums are unused.
+			a := lo + t0 + min(t, k-1)
+			chunk1 := min(hSize, len(x)-a)
+			pos[t] = [2]int{a, 0}
+			rem[t] = [2]int{chunk1 &^ (g - 1), (hSize - chunk1) &^ (g - 1)}
+		}
+		for {
+			n := hSize
+			for t := range seg {
+				for seg[t] < 2 && rem[t][seg[t]] == 0 {
+					seg[t]++
+				}
+				if seg[t] == 2 {
+					n = 0
+					break
+				}
+				n = min(n, rem[t][seg[t]])
+			}
+			if n == 0 {
+				break
+			}
+			var offs [dlyMaxStreams]int
+			for t := range offs {
+				offs[t] = pos[t][seg[t]]
+				pos[t][seg[t]] += n
+				rem[t][seg[t]] -= n
+			}
+			dlySqMulti(g, x, n, &offs, &acc)
+		}
+		for t := 0; t < k; t++ {
+			// What is left of a window once another one has ended.
+			for ; seg[t] < 2; seg[t]++ {
+				p, n := pos[t][seg[t]], rem[t][seg[t]]
+				dlySq(g, x[p:p+n], &acc[t])
+			}
+			out[t0+t] = dlyReduceX2(g, false, &acc[t], dlyX2Tails(g, x, hSize, lo+t0+t))
+		}
 	}
 }
 
@@ -424,13 +549,9 @@ func (f *dlyLaneFilter) prepare(g int, x []float32, left int) {
 	f.np = 0
 	f.sTail = 0
 	if chunk1 == hSize && hSize&(g-1) == 0 {
-		if xs < f.x2Lo || xs >= f.x2Hi {
-			// The samples that follow have the start indices below xs, down
-			// to zero; none of their windows wraps.
-			r := min(left, xs+1, dlyX2Run)
-			lo := xs + 1 - r
+		if lo, r, ok := f.x2TableRun(g, x, left); ok {
 			dlyX2Sums(g, false, x[lo:], hSize, r, &f.x2)
-			f.x2Lo, f.x2Hi = lo, xs+1
+			f.x2Lo, f.x2Hi = lo, lo+r
 		}
 		f.x2Sum = f.x2[xs-f.x2Lo]
 		if !f.pend.active {
@@ -543,10 +664,47 @@ func dlyAxpyDotS2(g int, hA, xaA, xbA []float32, alphaA float32, accA *[16]float
 	}
 }
 
+// dlyAxpyDotDotS2 is dlyAxpyDotS on the filter A and dlyDotS on the filter
+// B, of the same length, at once.
+func dlyAxpyDotDotS2(g int, hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
+	hB, xB []float32, accB *[16]float32) {
+	if g == 4 {
+		dlyAxpyDotDotS2Neon(hA, xaA, xbA, alphaA, (*[4]float32)(accA[:4]), hB, xB, (*[4]float32)(accB[:4]))
+		return
+	}
+	dlyAxpyDotS(g, hA, xaA, xbA, alphaA, accA)
+	dlyDotS(g, hB, xB, accB)
+}
+
+// dlyRunPairSum is dlyRunPair for the common case that both filters have
+// one stretch over all of h, no tails, and the same kind of stretch, on
+// lanes with a two-filter Sum kernel, which starts from zero accumulators
+// and reduces in registers. It reports whether it ran.
+func dlyRunPairSum(g int, fa, fb *dlyLaneFilter, x []float32) bool {
+	pa, pb := &fa.pieces[0], &fb.pieces[0]
+	n := len(fa.h)
+	if fa.np != 1 || fb.np != 1 || pa.n != n || pb.n != n || len(fb.h) != n || pa.upd != pb.upd {
+		return false
+	}
+	var out [4]float32
+	if pa.upd {
+		if !dlyAxpyDotS2Sum(g, fa.h, x[pa.xa:pa.xa+n], x[pa.xb:pa.xb+n], fa.pend.alpha,
+			fb.h, x[pb.xa:pb.xa+n], x[pb.xb:pb.xb+n], fb.pend.alpha, &out) {
+			return false
+		}
+	} else if !dlyDotS2Sum(g, fa.h, x[pa.xb:pa.xb+n], fb.h, x[pb.xb:pb.xb+n], &out) {
+		return false
+	}
+	// The tails are empty: the sums are added to zero.
+	fa.s = fa.sTail + out[0]
+	fb.s = fb.sTail + out[2]
+	return true
+}
+
 // dlyRunPair is run for two filters at once: it walks the stretches of both
-// in step and hands equal lengths of the same kind (both with a fused
-// update, or both without) to the two-filter kernels. Each filter's
-// stretches still reach its accumulators in order.
+// in step and hands equal lengths to the two-filter kernel of their kinds
+// (each with or without a fused update). Each filter's stretches still
+// reach its accumulators in order.
 func dlyRunPair(g int, fa, fb *dlyLaneFilter, x []float32) {
 	accA, accB := &fa.acc, &fb.acc
 	dlyZeroAcc(accA)
@@ -566,14 +724,10 @@ func dlyRunPair(g int, fa, fb *dlyLaneFilter, x []float32) {
 				hb, x[pb.xa+ob:pb.xa+ob+n], xbB, fb.pend.alpha, accB)
 		case !pa.upd && !pb.upd:
 			dlyDotS2(g, ha, xbA, accA, hb, xbB, accB)
+		case pa.upd:
+			dlyAxpyDotDotS2(g, ha, x[pa.xa+oa:pa.xa+oa+n], xbA, fa.pend.alpha, accA, hb, xbB, accB)
 		default:
-			if pa.upd {
-				dlyAxpyDotS(g, ha, x[pa.xa+oa:pa.xa+oa+n], xbA, fa.pend.alpha, accA)
-				dlyDotS(g, hb, xbB, accB)
-			} else {
-				dlyDotS(g, ha, xbA, accA)
-				dlyAxpyDotS(g, hb, x[pb.xa+ob:pb.xa+ob+n], xbB, fb.pend.alpha, accB)
-			}
+			dlyAxpyDotDotS2(g, hb, x[pb.xa+ob:pb.xa+ob+n], xbB, fb.pend.alpha, accB, ha, xbA, accA)
 		}
 		if oa += n; oa == pa.n {
 			ia, oa = ia+1, 0
@@ -642,13 +796,18 @@ func dlyCoreLanes(g int, fa, fb *dlyLaneFilter, x2SumThreshold, smoothing float3
 	pair := fb != nil && dlyPairs(g)
 	for i, yi := range y {
 		left := len(y) - i
+		if fb != nil {
+			dlyX2Tables2(g, fa, fb, x, left)
+		}
 		fa.prepare(g, x, left)
 		if fb != nil {
 			fb.prepare(g, x, left)
 		}
 		switch {
 		case pair:
-			dlyRunPair(g, fa, fb, x)
+			if !dlyRunPairSum(g, fa, fb, x) {
+				dlyRunPair(g, fa, fb, x)
+			}
 		case fb != nil:
 			fa.run(g, x)
 			fb.run(g, x)

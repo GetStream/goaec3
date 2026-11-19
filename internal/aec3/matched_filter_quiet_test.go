@@ -275,7 +275,8 @@ func TestDlyQuietSkipStateMatchesNoSkip(t *testing.T) {
 		total.ran += st.ran
 		total.reported += st.reported
 		total.preEchoUpdates += st.preEchoUpdates
-		if c.excitationLimit == 150 || c.excitationLimit == 20 {
+		// The short run is too brief for every scenario to visit both sides.
+		if !testing.Short() && (c.excitationLimit == 150 || c.excitationLimit == 20) {
 			if st.skipped < numBlocks/30 || st.ran < numBlocks/30 || st.reported < numBlocks/60 {
 				t.Errorf("%v: scenario too one-sided: skipped %d, ran %d, lag reports %d", c, st.skipped, st.ran,
 					st.reported)
