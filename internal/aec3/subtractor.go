@@ -159,7 +159,7 @@ func (s *Subtractor) init(config *EchoCanceller3Config, numRenderChannels, numCa
 	s.config = *config
 	s.numCaptureChannels = numCaptureChannels
 	s.useCoarseFilterResetHangover = true
-	if numCaptureChannels > inlineChannels {
+	if numCaptureChannels > inlineChannelLimit {
 		s.more = &subMore{
 			refinedFrequencyResponses: make([][][FftLengthBy2Plus1]float32, numCaptureChannels),
 			refinedImpulseResponses:   make([][]float32, numCaptureChannels),

@@ -20,6 +20,7 @@ type BlockProcessorEchoRemover interface {
 // NewBlockProcessor creates are part of the BlockProcessor, which must not
 // be copied (its components refer to it).
 type BlockProcessor struct {
+	_ noCopy
 	// The components of NewBlockProcessorWithComponents; nil otherwise.
 	injected *blockProcessorComponents
 

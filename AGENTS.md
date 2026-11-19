@@ -162,20 +162,35 @@ burst they measure.
 
 ## Garbage collector footprint
 
-A canceller is long-lived state the garbage collector marks on every cycle;
-the cost is mostly the number of heap objects, then the pointers it follows.
-`TestNewFootprint` bounds the objects per canceller and `TestPointerSlots`
-the pointers; `BenchmarkGCMark -cpu 1` times a cycle with 1000 cancellers.
+A canceller is long-lived state the garbage collector marks on every cycle.
+What the mark costs, in this order: the pointer words it reads (every
+pointer word of a live object, nil or not; spread over a large object, each
+is a cache line of its own), the length of the object up to its last pointer
+word, and the number of heap objects. `TestPointerWords` bounds the pointer
+words of the canceller type and where the last one sits, `TestPointerSlots`
+the non-nil pointers of a canceller and `TestNewFootprint` its objects;
+`BenchmarkGCMark -cpu 1` times a cycle with 1000 cancellers (`mark-ns/op` is
+the mark phase alone).
 
 - Multi-dimensional buffers are one pointer-free array with views computed
   from the indices (`Frame.View`, `Block.View`, the rings' `At`, the matched
   filter's `filter(n)`), not slices of slices.
 - Components are held by value in their parent and set up in place by an
-  `init` method; `NewX` allocates one and calls it.
+  `init` method; `NewX` allocates one and calls it. A component copies the
+  config (as the C++ does) rather than pointing at it.
+- A struct declares its fields that hold pointers first (a component among
+  them keeps its own at its start) and its pointer-free state last, so the
+  pointers of a canceller sit together at its start and the rest is never
+  read.
 - Per-channel state of up to `inlineChannels` capture channels lives in
-  arrays of the component's own struct (`channelSlice`); buffers whose size
-  depends on the config share one allocation per component. A struct set up
-  this way must not be copied afterwards.
+  arrays of the component's own struct; the component derives the slice on
+  use (`channelState`) and keeps no pointer to it. What more channels need is
+  allocated behind one pointer (`more`) at the start of the component.
+  `TestEc3ChannelStateStorage` runs both forms against each other. Buffers
+  whose size depends on the config share one allocation per component.
+- The components that still hold a slice of their own struct
+  (`channelSlice`: the estimators of `AecState`, the alignment mixer) or a
+  pointer to themselves must not be copied once set up.
 
 ## Build and test
 

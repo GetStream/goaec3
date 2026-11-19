@@ -597,3 +597,134 @@ func TestAecStateObjects(t *testing.T) {
 		_ = a
 	}
 }
+
+// TestChannelState checks that channelState hands out the array of the
+// component for up to inlineChannels elements, and what moreChannels
+// allocated beyond.
+func TestChannelState(t *testing.T) {
+	var inline [inlineChannels]int
+	for n := 0; n <= inlineChannels+2; n++ {
+		more := moreChannels[int](n)
+		if (more == nil) != (n <= inlineChannels) {
+			t.Fatalf("%d channels: moreChannels returns %d elements", n, len(more))
+		}
+		s := channelState(&inline, n, more)
+		if len(s) != n || cap(s) != n {
+			t.Fatalf("%d channels: len %d cap %d", n, len(s), cap(s))
+		}
+		if n == 0 {
+			continue
+		}
+		s[0] = 7
+		if wantInline := n <= inlineChannels; (inline[0] == 7) != wantInline {
+			t.Fatalf("%d channels: inline %v, want %v", n, inline[0] == 7, wantInline)
+		}
+		inline[0] = 0
+	}
+}
+
+// TestEc3ChannelStateStorage runs cancellers of one and two capture channels
+// with their per-channel state in the components and with it allocated, as
+// with more than inlineChannels channels: the output, the linear output and
+// the metrics must be the same bit for bit. It covers both nearend
+// detectors and a nearend smoothing longer than the default.
+func TestEc3ChannelStateStorage(t *testing.T) {
+	frames := 500
+	if testing.Short() {
+		frames = 200
+	}
+	type result struct {
+		samples []float32
+		metrics []EchoControlMetrics
+	}
+	run := func(cfg *EchoCanceller3Config, rate, numRender, numCapture, limit int) result {
+		defer func(old int) { inlineChannelLimit = old }(inlineChannelLimit)
+		inlineChannelLimit = limit
+		nb := NumBandsForRate(rate)
+		ec := NewEchoCanceller3(cfg, nil, rate, numRender, numCapture)
+		sig := &ec3Signals{rng: rand.New(rand.NewSource(int64(rate + numCapture)))}
+		render := ec3MakeFrame(nb, numRender)
+		capture := ec3MakeFrame(nb, numCapture)
+		linear := make([][]float32, numCapture)
+		for ch := range linear {
+			linear[ch] = make([]float32, SplitBandSize)
+		}
+		var delayed [][]float32 // the lowest render band of the previous frames
+		var r result
+		for f := 0; f < frames; f++ {
+			level := 3000.0
+			if f%100 >= 80 {
+				level = 30
+			}
+			for b := range render {
+				for ch := range render[b] {
+					for k := range render[b][ch] {
+						render[b][ch][k] = sig.next(level)
+					}
+				}
+			}
+			delayed = append(delayed, append([]float32(nil), render[0][0]...))
+			for b := range capture {
+				for ch := range capture[b] {
+					for k := range capture[b][ch] {
+						var y float32
+						if b == 0 && f >= 2 {
+							y = float32(0.4+0.1*float32(ch)) * delayed[f-2][k]
+						}
+						// Nearend activity in the second half.
+						if f >= frames/2 {
+							y += sig.next(400)
+						}
+						capture[b][ch][k] = y
+					}
+				}
+			}
+			ec.AnalyzeRender(render)
+			ec.ProcessCapture(capture, linear, f == frames/3)
+			for b := range capture {
+				for ch := range capture[b] {
+					r.samples = append(r.samples, capture[b][ch]...)
+				}
+			}
+			for ch := range linear {
+				r.samples = append(r.samples, linear[ch]...)
+			}
+			if f%10 == 0 {
+				r.metrics = append(r.metrics, ec.GetMetrics())
+			}
+		}
+		return r
+	}
+	configs := map[string]func(*EchoCanceller3Config){
+		"default": func(*EchoCanceller3Config) {},
+		"subband_nearend": func(c *EchoCanceller3Config) {
+			c.Suppressor.UseSubbandNearendDetection = true
+		},
+		"long_nearend_average": func(c *EchoCanceller3Config) {
+			c.Suppressor.NearendAverageBlocks = 8
+		},
+	}
+	for name, set := range configs {
+		for _, rate := range []int{16000, 48000} {
+			for numCapture := 1; numCapture <= inlineChannels; numCapture++ {
+				cfg := DefaultEchoCanceller3Config()
+				cfg.Filter.ExportLinearAecOutput = true
+				set(&cfg)
+				inline := run(&cfg, rate, 1, numCapture, inlineChannels)
+				allocated := run(&cfg, rate, 1, numCapture, 0)
+				for i := range inline.samples {
+					if math.Float32bits(inline.samples[i]) != math.Float32bits(allocated.samples[i]) {
+						t.Fatalf("%s, %d Hz, %d capture channels: sample %d differs with allocated channel state",
+							name, rate, numCapture, i)
+					}
+				}
+				for i := range inline.metrics {
+					if inline.metrics[i] != allocated.metrics[i] {
+						t.Fatalf("%s, %d Hz, %d capture channels: metrics %d differ with allocated channel state: %+v, %+v",
+							name, rate, numCapture, i, inline.metrics[i], allocated.metrics[i])
+					}
+				}
+			}
+		}
+	}
+}

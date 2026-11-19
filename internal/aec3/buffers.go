@@ -48,6 +48,10 @@ func (r *ringIndex) DecReadIndex()               { r.Read = r.DecIndex(r.Read) }
 // is allocated.
 const inlineChannels = 2
 
+// inlineChannelLimit is inlineChannels. Tests lower it, so that a component
+// with few channels allocates its per-channel state as one with many does.
+var inlineChannelLimit = inlineChannels
+
 // channelSlice returns n elements of state (usually one per capture
 // channel): inline[:n] when they fit and a new array otherwise. inline is an
 // array of the struct that keeps the result, so that the state of a
@@ -81,11 +85,18 @@ func channelState[T any](inline *[inlineChannels]T, n int, more []T) []T {
 // moreChannels returns the n elements that channelState hands out when they
 // do not fit inline, and nil when they do.
 func moreChannels[T any](n int) []T {
-	if n > inlineChannels {
+	if n > inlineChannelLimit {
 		return make([]T, n)
 	}
 	return nil
 }
+
+// noCopy marks a struct that must not be copied once it is set up, because
+// it holds pointers to itself: go vet (copylocks) reports the copies.
+type noCopy struct{}
+
+func (*noCopy) Lock()   {}
+func (*noCopy) Unlock() {}
 
 // BlockBuffer is a ring of Blocks (block_buffer.h). The slots share one
 // pointer-free backing array; At returns a view of one slot.

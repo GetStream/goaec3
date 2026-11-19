@@ -207,7 +207,7 @@ func (s *SuppressionGain) init(config *EchoCanceller3Config, optimization Aec3Op
 	var smoother movingAverageState
 	memorySize := smoother.init(FftLengthBy2Plus1, config.Suppressor.NearendAverageBlocks)
 	s.nearendMemorySize = memorySize
-	if numCaptureChannels > inlineChannels || memorySize > sgNearendMemoryInline {
+	if numCaptureChannels > inlineChannelLimit || memorySize > sgNearendMemoryInline {
 		s.more = &sgMore{
 			channels:      moreChannels[sgChannel](numCaptureChannels),
 			nearendMemory: make([]float32, numCaptureChannels*memorySize),

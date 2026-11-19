@@ -14,6 +14,7 @@ const (
 // extracted with a specified delay (render_delay_buffer.h; this is the
 // RenderDelayBufferImpl of render_delay_buffer.cc).
 type RenderDelayBuffer struct {
+	_                                          noCopy
 	optimization                               Aec3Optimization
 	config                                     *EchoCanceller3Config // shared, never modified
 	renderLinearAmplitudeGain                  float32

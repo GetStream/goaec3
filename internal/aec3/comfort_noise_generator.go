@@ -104,7 +104,7 @@ func (c *ComfortNoiseGenerator) init(config *EchoCanceller3Config, optimization 
 		noiseFloor:         supGetNoiseFloorFactor(config.ComfortNoise.NoiseFloorDbfs),
 		hasN2Initial:       true,
 	}
-	if numCaptureChannels > inlineChannels {
+	if numCaptureChannels > inlineChannelLimit {
 		c.more = &cngMore{
 			n2Initial:  make([][FftLengthBy2Plus1]float32, numCaptureChannels),
 			y2Smoothed: make([][FftLengthBy2Plus1]float32, numCaptureChannels),

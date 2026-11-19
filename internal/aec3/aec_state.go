@@ -165,6 +165,7 @@ func (s *stSaturationDetector) Update(x *Block, saturatedCapture, usableLinearEs
 // AecState mirrors aec_state.h: the state and the conditions for the echo
 // removal functionality. Field trials are at their defaults.
 type AecState struct {
+	_                                           noCopy
 	config                                      *EchoCanceller3Config // shared, never modified
 	numCaptureChannels                          int
 	deactivateInitialStateResetAtEchoPathChange bool

@@ -2,9 +2,11 @@ package goaec3
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"runtime"
 	"runtime/metrics"
+	"strconv"
 	"testing"
 )
 
@@ -44,7 +46,7 @@ func footprint(t testing.TB, rate, ch int) (bytes, objects uint64) {
 
 // footprintObjectLimits bounds the heap objects per canceller of each
 // footprintCases entry.
-var footprintObjectLimits = []uint64{63, 69, 80}
+var footprintObjectLimits = []uint64{13, 16, 16}
 
 // TestNewFootprint reports the live heap per canceller and bounds the number
 // of heap objects, which sets most of the mark cost of a GC cycle with many
@@ -136,11 +138,11 @@ func hasPointers(t reflect.Type) bool {
 // TestPointerSlots bounds the pointers the garbage collector follows per
 // canceller. The frames, the framing buffers, the render rings, the matched
 // filters and the adaptive filter coefficients are pointer-free arrays with
-// computed views, so the count does not grow with the buffer sizes. Many of
+// computed views, so the count does not grow with the buffer sizes. Some of
 // the remaining pointers are slices of a component over arrays of its own
 // struct (see channelSlice in internal/aec3), which lead to no other object.
 func TestPointerSlots(t *testing.T) {
-	limits := []int{124, 130, 150}
+	limits := []int{60, 64, 77}
 	for i, c := range footprintCases {
 		ec, err := New(DefaultConfig(), c.rate, c.ch, c.ch)
 		if err != nil {
@@ -150,6 +152,128 @@ func TestPointerSlots(t *testing.T) {
 		t.Logf("%s: %d pointer slots per canceller", c.name, n)
 		if n > limits[i] {
 			t.Errorf("%s: %d pointer slots per canceller, want at most %d", c.name, n, limits[i])
+		}
+	}
+}
+
+// pointerWords returns the number of pointer words of a value of type t (a
+// slice has one, an interface two) and the offset after the last of them.
+func pointerWords(t reflect.Type) (words int, end uintptr) {
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.String, reflect.Map, reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return 1, 8
+	case reflect.Interface:
+		return 2, 16
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if n, e := pointerWords(f.Type); n > 0 {
+				words += n
+				end = f.Offset + e
+			}
+		}
+	case reflect.Array:
+		if n, e := pointerWords(t.Elem()); n > 0 {
+			words = n * t.Len()
+			end = uintptr(t.Len()-1)*t.Elem().Size() + e
+		}
+	}
+	return words, end
+}
+
+// TestPointerWords bounds what the garbage collector reads of a canceller,
+// whatever its configuration: it reads every pointer word of the object, nil
+// or not, and walks the object up to the last of them. Pointer words spread
+// over the object cost a cache line each, which is most of the mark cost of
+// a canceller, so the components keep theirs at their start, and the
+// components without pointers come last.
+func TestPointerWords(t *testing.T) {
+	if strconv.IntSize != 64 {
+		t.Skip("the bounds are for 64-bit pointers")
+	}
+	const maxWords, maxEnd = 84, 34000
+	typ := reflect.TypeOf(EchoCanceller{})
+	words, end := pointerWords(typ)
+	t.Logf("%d pointer words, the last one ends at byte %d of %d", words, end, typ.Size())
+	if words > maxWords {
+		t.Errorf("%d pointer words per canceller, want at most %d", words, maxWords)
+	}
+	if end > maxEnd {
+		t.Errorf("the pointers of a canceller end at byte %d, want at most %d", end, maxEnd)
+	}
+}
+
+// TestCaptureChannelStates checks that the per-channel state of the capture
+// channels behaves alike whether it is part of the components (up to two
+// channels) or allocated (more): with the same signal in every capture
+// channel, the linear output of the first channel is that of a canceller
+// with one capture channel. (This holds for the first channel and the linear
+// output only: the channels are not processed independently of each other,
+// and after the suppressor they draw their comfort noise from one
+// generator.)
+func TestCaptureChannelStates(t *testing.T) {
+	frames := 400
+	if testing.Short() {
+		frames = 150
+	}
+	for _, rate := range []int{16000, 48000} {
+		n := rate / 100
+		run := func(channels int) [][]float32 {
+			cfg := DefaultConfig()
+			cfg.Filter.ExportLinearAecOutput = true
+			ec, err := New(cfg, rate, 1, channels)
+			if err != nil {
+				t.Fatal(err)
+			}
+			render := ec3Frame(1, n)
+			capture := ec3Frame(channels, n)
+			linear := ec3Frame(channels, LinearOutputFrameSize)
+			out := make([][]float32, channels)
+			var state uint32 = 1
+			noise := func() float32 {
+				state = state*1664525 + 1013904223
+				return float32(int32(state>>8)%4096-2048) / 8192
+			}
+			history := make([]float32, 0, frames*n)
+			for f := 0; f < frames; f++ {
+				for i := range render[0] {
+					render[0][i] = noise()
+				}
+				history = append(history, render[0]...)
+				for i := range capture[0] {
+					var y float32
+					if k := len(history) - n + i - rate/50; k >= 0 {
+						y = 0.5 * history[k]
+					}
+					// Nearend speech in the second half.
+					if f >= frames/2 {
+						y += 0.1 * noise()
+					}
+					for ch := range capture {
+						capture[ch][i] = y
+					}
+				}
+				if err := ec.AnalyzeRender(render); err != nil {
+					t.Fatal(err)
+				}
+				if err := ec.ProcessCaptureWithLinearOutput(capture, linear); err != nil {
+					t.Fatal(err)
+				}
+				for ch := range capture {
+					out[ch] = append(out[ch], linear[ch]...)
+				}
+			}
+			return out
+		}
+		want := run(1)[0]
+		for channels := 2; channels <= 4; channels++ {
+			got := run(channels)[0]
+			for i := range want {
+				if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
+					t.Fatalf("%d Hz, %d capture channels: the linear output of the first channel differs from that of one channel at sample %d",
+						rate, channels, i)
+				}
+			}
 		}
 	}
 }

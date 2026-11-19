@@ -15,6 +15,7 @@ type EchoControlMetrics struct {
 // up to inlineChannels capture channels. The components that hold pointers
 // come first.
 type EchoRemover struct {
+	_                     noCopy
 	more                  *erMore // with more than inlineChannels channels
 	aecState              AecState
 	subtractor            Subtractor
@@ -115,7 +116,7 @@ func (e *EchoRemover) init(config *EchoCanceller3Config, sampleRateHz, numRender
 	e.captureOutputUsed = true
 	e.refinedFilterOutputLastSelected = true
 	e.metrics.resetMetrics()
-	if n := numCaptureChannels; n > inlineChannels {
+	if n := numCaptureChannels; n > inlineChannelLimit {
 		e.more = &erMore{
 			channels:             make([]erChannel, n),
 			Y2:                   make([][FftLengthBy2Plus1]float32, n),
