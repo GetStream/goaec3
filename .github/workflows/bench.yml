@@ -149,10 +149,10 @@ jobs:
       - name: Kernel benchmarks
         run: |
           kb='BenchmarkMatchedFilterCore$|BenchmarkMatchedFilterCoreUpdating$|BenchmarkAfir|BenchmarkKern$|BenchmarkFmaf$|BenchmarkAec3Fft'
-          ob='BenchmarkFft$/lane|BenchmarkInverseFft$/lane|BenchmarkFftPair$'
+          ob='BenchmarkFft$/lane|BenchmarkInverseFft$/lane|BenchmarkFftSplit$'
           : >kern.txt
           : >basekern.txt
-          for _ in $(seq 5); do
+          for _ in $(seq 3); do
             if [ -n "$BASE" ]; then
               (cd internal/aec3 && ../../basekern.test -test.run '^$' -test.bench "$kb" -test.count 1) | tee -a basekern.txt
               (cd internal/bands && ../../basebandskern.test -test.run '^$' -test.bench 'ThreeBandFilterBank.*/dispatch' -test.count 1) | grep '^Benchmark' | tee -a basekern.txt
@@ -172,6 +172,33 @@ jobs:
           ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc/.*/go' \
             -test.benchtime 20000x -test.count 1 -test.cpuprofile cpu.pprof >/dev/null
           go tool pprof -top -nodecount=40 -focus='goaec3' bench.test cpu.pprof | tee pprof.txt
+      # Per-symbol CPU time of the Go side and of the C++ side with perf's
+      # software clock (hosted runners expose no hardware counters). The
+      # step is informative: it does not fail the job where perf is missing.
+      - name: Profile both sides (perf)
+        continue-on-error: true
+        run: |
+          : >perf_go.txt
+          : >perf_cpp.txt
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y linux-tools-common linux-tools-generic "linux-tools-$(uname -r)" >/dev/null 2>&1 ||
+            sudo apt-get install -y linux-tools-common linux-tools-generic >/dev/null 2>&1 || true
+          perf=$(command -v perf || true)
+          if ! "$perf" --version >/dev/null 2>&1; then
+            perf=$(find /usr/lib/linux-tools -name perf -type f 2>/dev/null | sort | tail -1)
+          fi
+          "$perf" --version
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+          for side in go libwebrtc; do
+            "$perf" record -q -F 4000 -e cpu-clock -o "perf_$side.data" ./bench.test -test.run '^$' \
+              -test.bench "BenchmarkEc3VsLibwebrtc/.*/$side\$" -test.benchtime 20000x -test.count 1 >/dev/null
+          done
+          "$perf" report -i perf_go.data --stdio --no-children --sort symbol --percent-limit 0.04 2>/dev/null |
+            grep -v '^$' | cut -c1-160 >perf_go.txt
+          "$perf" report -i perf_libwebrtc.data --stdio --no-children --sort symbol --percent-limit 0.04 2>/dev/null |
+            grep -v '^$' | cut -c1-160 >perf_cpp.txt
+          head -60 perf_go.txt
+          head -60 perf_cpp.txt
       - name: Summary
         run: |
           awk -f "$RUNNER_TEMP/table.awk" bench.txt | LC_ALL=C sort >head.rows
@@ -201,6 +228,22 @@ jobs:
             head -50 pprof.txt
             echo '```'
             echo "</details>"
+            if [ -s perf_cpp.txt ]; then
+              echo
+              echo "<details><summary>perf, C++ side (libwebrtc benchmark)</summary>"
+              echo
+              echo '```'
+              head -90 perf_cpp.txt
+              echo '```'
+              echo "</details>"
+              echo
+              echo "<details><summary>perf, Go side</summary>"
+              echo
+              echo '```'
+              head -90 perf_go.txt
+              echo '```'
+              echo "</details>"
+            fi
           } >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
@@ -214,6 +257,8 @@ jobs:
             cpu.txt
             cpu.pprof
             pprof.txt
+            perf_go.txt
+            perf_cpp.txt
             rows.csv
             bench.test
 
