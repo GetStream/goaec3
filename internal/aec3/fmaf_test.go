@@ -161,9 +161,89 @@ func fmafOperands(rng *rand.Rand, i int) (a, b, c float32) {
 	return a, b, c
 }
 
-// TestFmafCorrectlyRounded checks fmaf (and its slow path) against exact
-// arithmetic on GOAEC3_FMAF_N cases (default 3e6; 3e5 with -short), spread
-// over GOMAXPROCS workers.
+// fmafSpecials are the special values of the fmaf test corpus.
+var fmafSpecials = [...]float32{0, float32(math.Copysign(0, -1)), 1, -1, float32(math.Inf(1)), float32(math.Inf(-1)),
+	float32(math.NaN()), math.MaxFloat32, -math.MaxFloat32, math.SmallestNonzeroFloat32,
+	-math.SmallestNonzeroFloat32, 0x1p-126, -0x1p-126, math.Float32frombits(0x007fffff), 0x1p64, 0x1p-75, 0.5,
+	math.Float32frombits(0x7fa00000), 0x1p-149 * 3, -0x1p-75, 0x1p127, 0x1p-64}
+
+// fmafBoundaryCases calls f with operands whose exact a*b + c lies on, just
+// below and just above every kind of float32 rounding boundary:
+//
+//   - every triple of special values (zeros of both signs, infinities, NaNs,
+//     the largest and smallest magnitudes);
+//   - for a float32 value v of every exponent, subnormals included, and
+//     mantissas of both parities, the midpoints next to v: c = v and
+//     a*b = +-hulp exactly (a tie), and a*b = +-hulp*(1 - 2^-46) (short of
+//     the tie by less than the float64 sum can hold, the double-rounding
+//     case); with v's neighbour as c the same product comes from the other
+//     side of the midpoint. hulp, half the spacing at v, is the product of
+//     two powers of two, and (1 + 2^-23)*(1 - 2^-23) = 1 - 2^-46;
+//   - the same around the overflow boundary 2^128 - 2^103, on products that
+//     alone overflow float32, and on sums that cancel to zero.
+func fmafBoundaryCases(f func(a, b, c float32)) {
+	for _, a := range fmafSpecials {
+		for _, b := range fmafSpecials {
+			for _, c := range fmafSpecials {
+				f(a, b, c)
+			}
+		}
+	}
+	const up, down = 1 + 0x1p-23, 1 - 0x1p-23 // up*down = 1 - 2^-46
+	mantissas := [...]uint32{0, 1, 2, 3, 0x400000, 0x400001, 0x555555, 0x2aaaaa, 0x7ffffe, 0x7fffff}
+	for exp := uint32(0); exp < 255; exp++ {
+		for _, m := range mantissas {
+			v := math.Float32frombits(exp<<23 | m)
+			// Half the spacing at v as a product of two float32 powers of
+			// two: 2^(e-24) for normal v, 2^-150 below.
+			e := int(exp) - 127
+			if exp == 0 {
+				e = -126
+			}
+			h1 := float32(math.Ldexp(1, (e-24)/2))
+			h2 := float32(math.Ldexp(1, (e-24)-(e-24)/2))
+			if h1 == 0 || h2 == 0 || math.IsInf(float64(h1), 0) || math.IsInf(float64(h2), 0) {
+				panic("fmafBoundaryCases: half spacing is not a product of float32 powers of two")
+			}
+			for _, sv := range [2]float32{v, -v} {
+				for _, sh := range [2]float32{h1, -h1} {
+					f(sh, h2, sv)           // the tie
+					f(sh*up, h2*down, sv)   // just short of it
+					f(sh*up, h2*up, sv)     // beyond it, by more than float64 loses
+					f(sh*down, h2*down, sv) // short of it by 2^-23
+					f(sh*3, h2, sv)         // three halves: the next tie but one
+					f(sh*up, h2*down*3, sv)
+					f(sh, h2*2, sv) // a full step: exact
+					f(sh*up, h2*down*2, sv)
+				}
+			}
+		}
+	}
+	// Products that overflow float32 on their own, and cancellation.
+	for _, c := range [...]float32{0, math.MaxFloat32, -math.MaxFloat32, 0x1p103, -0x1p103, 0x1p104, -0x1p104,
+		0x1p127, -0x1p127, float32(math.Inf(1)), float32(math.Inf(-1))} {
+		for _, a := range [...]float32{0x1p64, -0x1p64, 0x1p64 * up, 0x1p64 * down, math.MaxFloat32, 0x1p100} {
+			for _, b := range [...]float32{0x1p64, 0x1p64 * down, 0x1p63, 0x1p63 * up, -0x1p64, 2, 0x1p28} {
+				f(a, b, c)
+			}
+		}
+	}
+	for _, a := range [...]float32{1, up, down, 3, 0x1p-75, 0x1p-75 * up, 0x1p60, math.MaxFloat32, 0x1p-149} {
+		for _, b := range [...]float32{1, up, down, -1, 0x1p-74, 0x1p60 * down, 0x1p-149} {
+			p := float32(float64(a) * float64(b))
+			for _, c := range [...]float32{-p, p, math.Float32frombits(math.Float32bits(-p) + 1),
+				math.Float32frombits(math.Float32bits(-p) - 1)} {
+				f(a, b, c)
+				f(-a, b, c)
+			}
+		}
+	}
+}
+
+// TestFmafCorrectlyRounded checks fmaf, its slow path and the rounded
+// float64 sum wherever fmafTie does not flag it against exact arithmetic:
+// on the boundary cases of fmafBoundaryCases and on GOAEC3_FMAF_N random
+// cases (default 3e6; 3e5 with -short), spread over GOMAXPROCS workers.
 func TestFmafCorrectlyRounded(t *testing.T) {
 	n := 3_000_000
 	if testing.Short() {
@@ -191,7 +271,13 @@ func TestFmafCorrectlyRounded(t *testing.T) {
 	var failures int
 	check := func(a, b, c float32, z, t2 *big.Float) {
 		want := fmafExact(a, b, c, z, t2)
-		for _, got := range [2]float32{fmaf(a, b, c), fmafSlow(a, b, c)} {
+		// The rounded float64 sum, where fmafTie does not flag it.
+		sum := fmafSum(a, b, c)
+		inline := float32(sum)
+		if fmafTie(sum, float64(inline)) {
+			inline = want
+		}
+		for _, got := range [3]float32{fmaf(a, b, c), fmafSlow(a, b, c), inline} {
 			if !kernSameBits(got, want) {
 				mu.Lock()
 				if failures == 0 {
@@ -210,6 +296,10 @@ func TestFmafCorrectlyRounded(t *testing.T) {
 	for _, v := range fixed {
 		check(v[0], v[1], v[2], &z, &t2)
 	}
+	fmafBoundaryCases(func(a, b, c float32) {
+		check(a, b, c, &z, &t2)
+		check(b, a, c, &z, &t2)
+	})
 	workers := runtime.GOMAXPROCS(0)
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {

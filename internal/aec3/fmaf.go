@@ -84,6 +84,46 @@ func fmafHard(s float64) bool {
 	return bits&0x1FFFFFFF == 0x10000000 || bits<<1-1 < 897<<53-1
 }
 
+// fmafTie is the hard-case test of the loops that keep r = float32(s) and its
+// widening t = float64(r) anyway (the accumulator of a fused chain, the
+// operand of the next product). For s = fmafSum(a, b, c) it reports whether
+// r may differ from fmaf(a, b, c); it holds for every float32 rounding
+// boundary:
+//
+//   - A boundary has at most 25 significant bits (the midpoint of two
+//     adjacent float32 values has one bit more than they have, at most 25
+//     for normal and at most 24 for subnormal neighbours; 2^128 - 2^103 has
+//     25) and a magnitude of at least 2^-150, so it is a normal float64 whose
+//     28 low significand bits are zero.
+//   - A boundary is not a float32 value: a midpoint lies strictly between
+//     two adjacent ones, and 2^128 - 2^103 lies between MaxFloat32 and the
+//     overflow to Inf. So t != s, also when r overflowed to Inf.
+//
+// Sums that are float32 values (zeros, short sums, Inf) have t == s and
+// stay on the fast path, and so does a NaN (s != s); about one random sum in
+// 2^28 has the 28 zero bits. One integer test decides almost every sum, and
+// the float comparison reuses t.
+//
+// Used directly as an `if` condition (alone or joined by ||), the test
+// compiles to branches; no flag is materialized. A loop computes the sums of
+// a group, then tests them, and on a hit hands the rest of the work to a
+// //go:noinline function that calls fmaf per element.
+//
+// math.FMA does not help here. float32(math.FMA(float64(a), float64(b),
+// float64(c))) is float32(fl64(a*b + c)): the float64 product is exact, so
+// the hardware fused operation returns the very s of fmafSum, with the same
+// double rounding at the same boundaries, and the test is still needed. Where
+// the CPU lacks FMA, math.FMA is a software routine. A float64 sum that
+// rounds straight to float32 (round to odd) needs the TwoSum error term of
+// fmafSlow for every element.
+func fmafTie(s, t float64) bool {
+	return math.Float64bits(s)&fmafLowBits == 0 && t != s && s == s
+}
+
+// fmafLowBits are the float64 significand bits that are zero in every
+// float32 rounding boundary.
+const fmafLowBits = 0x0FFFFFFF
+
 // fmafSlow is fmaf without the fast path. It computes the float64 sum with
 // an exact error term (TwoSum) and rounds it to odd, which makes the final
 // rounding to float32 correct (53 >= 24+2 significand bits, also for float32
