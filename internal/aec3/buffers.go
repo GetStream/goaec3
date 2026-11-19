@@ -48,11 +48,12 @@ func (r *ringIndex) DecReadIndex()               { r.Read = r.DecIndex(r.Read) }
 // is allocated.
 const inlineChannels = 2
 
-// channelSlice returns n per-channel elements: inline[:n] when they fit and
-// a new array otherwise. inline is an array of the struct that keeps the
-// result, so that the state of a component lives in the heap object of the
-// component, and a struct that holds such a slice must not be copied once it
-// is set up (the copy would share the state of the original).
+// channelSlice returns n elements of state (usually one per capture
+// channel): inline[:n] when they fit and a new array otherwise. inline is an
+// array of the struct that keeps the result, so that the state of a
+// component lives in the heap object of the component, and a struct that
+// holds such a slice must not be copied once it is set up (the copy would
+// share the state of the original).
 func channelSlice[T any](inline []T, n int) []T {
 	if n <= len(inline) {
 		return inline[:n:n]

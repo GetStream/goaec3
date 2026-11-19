@@ -43,7 +43,7 @@ func footprint(t testing.TB, rate, ch int) (bytes, objects uint64) {
 
 // footprintObjectLimits bounds the heap objects per canceller of each
 // footprintCases entry.
-var footprintObjectLimits = []uint64{65, 71, 84}
+var footprintObjectLimits = []uint64{63, 69, 80}
 
 // TestNewFootprint reports the live heap per canceller and bounds the number
 // of heap objects, which sets most of the mark cost of a GC cycle with many

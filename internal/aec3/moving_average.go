@@ -8,17 +8,26 @@ type MovingAverage struct {
 	scaling  float32
 	memory   []float32
 	memIndex int
+
+	// The memory of an average of up to movingAverageInlineSize samples.
+	inline [movingAverageInlineSize]float32
 }
 
+// movingAverageInlineSize is the memory of the suppressor's default nearend
+// smoothing: FftLengthBy2Plus1 bins over 4 blocks.
+const movingAverageInlineSize = FftLengthBy2Plus1 * 3
+
 // NewMovingAverage accepts inputs of length numElem and averages over memLen
-// inputs.
+// inputs. A memory of up to movingAverageInlineSize samples lives in the
+// MovingAverage, which must not be copied (see channelSlice).
 func NewMovingAverage(numElem, memLen int) *MovingAverage {
-	return &MovingAverage{
+	m := &MovingAverage{
 		numElem: numElem,
 		memLen:  memLen - 1,
 		scaling: 1 / float32(memLen),
-		memory:  make([]float32, numElem*(memLen-1)),
 	}
+	m.memory = channelSlice(m.inline[:], numElem*(memLen-1))
+	return m
 }
 
 // Average stores the average of input and the memLen-1 previous inputs in

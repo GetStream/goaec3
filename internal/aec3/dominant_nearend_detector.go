@@ -24,12 +24,20 @@ type DominantNearendDetector struct {
 	nearendState          bool
 	triggerCounters       []int
 	holdCounters          []int
+
+	// The counters above for up to inlineChannels channels.
+	inline struct {
+		triggerCounters [inlineChannels]int
+		holdCounters    [inlineChannels]int
+	}
 }
 
 var _ NearendDetector = (*DominantNearendDetector)(nil)
 
 func NewDominantNearendDetector(config *DominantNearendDetectionConfig, numCaptureChannels int) *DominantNearendDetector {
-	return &DominantNearendDetector{
+	// The counters live in the detector, which must not be copied (see
+	// channelSlice).
+	d := &DominantNearendDetector{
 		enrThreshold:          config.EnrThreshold,
 		enrExitThreshold:      config.EnrExitThreshold,
 		snrThreshold:          config.SnrThreshold,
@@ -37,9 +45,10 @@ func NewDominantNearendDetector(config *DominantNearendDetectionConfig, numCaptu
 		triggerThreshold:      config.TriggerThreshold,
 		useDuringInitialPhase: config.UseDuringInitialPhase,
 		numCaptureChannels:    numCaptureChannels,
-		triggerCounters:       make([]int, numCaptureChannels),
-		holdCounters:          make([]int, numCaptureChannels),
 	}
+	d.triggerCounters = channelSlice(d.inline.triggerCounters[:], numCaptureChannels)
+	d.holdCounters = channelSlice(d.inline.holdCounters[:], numCaptureChannels)
+	return d
 }
 
 func (d *DominantNearendDetector) IsNearendState() bool { return d.nearendState }
