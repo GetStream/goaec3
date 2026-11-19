@@ -71,15 +71,82 @@ func ec3SplitFrame(frame []float32, numCh int, dst [][]float32) {
 	}
 }
 
+// ec3BenchScenario returns the bench signal with one side replaced, so the
+// states a real call spends most of its time in are timed as well:
+//
+//   - "renderZero": digital silence on the render side, near-end noise on
+//     the capture side;
+//   - "renderQuiet": comfort noise at about -70 dBFS on the render side,
+//     near-end noise on the capture side;
+//   - "captureZero": the bench render signal, digital silence on the capture
+//     side.
+//
+// The empty scenario is the bench signal itself.
+func ec3BenchScenario(scenario string, render0, capture0 [][]float32) (render, capture [][]float32) {
+	if scenario == "" {
+		return render0, capture0
+	}
+	rng := rand.New(rand.NewSource(11))
+	render = make([][]float32, len(render0))
+	capture = make([][]float32, len(capture0))
+	for f := range render0 {
+		render[f] = append([]float32(nil), render0[f]...)
+		capture[f] = append([]float32(nil), capture0[f]...)
+		switch scenario {
+		case "renderZero":
+			clear(render[f])
+			for i := range capture[f] {
+				capture[f][i] = float32(0.05 * rng.NormFloat64())
+			}
+		case "renderQuiet":
+			for i := range render[f] {
+				render[f][i] = float32(0.0003 * rng.NormFloat64())
+			}
+			for i := range capture[f] {
+				capture[f][i] = float32(0.05 * rng.NormFloat64())
+			}
+		case "captureZero":
+			clear(capture[f])
+		default:
+			panic("unknown scenario " + scenario)
+		}
+	}
+	return render, capture
+}
+
 // BenchmarkEc3VsLibwebrtc reports ns per 10 ms frame (AnalyzeRender +
 // ProcessCapture) for the Go public API and for libwebrtc's EchoCanceller3
-// through AudioBuffer, on identical converged input.
+// through AudioBuffer, on identical input: the converged bench signal
+// (cases named <rate>_<channels>) and the scenarios of ec3BenchScenario
+// (cases named <rate>_<channels>_<scenario>).
 func BenchmarkEc3VsLibwebrtc(b *testing.B) {
 	const warmup = 600
 	const frames = 1600
-	for _, tc := range []struct{ rate, ch int }{{16000, 1}, {48000, 1}, {48000, 2}} {
-		render, capture := ec3BenchSignal(tc.rate, tc.ch, frames)
+	type benchCase struct {
+		rate, ch int
+		scenario string
+	}
+	cases := []benchCase{{16000, 1, ""}, {48000, 1, ""}, {48000, 2, ""}}
+	for _, tc := range []benchCase{{16000, 1, ""}, {48000, 2, ""}} {
+		for _, sc := range []string{"renderZero", "renderQuiet", "captureZero"} {
+			cases = append(cases, benchCase{tc.rate, tc.ch, sc})
+		}
+	}
+	type sigKey struct{ rate, ch int }
+	type sig struct{ render, capture [][]float32 }
+	signals := map[sigKey]sig{}
+	for _, tc := range cases {
+		key := sigKey{tc.rate, tc.ch}
+		base, ok := signals[key]
+		if !ok {
+			base.render, base.capture = ec3BenchSignal(tc.rate, tc.ch, frames)
+			signals[key] = base
+		}
+		render, capture := ec3BenchScenario(tc.scenario, base.render, base.capture)
 		name := fmt.Sprintf("%dkHz_%dch", tc.rate/1000, tc.ch)
+		if tc.scenario != "" {
+			name += "_" + tc.scenario
+		}
 		b.Run(name+"/go", func(b *testing.B) {
 			ec, err := goaec3.New(goaec3.DefaultConfig(), tc.rate, tc.ch, tc.ch)
 			if err != nil {
