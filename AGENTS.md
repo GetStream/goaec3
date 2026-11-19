@@ -67,15 +67,40 @@ write changelog narrative.
 - Scalar float code inside a 256-bit section pays the same transition
   penalty as after it: a kernel takes the scalars it needs from vector
   lanes, or computes them before its first 256-bit operation or after
-  `ClearAVXUpperBits` (`internal/ooura/fft_pair_simd_amd64.go`).
+  `ClearAVXUpperBits` (`internal/ooura/fft_pair_simd_amd64.go`). Moves of
+  single floats count: the AVX2 three-band synthesis filters into a stack
+  array and interleaves it after `ClearAVXUpperBits`, which made it four
+  times faster on Zen 3.
 - amd64 folds only a constant displacement into an archsimd load or store;
   an offset that depends on a loop counter costs one or two LEAs per access.
   Loops with a fixed trip count are written as a closure that captures a
   vector and is called once per iteration with constant arguments: the
   compiler inlines closures that capture SIMD values (sixteen times the
   usual budget), and every access becomes base plus displacement
-  (`cftfsubTailSimd`, `afirAdaptTerms`). Check with `-gcflags=-S` that no
+  (`cftfsubTailSimd`, `afirAdaptTerms`). Such closures nest (a closure that
+  calls another four times still inlines); a function that takes the closure
+  as an argument does not inline it. Check with `-gcflags=-S` that no
   `funcN` call remains.
+- The slice helpers of `kern_bins*.go` are called on a block (64 samples) or
+  a spectrum (65 bins). A loop over slices pays a bounds check and an
+  address computation per slice and step, several times the vector
+  operation, so for those lengths a helper stores the 65th element and runs
+  its 64-element form (`kern_bins_simd64.go`; 256-bit forms in
+  `kern_bins_simd_amd64.go`), written with constant-offset closures.
+- The term kernels of the adaptive filter (`afirApplyTerms`,
+  `afirAdaptTerms`) pass over their (X, H) pairs once per block of bins, so
+  the per-pair bookkeeping runs four to eight times per call and the loop is
+  bound by instruction count: the pairs are listed once as two pointer
+  arrays on the stack (16 entries for short filters, zeroed per call) and a
+  pass loads two pointers per pair. Stepping the ring and the filter inside
+  the passes cost 26% more per ApplyFilter on Zen 3.
+- A loop that indexes a slice field of its receiver and stores through it
+  reloads the slice and checks the index on every access, because the store
+  may alias the receiver: take the element array through a local pointer
+  first (`SubbandErleEstimator`).
+- Sums that the C++ accumulates in element order keep that order; sums that
+  are independent of each other run side by side in one loop
+  (`FullBandErleEstimator.Update`), which divides the wait for the chains.
 - The FFT entry points of aec3 are `ooura.FftSplit`/`InverseFftSplit`: they
   move between a time-domain frame and the real/imaginary arrays of
   `FftData` directly (the last forward pass and the first inverse pass work
