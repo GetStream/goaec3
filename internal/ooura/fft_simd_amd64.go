@@ -25,6 +25,22 @@ func inverseFft(a *[128]float32) {
 	}
 }
 
+func fftSplit(a *[128]float32, re, im *[65]float32) {
+	if useSimd {
+		fftSplitSimd(a, re, im)
+	} else {
+		fftSplitFast(a, re, im)
+	}
+}
+
+func inverseFftSplit(re, im *[65]float32, a *[128]float32) {
+	if useSimd {
+		inverseFftSplitSimd(re, im, a)
+	} else {
+		inverseFftSplitFast(re, im, a)
+	}
+}
+
 // The shuffles below are SHUFPS, which stays in the floating-point domain
 // (an integer shuffle such as PSHUFD or PUNPCKLQDQ between float operations
 // costs a bypass delay on some cores).
@@ -45,3 +61,22 @@ func hi64(x, y vec) vec { return x.ConcatPermuteScalars(2, 3, 6, 7, y) }
 func even(x, y vec) vec { return x.ConcatPermuteScalars(0, 2, 4, 6, y) }
 
 func odd(x, y vec) vec { return x.ConcatPermuteScalars(1, 3, 5, 7, y) }
+
+// rev4 is {x3, x2, x1, x0}.
+func rev4(x vec) vec { return x.ConcatPermuteScalars(3, 2, 5, 4, x) }
+
+// revEven is {hi2, hi0, lo2, lo0}; revOdd is {hi3, hi1, lo3, lo1}: the even
+// (odd) lanes of lo followed by hi, reversed.
+func revEven(hi, lo vec) vec { return hi.ConcatPermuteScalars(2, 0, 6, 4, lo) }
+
+func revOdd(hi, lo vec) vec { return hi.ConcatPermuteScalars(3, 1, 7, 5, lo) }
+
+// loHi is {x0, x1, y2, y3}.
+func loHi(x, y vec) vec { return x.ConcatPermuteScalars(0, 1, 6, 7, y) }
+
+// ext3 is {x3, y0, y1, y2} (VPALIGNR; ConcatShiftBytesRight shifts its
+// argument down and its receiver in).
+func ext3(x, y vec) vec {
+	xb, yb := x.ToBits().ReshapeToUint8s(), y.ToBits().ReshapeToUint8s()
+	return yb.ConcatShiftBytesRight(xb, 12).ReshapeToUint32s().BitsToFloat32()
+}

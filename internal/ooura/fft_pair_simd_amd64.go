@@ -4,49 +4,56 @@ package ooura
 
 import "simd/archsimd"
 
-// Two transforms in one 256-bit pass (AVX2).
+// Two split transforms in one 256-bit pass (AVX2).
 //
 // Every operation of the archsimd kernel in fft_simd.go is local to one
 // 128-bit vector, so a 256-bit vector whose low half belongs to frame a and
 // whose high half belongs to frame b runs both transforms with the same
-// IEEE operation per element as two fftSimd calls: the grouped shuffles
-// (VSHUFPS, VPUNPCK*DQ on ymm) permute each 128-bit half on its own and the
-// tables repeat their four floats in both halves. TestPairMatchesSingle
-// checks the pair bit-exactly against two single transforms.
+// IEEE operation per element as two single transforms: the grouped shuffles
+// (VSHUFPS, VPUNPCK*DQ, VPALIGNR on ymm) permute each 128-bit half on its
+// own and the tables repeat their four floats in both halves.
+// TestPairMatchesSingle checks the pair bit-exactly against two single
+// transforms.
 //
 // The work buffers hold the two frames interleaved four floats at a time:
 // t[8v:8v+4] is a[4v:4v+4] and t[8v+4:8v+8] is b[4v:4v+4], so one 256-bit
 // load or store moves the same vector of both frames. The first pass of each
-// direction gathers the two frames into that layout and the last pass
-// scatters its results into a and b; the passes between work on whole
-// 256-bit vectors.
+// direction gathers its two inputs into that layout and the last pass
+// separates the results again: it pairs the vectors of two consecutive
+// iterations into one 256-bit store per frame (VPERM2F128), so the 256-bit
+// loads of whatever reads the results next find each of them in one store.
+//
+// Go's scalar float code is legacy-SSE encoded and must not run between the
+// first 256-bit operation and ClearAVXUpperBits. The passes take the few
+// scalar values they need from vectors, or compute them before the first
+// 256-bit operation or after the last.
 
 type vec8 = archsimd.Float32x8
 
-// PairScratch is the work area of FftPair and InverseFftPair. It needs no
-// initialization and carries nothing from one call to the next.
+// PairScratch is the work area of FftSplitPair and InverseFftSplitPair. It
+// needs no initialization and carries nothing from one call to the next.
 type PairScratch struct {
 	t, u [256]float32
 }
 
 var usePair = archsimd.X86.AVX2()
 
-func fftPair(a, b *[128]float32, s *PairScratch) {
+func fftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairScratch) {
 	if usePair {
-		fftPairSimd(a, b, s)
+		fftSplitPairSimd(a, b, re0, im0, re1, im1, s)
 		return
 	}
-	fft(a)
-	fft(b)
+	fftSplit(a, re0, im0)
+	fftSplit(b, re1, im1)
 }
 
-func inverseFftPair(a, b *[128]float32, s *PairScratch) {
+func inverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
 	if usePair {
-		inverseFftPairSimd(a, b, s)
+		inverseFftSplitPairSimd(re0, im0, re1, im1, a, b, s)
 		return
 	}
-	inverseFft(a)
-	inverseFft(b)
+	inverseFftSplit(re0, im0, a)
+	inverseFftSplit(re1, im1, b)
 }
 
 func ld8(p *[8]float32) vec8 { return archsimd.LoadFloat32x8Array(p) }
@@ -57,30 +64,38 @@ func ldPair(a, b *[4]float32) vec8 {
 	return z.SetLo(ld(a)).SetHi(ld(b))
 }
 
-// stPair stores the low half of x to a and the high half to b.
-func stPair(x vec8, a, b *[4]float32) {
-	x.GetLo().StoreArray(a)
-	x.GetHi().StoreArray(b)
-}
-
 // The shuffles of fft_simd_amd64.go on each 128-bit half.
 
-func rev64g(x vec8) vec8    { return x.ConcatPermuteScalarsGrouped(1, 0, 7, 6, x) }
-func swap64g(x vec8) vec8   { return x.ConcatPermuteScalarsGrouped(2, 3, 4, 5, x) }
-func lo64g(x, y vec8) vec8  { return x.ConcatPermuteScalarsGrouped(0, 1, 4, 5, y) }
-func hi64g(x, y vec8) vec8  { return x.ConcatPermuteScalarsGrouped(2, 3, 6, 7, y) }
-func eveng(x, y vec8) vec8  { return x.ConcatPermuteScalarsGrouped(0, 2, 4, 6, y) }
-func oddg(x, y vec8) vec8   { return x.ConcatPermuteScalarsGrouped(1, 3, 5, 7, y) }
-func zipLog(x, y vec8) vec8 { return x.ToBits().InterleaveLoGrouped(y.ToBits()).BitsToFloat32() }
-func zipHig(x, y vec8) vec8 { return x.ToBits().InterleaveHiGrouped(y.ToBits()).BitsToFloat32() }
+func rev64g(x vec8) vec8        { return x.ConcatPermuteScalarsGrouped(1, 0, 7, 6, x) }
+func rev4g(x vec8) vec8         { return x.ConcatPermuteScalarsGrouped(3, 2, 5, 4, x) }
+func lo64g(x, y vec8) vec8      { return x.ConcatPermuteScalarsGrouped(0, 1, 4, 5, y) }
+func hi64g(x, y vec8) vec8      { return x.ConcatPermuteScalarsGrouped(2, 3, 6, 7, y) }
+func loHig(x, y vec8) vec8      { return x.ConcatPermuteScalarsGrouped(0, 1, 6, 7, y) }
+func eveng(x, y vec8) vec8      { return x.ConcatPermuteScalarsGrouped(0, 2, 4, 6, y) }
+func oddg(x, y vec8) vec8       { return x.ConcatPermuteScalarsGrouped(1, 3, 5, 7, y) }
+func revEveng(hi, lo vec8) vec8 { return hi.ConcatPermuteScalarsGrouped(2, 0, 6, 4, lo) }
+func revOddg(hi, lo vec8) vec8  { return hi.ConcatPermuteScalarsGrouped(3, 1, 7, 5, lo) }
+func zipLog(x, y vec8) vec8     { return x.ToBits().InterleaveLoGrouped(y.ToBits()).BitsToFloat32() }
+func zipHig(x, y vec8) vec8     { return x.ToBits().InterleaveHiGrouped(y.ToBits()).BitsToFloat32() }
 
-// mid64g is {x2, x3, y0, y1} per half: the four floats that follow x's low
-// pair when y follows x in memory.
-func mid64g(x, y vec8) vec8 { return x.ConcatPermuteScalarsGrouped(2, 3, 4, 5, y) }
+func ext3g(x, y vec8) vec8 {
+	xb, yb := x.ToBits().ReshapeToUint8s(), y.ToBits().ReshapeToUint8s()
+	return yb.ConcatShiftBytesRightGrouped(xb, 12).ReshapeToUint32s().BitsToFloat32()
+}
 
 func negEveng(x vec8) vec8 {
 	return x.ToBits().Xor(archsimd.LoadUint32x8Array(&signEven8)).BitsToFloat32()
 }
+
+// lane0g is y with lane 0 of each half taken from x.
+func lane0g(x, y vec8) vec8 {
+	return x.ConcatPermuteScalarsGrouped(0, 0, 5, 5, y).ConcatPermuteScalarsGrouped(0, 2, 6, 7, y)
+}
+
+// frameA is {x.lo, y.lo}: eight consecutive floats of frame a from the
+// interleaved vectors x and y. frameB is {x.hi, y.hi}, the same of frame b.
+func frameA(x, y vec8) vec8 { return x.ConcatPermute128Scalars(0, 2, y) }
+func frameB(x, y vec8) vec8 { return x.ConcatPermute128Scalars(1, 3, y) }
 
 // The tables of the 128-bit kernel with every vector repeated.
 var (
@@ -90,7 +105,7 @@ var (
 	cftmdlWk1r8         [8]float32
 	wk1r8, wk2r8, wk3r8 [64]float32
 	wk1i8, wk2i8, wk3i8 [64]float32
-	rftWkr8, rftWki8    [56]float32
+	rftWkr8, rftWki8    [64]float32
 )
 
 // initPairTables runs once the negative zeros of the 128-bit tables are in
@@ -109,12 +124,12 @@ func initPairTables() {
 	dup(wk1i8[:], rdftWk1i[:])
 	dup(wk2i8[:], rdftWk2i[:])
 	dup(wk3i8[:], rdftWk3i[:])
-	var wkr [28]float32
-	for m := 1; m <= 28; m++ {
-		wkr[m-1] = 0.5 - rdftW[64-m]
+	var wkr [32]float32
+	for j1 := 1; j1 < 32; j1++ {
+		wkr[j1] = 0.5 - rdftW[64-j1]
 	}
 	dup(rftWkr8[:], wkr[:])
-	dup(rftWki8[:], rdftW[33:61])
+	dup(rftWki8[:], rdftW[32:64])
 }
 
 // tab8 is the repeated t[k2:k2+4] of the 128-bit tables; k is 2*k2 in
@@ -135,77 +150,29 @@ func p64(t *[256]float32, base, j int) *[8]float32 {
 	return (*[8]float32)((*[64]float32)(t[base : base+64])[j : j+8])
 }
 
-func fftPairSimd(a, b *[128]float32, s *PairScratch) {
+// fftSplitPairSimd is fftSplitSimd for the frames a and b.
+func fftSplitPairSimd(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairScratch) {
 	t := &s.t
 	bitrv2Cft1stPair(a, b, nil, t)
 	cftmdlPair(t)
 	cftfsubTailPair(t)
-	rftfsubScatter(t, a, b)
+	rftfsubSplitPair(t, re0, im0, re1, im1)
 	archsimd.ClearAVXUpperBits()
-	rftfsubEnd(a)
-	rftfsubEnd(b)
+	// Bin 64 is a[0] - a[1] of the frame the last pass read.
+	re0[64] = t[0] - t[1]
+	im0[64] = 0
+	re1[64] = t[4] - t[5]
+	im1[64] = 0
 }
 
-func inverseFftPairSimd(a, b *[128]float32, s *PairScratch) {
-	rftbsubBegin(a)
-	rftbsubBegin(b)
+// inverseFftSplitPairSimd is inverseFftSplitSimd for two sets of bins.
+func inverseFftSplitPairSimd(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
 	t, u := &s.t, &s.u
-	rftbsubGather(a, b, t)
+	rftbsubSplitPair(re0, im0, re1, im1, t)
 	bitrv2Cft1stPair(nil, nil, t, u)
 	cftmdlPair(u)
 	cftbsubTailScatter(u, a, b)
 	archsimd.ClearAVXUpperBits()
-}
-
-// rftfsubEnd is what follows the vectorized rftfsub iterations in Fft: the
-// three scalar iterations and the final butterfly of a[0] and a[1].
-func rftfsubEnd(a *[128]float32) {
-	c := (*[32]float32)(rdftW[32:])
-	for j1 := 29; j1 < 32; j1++ {
-		j2 := 2 * j1
-		k2 := 128 - j2
-		k1 := 32 - j1
-		wkr := 0.5 - c[k1]
-		wki := c[j1]
-		xr := a[j2] - a[k2]
-		xi := a[j2+1] + a[k2+1]
-		yr := float32(wkr*xr) - float32(wki*xi)
-		yi := float32(wkr*xi) + float32(wki*xr)
-		a[j2] -= yr
-		a[j2+1] -= yi
-		a[k2] += yr
-		a[k2+1] -= yi
-	}
-	xi := a[0] - a[1]
-	a[0] += a[1]
-	a[1] = xi
-}
-
-// rftbsubBegin is the scalar part of InverseFft ahead of the vectorized
-// rftbsub iterations: the first butterfly, the sign changes of a[1] and
-// a[65] and the three scalar iterations. None of it reads an element the
-// vectorized iterations write, and those read none it writes.
-func rftbsubBegin(a *[128]float32) {
-	a[1] = float32(0.5 * (a[0] - a[1]))
-	a[0] -= a[1]
-	a[1] = -a[1]
-	c := (*[32]float32)(rdftW[32:])
-	for j1 := 29; j1 < 32; j1++ {
-		j2 := 2 * j1
-		k2 := 128 - j2
-		k1 := 32 - j1
-		wkr := 0.5 - c[k1]
-		wki := c[j1]
-		xr := a[j2] - a[k2]
-		xi := a[j2+1] + a[k2+1]
-		yr := float32(wkr*xr) + float32(wki*xi)
-		yi := float32(wkr*xi) - float32(wki*xr)
-		a[j2] = a[j2] - yr
-		a[j2+1] = yi - a[j2+1]
-		a[k2] = yr + a[k2]
-		a[k2+1] = yi - a[k2+1]
-	}
-	a[65] = -a[65]
 }
 
 // bitrv2Cft1stPair is bitrv2Cft1stSimd into the interleaved t, either from
@@ -365,111 +332,184 @@ func cftfsubTailPair(t *[256]float32) {
 	}
 }
 
+// cftbsubTail8 is one iteration of cftbsubTailSimd: r0..r3 belong at the
+// iteration's offset in a[0:32], a[32:64], a[64:96] and a[96:128].
+func cftbsubTail8(q0, q1, q2, q3 *[8]float32, sgn vec8) (r0, r1, r2, r3 vec8) {
+	n0, n1 := ld8(q0).Mul(sgn), ld8(q1).Mul(sgn)
+	p2, p3 := ld8(q2), ld8(q3)
+	x0 := n0.Add(n1)
+	x1 := n0.Sub(n1)
+	x2s := p2.Add(p3).Mul(sgn)
+	x3w := rev64g(p2.Sub(p3))
+	return x0.Add(x2s), x1.Sub(x3w), x0.Sub(x2s), x1.Add(x3w)
+}
+
+// tail16 is the two interleaved vectors r and r+1 (r = 0, 2, 4, 6) of the
+// 64-float window of t that starts at base.
+func tail16(t *[256]float32, base, r int) *[16]float32 {
+	return (*[16]float32)((*[64]float32)(t[base : base+64])[8*r : 8*r+16])
+}
+
+// q8 is the eight floats at offset 4r (r = 0, 2, 4, 6) of the 32-float
+// window of a that starts at base.
+func q8(a *[128]float32, base, r int) *[8]float32 {
+	return (*[8]float32)((*[32]float32)(a[base : base+32])[4*r : 4*r+8])
+}
+
 // cftbsubTailScatter is cftbsubTailSimd from the interleaved frames into a
-// and b.
+// and b, two iterations (r and r+1) per round.
 func cftbsubTailScatter(t *[256]float32, a, b *[128]float32) {
 	sgn := ld8(&signIm8)
-	for j := 0; j < 32; j += 4 {
-		n0, n1 := ld8(p64(t, 0, 2*j)).Mul(sgn), ld8(p64(t, 64, 2*j)).Mul(sgn)
-		p2, p3 := ld8(p64(t, 128, 2*j)), ld8(p64(t, 192, 2*j))
-		x0 := n0.Add(n1)
-		x1 := n0.Sub(n1)
-		x2s := p2.Add(p3).Mul(sgn)
-		x3w := rev64g(p2.Sub(p3))
-		stPair(x0.Add(x2s), w32(a, 0, j), w32(b, 0, j))
-		stPair(x0.Sub(x2s), w32(a, 64, j), w32(b, 64, j))
-		stPair(x1.Sub(x3w), w32(a, 32, j), w32(b, 32, j))
-		stPair(x1.Add(x3w), w32(a, 96, j), w32(b, 96, j))
+	for r := 0; r < 8; r += 2 {
+		w0, w1, w2, w3 := tail16(t, 0, r), tail16(t, 64, r), tail16(t, 128, r), tail16(t, 192, r)
+		r0, r1, r2, r3 := cftbsubTail8((*[8]float32)(w0[0:8]), (*[8]float32)(w1[0:8]), (*[8]float32)(w2[0:8]), (*[8]float32)(w3[0:8]), sgn)
+		s0, s1, s2, s3 := cftbsubTail8((*[8]float32)(w0[8:16]), (*[8]float32)(w1[8:16]), (*[8]float32)(w2[8:16]), (*[8]float32)(w3[8:16]), sgn)
+		frameA(r0, s0).StoreArray(q8(a, 0, r))
+		frameB(r0, s0).StoreArray(q8(b, 0, r))
+		frameA(r1, s1).StoreArray(q8(a, 32, r))
+		frameB(r1, s1).StoreArray(q8(b, 32, r))
+		frameA(r2, s2).StoreArray(q8(a, 64, r))
+		frameB(r2, s2).StoreArray(q8(b, 64, r))
+		frameA(r3, s3).StoreArray(q8(a, 96, r))
+		frameB(r3, s3).StoreArray(q8(b, 96, r))
 	}
 }
 
-// The vectorized rftfsub/rftbsub iteration m reads and writes
-// a[2+8m:10+8m] and a[120-8m:128-8m]. In vectors of four (V[v] =
-// a[4v:4v+4]) the first window is the high pair of V[2m], all of V[2m+1]
-// and the low pair of V[2m+2]; the second is V[30-2m] and V[31-2m].
-
-// rft8Lo is the interleaved V[2m], V[2m+1], V[2m+2].
-func rft8Lo(t *[256]float32, m int) *[24]float32 {
-	return (*[24]float32)((*[120]float32)(t[0:120])[16*m : 16*m+24])
+// rftfArith8 and rftbArith8 are the float operations of one rftfsub
+// (rftbsub) iteration on the bins p and their partners k.
+func rftfArith8(p0, p1, k0, k1, wkr, wki vec8) (vec8, vec8, vec8, vec8) {
+	xr := p0.Sub(k0)
+	xi := p1.Add(k1)
+	yr := wkr.Mul(xr).Sub(wki.Mul(xi))
+	yi := wkr.Mul(xi).Add(wki.Mul(xr))
+	return p0.Sub(yr), p1.Sub(yi), k0.Add(yr), k1.Sub(yi)
 }
 
-// rft8Hi is the interleaved V[30-2m], V[31-2m].
-func rft8Hi(t *[256]float32, m int) *[16]float32 {
-	n := 6 - m
-	return (*[16]float32)((*[112]float32)(t[144:256])[16*n : 16*n+16])
+func rftbArith8(p0, p1, k0, k1, wkr, wki vec8) (vec8, vec8, vec8, vec8) {
+	xr := p0.Sub(k0)
+	xi := p1.Add(k1)
+	yr := wkr.Mul(xr).Add(wki.Mul(xi))
+	yi := wkr.Mul(xi).Sub(wki.Mul(xr))
+	return p0.Sub(yr), yi.Sub(p1), k0.Add(yr), yi.Sub(k1)
 }
 
-func rft8Tab(t *[56]float32, m int) vec8 {
-	return archsimd.LoadFloat32x8Array((*[8]float32)(t[8*m : 8*m+8]))
+// b8 is bins 8q..8q+7 of a 65-bin array (q in 0..3), h8 bins 32+8u..39+8u.
+func b8(x *[65]float32, q int) *[8]float32 { return (*[8]float32)(x[8*q : 8*q+8]) }
+
+func h8(x *[65]float32, u int) *[8]float32 {
+	return (*[8]float32)((*[32]float32)(x[32:64])[8*u : 8*u+8])
 }
 
-// pairV is the interleaved V[v] of t for a constant v.
-func pairV(t *[256]float32, v int) *[8]float32 { return (*[8]float32)(t[8*v : 8*v+8]) }
+// rftfsubSplitPair is rftfsubSplit on the interleaved frames, two
+// iterations per round, except for bin 64 (see fftSplitPairSimd). Bin 0,
+// a[0] + a[1], comes from the first vector plus itself with its pairs
+// swapped.
+func rftfsubSplitPair(t *[256]float32, re0, im0, re1, im1 *[65]float32) {
+	thi := (*[128]float32)(t[128:])
+	v0 := ld8((*[8]float32)(t[0:8]))
+	dc := v0.Add(rev64g(v0))
+	v16 := ld8((*[8]float32)(thi[0:8]))
+	re32 := v16.ConcatPermuteScalarsGrouped(0, 0, 4, 4, v16)
+	im32 := v16.ConcatPermuteScalarsGrouped(1, 1, 5, 5, v16)
+	var zero, prevR, prevI, r0, r1, hR, hI vec8
+	for q := 0; q < 4; q++ {
+		u := 3 - q
+		lo := (*[32]float32)(t[32*q : 32*q+32])
+		hi := (*[32]float32)(thi[32*u : 32*u+32])
+		wr := (*[16]float32)(rftWkr8[16*q : 16*q+16])
+		wi := (*[16]float32)(rftWki8[16*q : 16*q+16])
 
-// rftfsubScatter is the vectorized part of rftfsubSimd from the interleaved
-// frames into a and b, which also receive the elements those iterations
-// leave alone (a[0:2] and a[58:72]).
-func rftfsubScatter(t *[256]float32, a, b *[128]float32) {
-	stPair(ld8(pairV(t, 0)), (*[4]float32)(a[0:4]), (*[4]float32)(b[0:4]))
-	stPair(ld8(pairV(t, 14)), (*[4]float32)(a[56:60]), (*[4]float32)(b[56:60]))
-	stPair(ld8(pairV(t, 15)), (*[4]float32)(a[60:64]), (*[4]float32)(b[60:64]))
-	stPair(ld8(pairV(t, 16)), (*[4]float32)(a[64:68]), (*[4]float32)(b[64:68]))
-	stPair(ld8(pairV(t, 17)), (*[4]float32)(a[68:72]), (*[4]float32)(b[68:72]))
-	for m := 0; m < 7; m++ {
-		wkr := rft8Tab(&rftWkr8, m)
-		wki := rft8Tab(&rftWki8, m)
-		lo, hi := rft8Lo(t, m), rft8Hi(t, m)
-		v0, v1, v2 := ld8((*[8]float32)(lo[0:8])), ld8((*[8]float32)(lo[8:16])), ld8((*[8]float32)(lo[16:24]))
-		aj0, aj4 := mid64g(v0, v1), mid64g(v1, v2)
-		ak0, ak4 := swap64g(ld8((*[8]float32)(hi[0:8]))), swap64g(ld8((*[8]float32)(hi[8:16])))
-		p0, p1, k0, k1 := eveng(aj0, aj4), oddg(aj0, aj4), eveng(ak4, ak0), oddg(ak4, ak0)
-		xr := p0.Sub(k0)
-		xi := p1.Add(k1)
-		yr := wkr.Mul(xr).Sub(wki.Mul(xi))
-		yi := wkr.Mul(xi).Add(wki.Mul(xr))
-		p0, p1, k0, k1 = p0.Sub(yr), p1.Sub(yi), k0.Add(yr), k1.Sub(yi)
-		la, lb, ha, hb := rftLo(a, m), rftLo(b, m), rftHi(a, m), rftHi(b, m)
-		stPair(zipLog(p0, p1), (*[4]float32)(la[0:4]), (*[4]float32)(lb[0:4]))
-		stPair(zipHig(p0, p1), (*[4]float32)(la[4:8]), (*[4]float32)(lb[4:8]))
-		stPair(swap64g(zipLog(k0, k1)), (*[4]float32)(ha[4:8]), (*[4]float32)(hb[4:8]))
-		stPair(swap64g(zipHig(k0, k1)), (*[4]float32)(ha[0:4]), (*[4]float32)(hb[0:4]))
+		// Iteration m = 2q.
+		a0, a1 := ld8((*[8]float32)(lo[0:8])), ld8((*[8]float32)(lo[8:16]))
+		g0, g1 := ld8((*[8]float32)(hi[16:24])), ld8((*[8]float32)(hi[24:32]))
+		rhR, rhI := revEveng(g1, g0), revOddg(g1, g0)
+		p0, p1, k0, k1 := rftfArith8(eveng(a0, a1), oddg(a0, a1), ext3g(prevR, rhR), ext3g(prevI, rhI),
+			ld8((*[8]float32)(wr[0:8])), ld8((*[8]float32)(wi[0:8])))
+		prevR, prevI = rhR, rhI
+		k0, k1 = rev4g(k0), rev4g(k1)
+		if q == 0 {
+			p0 = lane0g(dc, p0)
+			p1 = lane0g(zero, p1)
+		} else {
+			// Bins 64-8q..71-8q.
+			xr, xi := ext3g(k0, r0), ext3g(k1, r1)
+			frameA(xr, hR).StoreArray(h8(re0, u+1))
+			frameB(xr, hR).StoreArray(h8(re1, u+1))
+			frameA(xi, hI).StoreArray(h8(im0, u+1))
+			frameB(xi, hI).StoreArray(h8(im1, u+1))
+		}
+		r0, r1 = k0, k1
+
+		// Iteration m = 2q+1.
+		a0, a1 = ld8((*[8]float32)(lo[16:24])), ld8((*[8]float32)(lo[24:32]))
+		g0, g1 = ld8((*[8]float32)(hi[0:8])), ld8((*[8]float32)(hi[8:16]))
+		rhR, rhI = revEveng(g1, g0), revOddg(g1, g0)
+		s0, s1, k0, k1 := rftfArith8(eveng(a0, a1), oddg(a0, a1), ext3g(prevR, rhR), ext3g(prevI, rhI),
+			ld8((*[8]float32)(wr[8:16])), ld8((*[8]float32)(wi[8:16])))
+		prevR, prevI = rhR, rhI
+		k0, k1 = rev4g(k0), rev4g(k1)
+		frameA(p0, s0).StoreArray(b8(re0, q))
+		frameB(p0, s0).StoreArray(b8(re1, q))
+		frameA(p1, s1).StoreArray(b8(im0, q))
+		frameB(p1, s1).StoreArray(b8(im1, q))
+		hR, hI = ext3g(k0, r0), ext3g(k1, r1)
+		r0, r1 = k0, k1
 	}
+	// Bins 32..39: bin 32 as the frame has it, then the last results.
+	xr, xi := ext3g(re32, r0), ext3g(im32, r1)
+	frameA(xr, hR).StoreArray(h8(re0, 0))
+	frameB(xr, hR).StoreArray(h8(re1, 0))
+	frameA(xi, hI).StoreArray(h8(im0, 0))
+	frameB(xi, hI).StoreArray(h8(im1, 0))
 }
 
-// rftbsubGather is the vectorized part of rftbsubSimd from a and b into the
-// interleaved t, which also receives the elements those iterations leave
-// alone. The results of iteration m are a[2+8m:6+8m] (w0) and a[6+8m:10+8m]
-// (w1): V[2m+1] is the high pair of w0 and the low pair of w1, and V[2m+2]
-// the high pair of w1 and the low pair of the next w0.
-func rftbsubGather(a, b *[128]float32, t *[256]float32) {
-	// {a[2], a[3], a[0], a[1]}: its high pair is the low pair of V[0].
-	prev := swap64g(ldPair((*[4]float32)(a[0:4]), (*[4]float32)(b[0:4])))
-	for m := 0; m < 7; m++ {
-		wkr := rft8Tab(&rftWkr8, m)
-		wki := rft8Tab(&rftWki8, m)
-		la, lb, ha, hb := rftLo(a, m), rftLo(b, m), rftHi(a, m), rftHi(b, m)
-		aj0 := ldPair((*[4]float32)(la[0:4]), (*[4]float32)(lb[0:4]))
-		aj4 := ldPair((*[4]float32)(la[4:8]), (*[4]float32)(lb[4:8]))
-		ak0 := swap64g(ldPair((*[4]float32)(ha[0:4]), (*[4]float32)(hb[0:4])))
-		ak4 := swap64g(ldPair((*[4]float32)(ha[4:8]), (*[4]float32)(hb[4:8])))
-		p0, p1, k0, k1 := eveng(aj0, aj4), oddg(aj0, aj4), eveng(ak4, ak0), oddg(ak4, ak0)
-		xr := p0.Sub(k0)
-		xi := p1.Add(k1)
-		yr := wkr.Mul(xr).Add(wki.Mul(xi))
-		yi := wkr.Mul(xi).Sub(wki.Mul(xr))
-		p0, p1, k0, k1 = p0.Sub(yr), yi.Sub(p1), k0.Add(yr), yi.Sub(k1)
-		w0, w1 := zipLog(p0, p1), zipHig(p0, p1)
-		lo, hi := rft8Lo(t, m), rft8Hi(t, m)
-		mid64g(prev, w0).StoreArray((*[8]float32)(lo[0:8]))
-		mid64g(w0, w1).StoreArray((*[8]float32)(lo[8:16]))
-		prev = w1
-		swap64g(zipLog(k0, k1)).StoreArray((*[8]float32)(hi[8:16]))
-		swap64g(zipHig(k0, k1)).StoreArray((*[8]float32)(hi[0:8]))
+// rftbsubSplitPair is rftbsubSplit for two sets of bins, into the
+// interleaved t. The scalar values of bins 0, 32 and 64 are computed before
+// the first 256-bit operation.
+func rftbsubSplitPair(re0, im0, re1, im1 *[65]float32, t *[256]float32) {
+	a1 := float32(0.5 * (re0[0] - re0[64]))
+	a0 := re0[0] - a1
+	a1 = -a1
+	b1 := float32(0.5 * (re1[0] - re1[64]))
+	b0 := re1[0] - b1
+	b1 = -b1
+	var z vec
+	dcA := z.SetElem(0, a0).SetElem(1, a1)
+	dcB := z.SetElem(0, b0).SetElem(1, b1)
+	xA := z.SetElem(0, re0[32]).SetElem(1, -im0[32])
+	xB := z.SetElem(0, re1[32]).SetElem(1, -im1[32])
+	var z8 vec8
+	dc := z8.SetLo(dcA).SetHi(dcB)
+	x32 := z8.SetLo(xA).SetHi(xB)
+
+	thi := (*[128]float32)(t[128:])
+	var prevR, prevI, pzh vec8
+	for m := 0; m < 8; m++ {
+		n := 7 - m
+		p0 := ldPair(lo4(re0, m), lo4(re1, m))
+		p1 := ldPair(lo4(im0, m), lo4(im1, m))
+		rhR := rev4g(ldPair(hi4(re0, n), hi4(re1, n)))
+		rhI := rev4g(ldPair(hi4(im0, n), hi4(im1, n)))
+		wkr := ld8((*[8]float32)(rftWkr8[8*m : 8*m+8]))
+		wki := ld8((*[8]float32)(rftWki8[8*m : 8*m+8]))
+		p0, p1, k0, k1 := rftbArith8(p0, p1, ext3g(prevR, rhR), ext3g(prevI, rhI), wkr, wki)
+		prevR, prevI = rhR, rhI
+		z0, z1 := zipLog(p0, p1), zipHig(p0, p1)
+		if m == 0 {
+			z0 = loHig(dc, z0)
+		}
+		lo := (*[16]float32)(t[16*m : 16*m+16])
+		z0.StoreArray((*[8]float32)(lo[0:8]))
+		z1.StoreArray((*[8]float32)(lo[8:16]))
+		zl, zh := zipLog(k0, k1), zipHig(k0, k1)
+		hi := (*[16]float32)(thi[16*n : 16*n+16])
+		loHig(zh, zl).StoreArray((*[8]float32)(hi[8:16]))
+		if m > 0 {
+			// The mask changes nothing for n < 7.
+			j := (16*n + 16) & 112
+			loHig(zl, pzh).StoreArray((*[8]float32)(thi[j : j+8]))
+		}
+		pzh = zh
 	}
-	// V[14] is the high pair of the last w1 and a[58:60].
-	v14 := ldPair((*[4]float32)(a[56:60]), (*[4]float32)(b[56:60]))
-	hi64g(prev, v14).StoreArray(pairV(t, 14))
-	ldPair((*[4]float32)(a[60:64]), (*[4]float32)(b[60:64])).StoreArray(pairV(t, 15))
-	ldPair((*[4]float32)(a[64:68]), (*[4]float32)(b[64:68])).StoreArray(pairV(t, 16))
-	ldPair((*[4]float32)(a[68:72]), (*[4]float32)(b[68:72])).StoreArray(pairV(t, 17))
+	loHig(x32, pzh).StoreArray((*[8]float32)(thi[0:8]))
 }

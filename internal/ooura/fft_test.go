@@ -47,6 +47,42 @@ func testInputs() [][128]float32 {
 	return out
 }
 
+// nonFiniteInputs returns frames with NaNs (of both signs and with
+// payloads) and infinities among finite samples.
+func nonFiniteInputs() [][128]float32 {
+	rng := rand.New(rand.NewSource(9))
+	special := []uint32{0x7fc00000, 0xffc00000, 0x7fc12345, 0x7fa00001, 0x7f800000, 0xff800000}
+	var out [][128]float32
+	for trial := 0; trial < 300; trial++ {
+		var a [128]float32
+		for i := range a {
+			a[i] = float32(rng.NormFloat64() * 3000)
+		}
+		for n := 1 + rng.Intn(4); n > 0; n-- {
+			a[rng.Intn(128)] = math.Float32frombits(special[rng.Intn(len(special))])
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// same32 compares bit-exactly, except that any two NaNs are equal: the sign
+// and payload of a NaN that an arithmetic chain produces depend on operand
+// order, which compilers choose freely for commutative operations.
+func same32(a, b float32) bool {
+	return math.Float32bits(a) == math.Float32bits(b) || (a != a && b != b)
+}
+
+func checkSameNaN(t *testing.T, name string, n int, got, want *[128]float32) {
+	t.Helper()
+	for i := range got {
+		if !same32(got[i], want[i]) {
+			t.Fatalf("%s input %d idx %d: got %v (%#x) want %v (%#x)", name, n, i,
+				got[i], math.Float32bits(got[i]), want[i], math.Float32bits(want[i]))
+		}
+	}
+}
+
 func checkSame(t *testing.T, name string, n int, got, want *[128]float32) {
 	t.Helper()
 	for i := range got {
@@ -110,6 +146,53 @@ func TestFastMatchesRef(t *testing.T) {
 func TestFftMatchesLaneRef(t *testing.T) {
 	compareFfts(t, "fwd", Fft, fftRef)
 	compareFfts(t, "inv", InverseFft, inverseFftRef)
+}
+
+type (
+	fftSplitFunc        func(a *[128]float32, re, im *[65]float32)
+	inverseFftSplitFunc func(re, im *[65]float32, a *[128]float32)
+)
+
+// compareSplit checks the split transforms against the transform followed
+// (preceded) by the FftData copy. The outputs start as NaN, and the inverse
+// gets NaN in the two elements that the copy does not read.
+func compareSplit(t *testing.T, name string, fwd fftSplitFunc, inv inverseFftSplitFunc, f, g fftFunc) {
+	t.Helper()
+	nan := float32(math.NaN())
+	for n, a := range testInputs() {
+		var re, im, wre, wim [65]float32
+		for i := range re {
+			re[i], im[i] = nan, nan
+		}
+		x, y := a, a
+		f(&y)
+		unpack(&y, &wre, &wim)
+		fwd(&x, &re, &im)
+		for i := range re {
+			if math.Float32bits(re[i]) != math.Float32bits(wre[i]) || math.Float32bits(im[i]) != math.Float32bits(wim[i]) {
+				t.Fatalf("%s fwd input %d bin %d: got (%v, %v) want (%v, %v)", name, n, i, re[i], im[i], wre[i], wim[i])
+			}
+		}
+
+		// The inverse of the input taken as bins.
+		unpack(&a, &re, &im)
+		re[64] = a[1]
+		im[0], im[64] = nan, nan
+		var want [128]float32
+		pack(&re, &im, &want)
+		g(&want)
+		var got [128]float32
+		for i := range got {
+			got[i] = nan
+		}
+		inv(&re, &im, &got)
+		checkSame(t, name+" inv", n, &got, &want)
+	}
+}
+
+func TestFftSplitMatchesPacked(t *testing.T) {
+	compareSplit(t, "build", FftSplit, InverseFftSplit, Fft, InverseFft)
+	compareSplit(t, "fast", fftSplitFast, inverseFftSplitFast, fftRef, inverseFftRef)
 }
 
 func TestFftRoundTrip(t *testing.T) {

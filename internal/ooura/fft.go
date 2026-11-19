@@ -19,13 +19,64 @@ func Fft(a *[128]float32) { fft(a) }
 // same lane as Fft.
 func InverseFft(a *[128]float32) { inverseFft(a) }
 
-// FftPair computes Fft(a) and Fft(b). Each result is bit-identical to the
-// single transform; where the CPU has 256-bit vectors the two run in one
-// pass. a and b must not overlap.
-func FftPair(a, b *[128]float32, s *PairScratch) { fftPair(a, b, s) }
+// FftSplit computes Fft(a) and stores it as aec3's
+// FftData::CopyFromPackedArray does: re[k] and im[k] are the real and
+// imaginary part of bin k, and im[0] and im[64] are zero. It leaves a in an
+// unspecified state.
+func FftSplit(a *[128]float32, re, im *[65]float32) { fftSplit(a, re, im) }
 
-// InverseFftPair computes InverseFft(a) and InverseFft(b) like FftPair.
-func InverseFftPair(a, b *[128]float32, s *PairScratch) { inverseFftPair(a, b, s) }
+// InverseFftSplit computes InverseFft of the frame that aec3's
+// FftData::CopyToPackedArray makes of re and im (im[0] and im[64] are not
+// read) into a.
+func InverseFftSplit(re, im *[65]float32, a *[128]float32) { inverseFftSplit(re, im, a) }
+
+// FftSplitPair computes FftSplit(a, re0, im0) and FftSplit(b, re1, im1).
+// Each result is bit-identical to the single transform; where the CPU has
+// 256-bit vectors the two run in one pass. The frames must not overlap, nor
+// the outputs.
+func FftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairScratch) {
+	fftSplitPair(a, b, re0, im0, re1, im1, s)
+}
+
+// InverseFftSplitPair computes InverseFftSplit(re0, im0, a) and
+// InverseFftSplit(re1, im1, b) like FftSplitPair.
+func InverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
+	inverseFftSplitPair(re0, im0, re1, im1, a, b, s)
+}
+
+// unpack is FftData::CopyFromPackedArray.
+func unpack(v *[128]float32, re, im *[65]float32) {
+	re[0] = v[0]
+	re[64] = v[1]
+	im[0] = 0
+	im[64] = 0
+	for k := 1; k < 64; k++ {
+		re[k] = v[2*k]
+		im[k] = v[2*k+1]
+	}
+}
+
+// pack is FftData::CopyToPackedArray.
+func pack(re, im *[65]float32, v *[128]float32) {
+	v[0] = re[0]
+	v[1] = re[64]
+	for k := 1; k < 64; k++ {
+		v[2*k] = re[k]
+		v[2*k+1] = im[k]
+	}
+}
+
+// fftSplitFast and inverseFftSplitFast are the split transforms of the
+// builds and CPUs without the archsimd kernel.
+func fftSplitFast(a *[128]float32, re, im *[65]float32) {
+	fftFast(a)
+	unpack(a, re, im)
+}
+
+func inverseFftSplitFast(re, im *[65]float32, a *[128]float32) {
+	pack(re, im, a)
+	inverseFftFast(a)
+}
 
 // fftScalar is the scalar C path of OouraFft::Fft.
 func fftScalar(a *[128]float32) {

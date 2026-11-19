@@ -70,16 +70,16 @@ type Aec3Fft struct{}
 
 func NewAec3Fft() *Aec3Fft { return &Aec3Fft{} }
 
-// Fft transforms x in place and unpacks it into X.
+// Fft transforms x into X (the transform followed by
+// FftData::CopyFromPackedArray). It uses x as work space.
 func (*Aec3Fft) Fft(x *[FftLength]float32, X *FftData) {
-	ooura.Fft(x)
-	X.CopyFromPackedArray(x)
+	ooura.FftSplit(x, &X.Re, &X.Im)
 }
 
-// Ifft packs X into x and inverse transforms (unscaled).
+// Ifft inverse transforms X into x, unscaled (FftData::CopyToPackedArray
+// followed by the transform).
 func (*Aec3Fft) Ifft(X *FftData, x *[FftLength]float32) {
-	X.CopyToPackedArray(x)
-	ooura.InverseFft(x)
+	ooura.InverseFftSplit(&X.Re, &X.Im, x)
 }
 
 // ZeroPaddedFft windows x (64 samples) into the upper half of a zeroed
@@ -116,7 +116,7 @@ func (f *Aec3Fft) PaddedFft(x, xOld []float32, window Window, X *FftData) {
 	f.Fft(&fft, X)
 }
 
-// aec3FftPair runs two transforms of Aec3Fft at a time (ooura.FftPair): each
+// aec3FftPair runs two transforms of Aec3Fft at a time (ooura.FftSplitPair): each
 // result is bit-identical to the single transform, and builds with 256-bit
 // vectors compute the two in one pass. The zero value is ready to use.
 type aec3FftPair struct {
@@ -126,16 +126,12 @@ type aec3FftPair struct {
 
 // Fft is Aec3Fft.Fft for (x0, X0) and (x1, X1).
 func (p *aec3FftPair) Fft(x0, x1 *[FftLength]float32, X0, X1 *FftData) {
-	ooura.FftPair(x0, x1, &p.scratch)
-	X0.CopyFromPackedArray(x0)
-	X1.CopyFromPackedArray(x1)
+	ooura.FftSplitPair(x0, x1, &X0.Re, &X0.Im, &X1.Re, &X1.Im, &p.scratch)
 }
 
 // Ifft is Aec3Fft.Ifft for (X0, x0) and (X1, x1).
 func (p *aec3FftPair) Ifft(X0, X1 *FftData, x0, x1 *[FftLength]float32) {
-	X0.CopyToPackedArray(x0)
-	X1.CopyToPackedArray(x1)
-	ooura.InverseFftPair(x0, x1, &p.scratch)
+	ooura.InverseFftSplitPair(&X0.Re, &X0.Im, &X1.Re, &X1.Im, x0, x1, &p.scratch)
 }
 
 // ZeroPaddedFft is Aec3Fft.ZeroPaddedFft with the Hanning window for
