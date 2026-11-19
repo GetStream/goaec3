@@ -107,30 +107,51 @@ func bsFiniteState(acc archsimd.Float32x4, h *[bsHistSize]float32) archsimd.Floa
 }
 
 // bsAnalysisFinite reports whether the analysis input and state are finite.
+// The input is accumulated in eight independent sums: only the presence of
+// a NaN in a sum matters, and one sum would chain 120 additions.
 func bsAnalysisFinite(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]float32) bool {
 	var acc archsimd.Float32x4
 	for d := range hist {
 		acc = bsFiniteState(acc, &hist[d])
 	}
-	for k := 0; k < FullBandSize; k += 4 {
+	var a0, a1, a2, a3, a4, a5, a6, a7 archsimd.Float32x4
+	for k := 0; k < FullBandSize-FullBandSize%32; k += 32 {
+		p := (*[32]float32)(in[k : k+32])
+		a0 = bsFinite4(a0, (*[4]float32)(p[0:4]))
+		a1 = bsFinite4(a1, (*[4]float32)(p[4:8]))
+		a2 = bsFinite4(a2, (*[4]float32)(p[8:12]))
+		a3 = bsFinite4(a3, (*[4]float32)(p[12:16]))
+		a4 = bsFinite4(a4, (*[4]float32)(p[16:20]))
+		a5 = bsFinite4(a5, (*[4]float32)(p[20:24]))
+		a6 = bsFinite4(a6, (*[4]float32)(p[24:28]))
+		a7 = bsFinite4(a7, (*[4]float32)(p[28:32]))
+	}
+	for k := FullBandSize - FullBandSize%32; k < FullBandSize; k += 4 {
 		acc = bsFinite4(acc, (*[4]float32)(in[k:k+4]))
 	}
-	return bsFiniteResult(acc)
+	return bsFiniteResult(acc.Add(a0.Add(a1).Add(a2.Add(a3))).Add(a4.Add(a5).Add(a6.Add(a7))))
 }
 
 // bsSynthesisFinite reports whether the synthesis input and state are
-// finite.
+// finite, with six independent sums over the bands.
 func bsSynthesisFinite(hist *[bsNumSynthesisInputs][bsHistSize]float32, in0, in1, in2 *[SplitBandSize]float32) bool {
 	var acc archsimd.Float32x4
 	for fi := range hist {
 		acc = bsFiniteState(acc, &hist[fi])
 	}
-	for k := 0; k < SplitBandSize; k += 4 {
-		acc = bsFinite4(acc, (*[4]float32)(in0[k:k+4]))
-		acc = bsFinite4(acc, (*[4]float32)(in1[k:k+4]))
-		acc = bsFinite4(acc, (*[4]float32)(in2[k:k+4]))
+	var a0, a1, a2, a3, a4, a5 archsimd.Float32x4
+	for k := 0; k < SplitBandSize; k += 8 {
+		p0 := (*[8]float32)(in0[k : k+8])
+		p1 := (*[8]float32)(in1[k : k+8])
+		p2 := (*[8]float32)(in2[k : k+8])
+		a0 = bsFinite4(a0, (*[4]float32)(p0[0:4]))
+		a1 = bsFinite4(a1, (*[4]float32)(p0[4:8]))
+		a2 = bsFinite4(a2, (*[4]float32)(p1[0:4]))
+		a3 = bsFinite4(a3, (*[4]float32)(p1[4:8]))
+		a4 = bsFinite4(a4, (*[4]float32)(p2[0:4]))
+		a5 = bsFinite4(a5, (*[4]float32)(p2[4:8]))
 	}
-	return bsFiniteResult(acc)
+	return bsFiniteResult(acc.Add(a0.Add(a1).Add(a2.Add(a3))).Add(a4.Add(a5)))
 }
 
 // bsCoeffs holds the broadcast coefficients of one filter.
