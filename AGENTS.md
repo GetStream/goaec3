@@ -64,6 +64,28 @@ write changelog narrative.
   and restored with a 16-byte load, which the CPU cannot store-forward (this
   made Zen 3 1.6× slower). 256-bit kernels return results through the
   caller's memory, or keep their 256-bit part in a `//go:noinline` helper.
+- Scalar float code inside a 256-bit section pays the same transition
+  penalty as after it: a kernel takes the scalars it needs from vector
+  lanes, or computes them before its first 256-bit operation or after
+  `ClearAVXUpperBits` (`internal/ooura/fft_pair_simd_amd64.go`).
+- amd64 folds only a constant displacement into an archsimd load or store;
+  an offset that depends on a loop counter costs one or two LEAs per access.
+  Loops with a fixed trip count are written as a closure that captures a
+  vector and is called once per iteration with constant arguments: the
+  compiler inlines closures that capture SIMD values (sixteen times the
+  usual budget), and every access becomes base plus displacement
+  (`cftfsubTailSimd`, `afirAdaptTerms`). Check with `-gcflags=-S` that no
+  `funcN` call remains.
+- The FFT entry points of aec3 are `ooura.FftSplit`/`InverseFftSplit`: they
+  move between a time-domain frame and the real/imaginary arrays of
+  `FftData` directly (the last forward pass and the first inverse pass work
+  on deinterleaved vectors anyway), and write every result where the next
+  aligned vector load reads it, so no load waits on two smaller stores.
+  `FftSplitPair`/`InverseFftSplitPair` run two transforms in one 256-bit pass
+  on AVX2 (each 128-bit half is one transform in the SSE2 order) and are two
+  single transforms elsewhere; aec3 pairs the transforms that come in twos
+  (`aec3FftPair`). Their work areas live with the caller (`ooura.Scratch`,
+  `PairScratch`).
 - CPU detection (`DetectOptimization`): one routine for builds with and
   without `GOEXPERIMENT=simd`, `golang.org/x/sys/cpu` with libwebrtc's kAVX2
   condition (AVX, OSXSAVE/YMM, AVX2, BMI2), so both builds pick the same lane
