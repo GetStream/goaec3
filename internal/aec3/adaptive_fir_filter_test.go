@@ -241,6 +241,48 @@ func TestAfirFreqRespAvx2(t *testing.T) {
 	}
 }
 
+// afirFreqRespBlockAvx2Go against one fmaf per bin, with bins whose sum is
+// a float32 rounding boundary (the slow path of fmaf) at every position of
+// a group.
+func TestAfirFreqRespBlockAvx2GoMatchesFmaf(t *testing.T) {
+	rng := rand.New(rand.NewSource(41))
+	im := float32(4097.0 / 4096.0)
+	hard := 0
+	for trial := 0; trial < 2000; trial++ {
+		var h FftData
+		afirTestRandFft(rng, &h, 0.1)
+		var got, want [FftLengthBy2Plus1]float32
+		for j := range want {
+			want[j] = float32(rng.NormFloat64() * 0.01)
+		}
+		if trial%2 == 0 {
+			// im*im = 1 + 2^-11 + 2^-24 exactly: half an ulp above a float32.
+			j := rng.Intn(FftLengthBy2)
+			h.Im[j] = im
+			h.Re[j] = float32(1e-17 * float64(rng.Intn(3)))
+			if rng.Intn(2) == 0 {
+				h.Re[j] = 0
+			}
+		}
+		if trial%7 == 0 {
+			h = FftData{}
+		}
+		got = want
+		for j := 0; j < FftLengthBy2; j++ {
+			re2 := float32(h.Re[j] * h.Re[j])
+			if fmafHard(fmafSum(h.Im[j], h.Im[j], re2)) {
+				hard++
+			}
+			want[j] = sseMax(want[j], fmaf(h.Im[j], h.Im[j], re2))
+		}
+		afirFreqRespBlockAvx2Go(&h, &got)
+		afirEqualArr(t, "freqresp block", got[:], want[:])
+	}
+	if hard == 0 {
+		t.Fatal("no bin took the slow path of fmaf")
+	}
+}
+
 func TestAfirAdaptiveFirFilterNoAllocs(t *testing.T) {
 	rng := rand.New(rand.NewSource(5))
 	for _, opt := range []Aec3Optimization{OptNone, DetectOptimization()} {
