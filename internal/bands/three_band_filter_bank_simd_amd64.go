@@ -31,10 +31,16 @@ func bsSynthesisKernel(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 // bsCoeffs8 holds the coefficients of one filter broadcast to 256 bits.
 type bsCoeffs8 struct{ c0, c1, c2, c3 archsimd.Float32x8 }
 
-func bsBroadcastCoeffs8(filter int) bsCoeffs8 {
-	c := &bsFilterCoeffs[filter]
-	return bsCoeffs8{archsimd.BroadcastFloat32x8(c[0]), archsimd.BroadcastFloat32x8(c[1]),
-		archsimd.BroadcastFloat32x8(c[2]), archsimd.BroadcastFloat32x8(c[3])}
+// bsBroadcastCoeffs8 fills c in place: a returned struct is zeroed with
+// 128-bit stores between the 256-bit broadcasts.
+func bsBroadcastCoeffs8(c *[NumNonZeroFilters]bsCoeffs8) {
+	for i := range c {
+		f := &bsFilterCoeffs[i]
+		c[i].c0 = archsimd.BroadcastFloat32x8(f[0])
+		c[i].c1 = archsimd.BroadcastFloat32x8(f[1])
+		c[i].c2 = archsimd.BroadcastFloat32x8(f[2])
+		c[i].c3 = archsimd.BroadcastFloat32x8(f[3])
+	}
 }
 
 // bsTap8 is bsFilterCore for out[k:k+8]: w is the history window
@@ -60,9 +66,7 @@ func bsAnalysisAVX2(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 	}
 
 	var c [NumNonZeroFilters]bsCoeffs8
-	for i := range c {
-		c[i] = bsBroadcastCoeffs8(i)
-	}
+	bsBroadcastCoeffs8(&c)
 	two := archsimd.BroadcastFloat32x8(2)
 	sqrt3 := archsimd.BroadcastFloat32x8(bsSqrt3)
 	var zero archsimd.Float32x8
@@ -124,8 +128,41 @@ func bsAnalysisAVX2(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 	}
 }
 
+// bsSynthesisAVX2 is bsSynthesisSIMD with eight output samples per step.
+// The phases are filtered into t and interleaved into out after
+// ClearAVXUpperBits: the interleave moves single floats, and scalar float
+// moves inside the 256-bit section would each wait on the previous one
+// through the dirty upper register half.
 func bsSynthesisAVX2(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 	in0, in1, in2 *[SplitBandSize]float32, out *[FullBandSize]float32) {
+	var t [bsSubSampling][SplitBandSize]float32
+	bsSynthesisFilterAVX2(hist, in0, in1, in2, &t)
+	t0, t1, t2 := &t[0], &t[1], &t[2]
+	for k := 0; k < SplitBandSize; k += 4 {
+		y := (*[12]float32)(out[3*k : 3*k+12])
+		a := (*[4]float32)(t0[k : k+4])
+		b := (*[4]float32)(t1[k : k+4])
+		c := (*[4]float32)(t2[k : k+4])
+		y[0], y[1], y[2] = a[0], b[0], c[0]
+		y[3], y[4], y[5] = a[1], b[1], c[1]
+		y[6], y[7], y[8] = a[2], b[2], c[2]
+		y[9], y[10], y[11] = a[3], b[3], c[3]
+	}
+
+	for i := range hist {
+		copy(hist[i][:MemorySize], hist[i][SplitBandSize:])
+	}
+}
+
+// bsSynthesisFilterAVX2 modulates the bands into hist and filters and scales
+// the three output phases into t.
+func bsSynthesisFilterAVX2(hist *[bsNumSynthesisInputs][bsHistSize]float32,
+	in0, in1, in2 *[SplitBandSize]float32, t *[bsSubSampling][SplitBandSize]float32) {
+	// The coefficient array is zeroed with 128-bit stores, so it is set up
+	// before the first 256-bit operation.
+	var c [NumNonZeroFilters]bsCoeffs8
+	bsBroadcastCoeffs8(&c)
+
 	// Modulate: the filter input is ((0 + m0*b0) + m1*b1) + m2*b2.
 	g0, g1, g2, g3, g4, g5 := &hist[0], &hist[1], &hist[2], &hist[3], &hist[4], &hist[5]
 	two := archsimd.BroadcastFloat32x8(2)
@@ -148,12 +185,8 @@ func bsSynthesisAVX2(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 	// Filter, scale and upsample: phase d lands at out[d + bsSubSampling*k]
 	// as the sum of upsamplingScaling * v over the phase's filters in inShift
 	// order, starting from zero.
-	var c [NumNonZeroFilters]bsCoeffs8
-	for i := range c {
-		c[i] = bsBroadcastCoeffs8(i)
-	}
 	scale := archsimd.BroadcastFloat32x8(bsSubSampling)
-	var t0, t1, t2 [8]float32
+	t0, t1, t2 := &t[0], &t[1], &t[2]
 	for k := 0; k < SplitBandSize; k += 8 {
 		w0 := (*[23]float32)(g0[k : k+23])
 		w1 := (*[23]float32)(g1[k : k+23])
@@ -178,17 +211,9 @@ func bsSynthesisAVX2(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 		o2 = o2.Add(scale.Mul(bsTap8(w5, 2, &c[7])))
 		o2 = o2.Add(scale.Mul(bsTap8(w2, 3, &c[9])))
 
-		o0.StoreArray(&t0)
-		o1.StoreArray(&t1)
-		o2.StoreArray(&t2)
-		y := (*[24]float32)(out[3*k : 3*k+24])
-		for i := range t0 {
-			y[3*i], y[3*i+1], y[3*i+2] = t0[i], t1[i], t2[i]
-		}
+		o0.StoreArray((*[8]float32)(t0[k : k+8]))
+		o1.StoreArray((*[8]float32)(t1[k : k+8]))
+		o2.StoreArray((*[8]float32)(t2[k : k+8]))
 	}
 	archsimd.ClearAVXUpperBits()
-
-	for i := range hist {
-		copy(hist[i][:MemorySize], hist[i][SplitBandSize:])
-	}
 }
