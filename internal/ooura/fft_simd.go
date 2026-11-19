@@ -24,8 +24,8 @@ type vec = archsimd.Float32x4
 // Loads and stores go through array pointers converted from slices whose
 // bounds the compiler proves: a constant window of the frame (or table)
 // first, then four floats at an offset that is a constant or a bounded
-// function of a loop counter. No load or store carries a bounds check
-// (go build -gcflags=-d=ssa/check_bce reports none in this file).
+// function of a loop counter. The helpers below inline into the passes, and
+// no load or store of a pass carries a bounds check (TestNoBoundsChecks).
 
 func ld(p *[4]float32) vec { return archsimd.LoadFloat32x4Array(p) }
 
