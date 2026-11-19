@@ -1,7 +1,5 @@
 package aec3
 
-import "math"
-
 // Pure-Go lane references for the MatchedFilterCore inner loops. Each one
 // reproduces the arithmetic of one libwebrtc SIMD variant lane by lane; they
 // are the specification the archsimd kernels are tested against and the
@@ -78,26 +76,41 @@ func dlySqNeonRef(x []float32, acc *[4]float32) {
 	acc[0], acc[1], acc[2], acc[3] = q0, q1, q2, q3
 }
 
+// The SSE2 references keep the eight lanes of the two accumulators in
+// registers and advance by half groups: the low four lanes take the first
+// half of a group, the high four the second. The halves are separate basic
+// blocks, which bounds the values live at once (the eight chains and the
+// four products of a half) below the fifteen float registers of amd64; in
+// one block the compiler computes the eight products first and spills a
+// chain. The length is a multiple of 8, so the test between the halves
+// never fails.
+
 // dlyDotSSse2Ref accumulates h*x over len(h)/8 groups of 8 into the two SSE2
-// accumulators (_mm_mul_ps + _mm_add_ps). The eight lanes run in two passes
-// of four (the low and the high half of every group), so the accumulators
-// stay in registers.
+// accumulators (_mm_mul_ps + _mm_add_ps).
 func dlyDotSSse2Ref(h, x []float32, acc *[8]float32) {
 	n := len(h) &^ 7
 	h = h[:n:n]
 	x = x[:n:n]
-	for half := 0; half < 8; half += 4 {
-		s0, s1, s2, s3 := acc[half], acc[half+1], acc[half+2], acc[half+3]
-		for k := half; k < len(h)-3; k += 8 {
-			hh := (*[4]float32)(h[k : k+4])
-			xx := (*[4]float32)(x[k : k+4])
-			s0 += float32(hh[0] * xx[0])
-			s1 += float32(hh[1] * xx[1])
-			s2 += float32(hh[2] * xx[2])
-			s3 += float32(hh[3] * xx[3])
+	s0, s1, s2, s3, s4, s5, s6, s7 := acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7]
+	for k := 0; k < len(h)-3; k += 4 {
+		hh := (*[4]float32)(h[k : k+4])
+		xx := (*[4]float32)(x[k : k+4])
+		s0 += float32(hh[0] * xx[0])
+		s1 += float32(hh[1] * xx[1])
+		s2 += float32(hh[2] * xx[2])
+		s3 += float32(hh[3] * xx[3])
+		k += 4
+		if k >= len(h)-3 {
+			break
 		}
-		acc[half], acc[half+1], acc[half+2], acc[half+3] = s0, s1, s2, s3
+		hh = (*[4]float32)(h[k : k+4])
+		xx = (*[4]float32)(x[k : k+4])
+		s4 += float32(hh[0] * xx[0])
+		s5 += float32(hh[1] * xx[1])
+		s6 += float32(hh[2] * xx[2])
+		s7 += float32(hh[3] * xx[3])
 	}
+	acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7] = s0, s1, s2, s3, s4, s5, s6, s7
 }
 
 // dlyAxpyDotSSse2Ref equals dlyAxpyRef(h, xa, alpha) followed by
@@ -107,117 +120,160 @@ func dlyAxpyDotSSse2Ref(h, xa, xb []float32, alpha float32, acc *[8]float32) {
 	h = h[:n:n]
 	xa = xa[:n:n]
 	xb = xb[:n:n]
-	for half := 0; half < 8; half += 4 {
-		s0, s1, s2, s3 := acc[half], acc[half+1], acc[half+2], acc[half+3]
-		for k := half; k < len(h)-3; k += 8 {
-			hh := (*[4]float32)(h[k : k+4])
-			aa := (*[4]float32)(xa[k : k+4])
-			bb := (*[4]float32)(xb[k : k+4])
-			h0 := hh[0] + float32(alpha*aa[0])
-			h1 := hh[1] + float32(alpha*aa[1])
-			h2 := hh[2] + float32(alpha*aa[2])
-			h3 := hh[3] + float32(alpha*aa[3])
-			hh[0], hh[1], hh[2], hh[3] = h0, h1, h2, h3
-			s0 += float32(h0 * bb[0])
-			s1 += float32(h1 * bb[1])
-			s2 += float32(h2 * bb[2])
-			s3 += float32(h3 * bb[3])
+	s0, s1, s2, s3, s4, s5, s6, s7 := acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7]
+	for k := 0; k < len(h)-3; k += 4 {
+		hh := (*[4]float32)(h[k : k+4])
+		aa := (*[4]float32)(xa[k : k+4])
+		bb := (*[4]float32)(xb[k : k+4])
+		h0 := hh[0] + float32(alpha*aa[0])
+		h1 := hh[1] + float32(alpha*aa[1])
+		h2 := hh[2] + float32(alpha*aa[2])
+		h3 := hh[3] + float32(alpha*aa[3])
+		hh[0], hh[1], hh[2], hh[3] = h0, h1, h2, h3
+		s0 += float32(h0 * bb[0])
+		s1 += float32(h1 * bb[1])
+		s2 += float32(h2 * bb[2])
+		s3 += float32(h3 * bb[3])
+		k += 4
+		if k >= len(h)-3 {
+			break
 		}
-		acc[half], acc[half+1], acc[half+2], acc[half+3] = s0, s1, s2, s3
+		hh = (*[4]float32)(h[k : k+4])
+		aa = (*[4]float32)(xa[k : k+4])
+		bb = (*[4]float32)(xb[k : k+4])
+		h4 := hh[0] + float32(alpha*aa[0])
+		h5 := hh[1] + float32(alpha*aa[1])
+		h6 := hh[2] + float32(alpha*aa[2])
+		h7 := hh[3] + float32(alpha*aa[3])
+		hh[0], hh[1], hh[2], hh[3] = h4, h5, h6, h7
+		s4 += float32(h4 * bb[0])
+		s5 += float32(h5 * bb[1])
+		s6 += float32(h6 * bb[2])
+		s7 += float32(h7 * bb[3])
 	}
+	acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7] = s0, s1, s2, s3, s4, s5, s6, s7
 }
 
 // dlySqSse2Ref accumulates x*x over len(x)/8 groups of 8.
 func dlySqSse2Ref(x []float32, acc *[8]float32) {
 	n := len(x) &^ 7
 	x = x[:n:n]
-	for half := 0; half < 8; half += 4 {
-		q0, q1, q2, q3 := acc[half], acc[half+1], acc[half+2], acc[half+3]
-		for k := half; k < len(x)-3; k += 8 {
-			xx := (*[4]float32)(x[k : k+4])
-			q0 += float32(xx[0] * xx[0])
-			q1 += float32(xx[1] * xx[1])
-			q2 += float32(xx[2] * xx[2])
-			q3 += float32(xx[3] * xx[3])
+	q0, q1, q2, q3, q4, q5, q6, q7 := acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7]
+	for k := 0; k < len(x)-3; k += 4 {
+		xx := (*[4]float32)(x[k : k+4])
+		q0 += float32(xx[0] * xx[0])
+		q1 += float32(xx[1] * xx[1])
+		q2 += float32(xx[2] * xx[2])
+		q3 += float32(xx[3] * xx[3])
+		k += 4
+		if k >= len(x)-3 {
+			break
 		}
-		acc[half], acc[half+1], acc[half+2], acc[half+3] = q0, q1, q2, q3
+		xx = (*[4]float32)(x[k : k+4])
+		q4 += float32(xx[0] * xx[0])
+		q5 += float32(xx[1] * xx[1])
+		q6 += float32(xx[2] * xx[2])
+		q7 += float32(xx[3] * xx[3])
 	}
+	acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7] = q0, q1, q2, q3, q4, q5, q6, q7
 }
 
 // Software fused multiply-add of the AVX2 lane references.
 //
-// fmaf (fmaf.go) computes q = fl64(a*b + c) and returns float32(q) unless q
-// is a float32 rounding boundary, the only case in which rounding q differs
-// from rounding the exact a*b + c. Every boundary has at most 25 significant
-// bits, so its 28 low significand bits are zero:
-//   - the midpoints of adjacent normal float32 values and the overflow
-//     threshold 2^128 - 2^103 have exactly 25, the last of them bit 28 of
-//     the float64 significand;
-//   - the midpoints of adjacent subnormal float32 values, the odd multiples
-//     of 2^-150 below 2^-126, have at most 24: bit 28 is zero as well.
+// A fused a*b + c is s = fl64(a*b + c) rounded to float32, unless s is a
+// float32 rounding boundary (fmaf.go). The loops below work on float64
+// values: a lane accumulator is the float64 widening of its float32 value,
+// so one step of its chain is a multiply and an add, the narrowing that
+// rounds it and the widening that the next step and the boundary test
+// (fmafTie) both use. The float64 products are exact, so the sums are the
+// same whether or not the compiler contracts them.
 //
-// dlyFmaTry therefore reports q as a possible boundary only when its 28 low
-// bits are zero and either bit 28 is set or 0 < |q| < 2^-126. The loops
-// below reach the second half of that test for sums that are exact in few
-// bits (zeros, small integers), and fmaf itself for about one random sum in
-// 2^29.
-
-// dlyFmaTry returns float32(q) for q = fmafSum(a, b, c) and whether q may
-// be a rounding boundary, in which case the result is fmaf(a, b, c)
-// instead. The product of two float32 values is exact in float64, so q is
-// the same whether or not the compiler contracts the expression.
-//
-// The loops below make no call: a call inside a loop makes the compiler
-// spill every live accumulator in every iteration. They test the flags of a
-// whole group and, on the rare flagged group, store their state and hand
-// the rest of the work, from that group on, to a function that calls fmaf
-// for every element (the From functions).
-func dlyFmaTry(a, b, c float32) (float32, bool) {
-	q := float64(a)*float64(b) + float64(c)
-	bits := math.Float64bits(q)
-	return float32(q), bits&0x0FFFFFFF == 0 && (bits&0x10000000 != 0 || bits<<1-1 < 897<<53-1)
-}
+// The loops make no call: a call inside a loop makes the compiler spill
+// every live accumulator in every iteration. They test every sum and, on the
+// rare flagged one, leave the loop and hand the work to a function that
+// calls fmaf for every element (the From functions). The accumulators of a
+// pass are stored when it ends, and a pass stores nothing else but the
+// elements of h whose sums passed the test; a From function therefore
+// restarts the accumulation of the pass from the stored accumulators, and
+// the loop keeps no value alive for it.
 
 // dlyDotSAvx2Ref accumulates h*x over len(h)/16 groups of 16 into the two
 // AVX2 accumulators with fused multiply-add (_mm256_fmadd_ps). The sixteen
-// lanes run in four passes of four, so the accumulators stay in registers.
+// lanes run in two passes of eight, so the accumulators stay in registers.
 func dlyDotSAvx2Ref(h, x []float32, acc *[16]float32) {
 	n := len(h) &^ 15
 	h = h[:n:n]
 	x = x[:n:n]
-	for q := 0; q < 16; q += 4 {
-		a := (*[4]float32)(acc[q : q+4])
-		s0, s1, s2, s3 := a[0], a[1], a[2], a[3]
-		for k := q; k < len(h)-3; k += 16 {
-			hh := (*[4]float32)(h[k : k+4])
-			xx := (*[4]float32)(x[k : k+4])
-			r0, b0 := dlyFmaTry(hh[0], xx[0], s0)
-			r1, b1 := dlyFmaTry(hh[1], xx[1], s1)
-			r2, b2 := dlyFmaTry(hh[2], xx[2], s2)
-			r3, b3 := dlyFmaTry(hh[3], xx[3], s3)
-			if b0 || b1 || b2 || b3 {
-				a[0], a[1], a[2], a[3] = s0, s1, s2, s3
-				dlyDotSAvx2RefFrom(h, x, acc, q, k)
-				return
+	if n == 0 {
+		return
+	}
+	q := 0
+pass:
+	for ; q < 16; q += 8 {
+		a := (*[8]float32)(acc[q : q+8])
+		s0, s1, s2, s3, s4, s5, s6, s7 := float64(a[0]), float64(a[1]), float64(a[2]), float64(a[3]), float64(a[4]), float64(a[5]), float64(a[6]), float64(a[7])
+		for k := q; k < len(h)-7; k += 16 {
+			hh := (*[8]float32)(h[k : k+8])
+			xx := (*[8]float32)(x[k : k+8])
+			u0 := float64(hh[0])*float64(xx[0]) + s0
+			s0 = float64(float32(u0))
+			if fmafTie(u0, s0) {
+				break pass
 			}
-			s0, s1, s2, s3 = r0, r1, r2, r3
+			u1 := float64(hh[1])*float64(xx[1]) + s1
+			s1 = float64(float32(u1))
+			if fmafTie(u1, s1) {
+				break pass
+			}
+			u2 := float64(hh[2])*float64(xx[2]) + s2
+			s2 = float64(float32(u2))
+			if fmafTie(u2, s2) {
+				break pass
+			}
+			u3 := float64(hh[3])*float64(xx[3]) + s3
+			s3 = float64(float32(u3))
+			if fmafTie(u3, s3) {
+				break pass
+			}
+			u4 := float64(hh[4])*float64(xx[4]) + s4
+			s4 = float64(float32(u4))
+			if fmafTie(u4, s4) {
+				break pass
+			}
+			u5 := float64(hh[5])*float64(xx[5]) + s5
+			s5 = float64(float32(u5))
+			if fmafTie(u5, s5) {
+				break pass
+			}
+			u6 := float64(hh[6])*float64(xx[6]) + s6
+			s6 = float64(float32(u6))
+			if fmafTie(u6, s6) {
+				break pass
+			}
+			u7 := float64(hh[7])*float64(xx[7]) + s7
+			s7 = float64(float32(u7))
+			if fmafTie(u7, s7) {
+				break pass
+			}
 		}
-		a[0], a[1], a[2], a[3] = s0, s1, s2, s3
+		a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7] = float32(s0), float32(s1), float32(s2), float32(s3), float32(s4), float32(s5), float32(s6), float32(s7)
+	}
+	if q < 16 {
+		dlyDotSAvx2RefFrom(h, x, acc, q)
 	}
 }
 
-// dlyDotSAvx2RefFrom finishes dlyDotSAvx2Ref from element k of the pass of
-// lanes q..q+3, whose accumulators are in acc.
+// dlyDotSAvx2RefFrom finishes dlyDotSAvx2Ref from the pass that starts at
+// lane q, whose accumulators acc holds as they were before the pass.
 //
 //go:noinline
-func dlyDotSAvx2RefFrom(h, x []float32, acc *[16]float32, q, k int) {
-	for ; q < 16; q += 4 {
-		for ; k < len(h)-3; k += 16 {
-			for j := 0; j < 4; j++ {
+func dlyDotSAvx2RefFrom(h, x []float32, acc *[16]float32, q int) {
+	for ; q < 16; q += 8 {
+		for k := q; k < len(h)-7; k += 16 {
+			for j := 0; j < 8; j++ {
 				acc[q+j] = fmaf(h[k+j], x[k+j], acc[q+j])
 			}
 		}
-		k = q + 4
 	}
 }
 
@@ -230,46 +286,158 @@ func dlyAxpyFmaDotSAvx2Ref(h, xa, xb []float32, alpha float32, acc *[16]float32)
 	h = h[:n:n]
 	xa = xa[:n:n]
 	xb = xb[:n:n]
-	for q := 0; q < 16; q += 4 {
-		a := (*[4]float32)(acc[q : q+4])
-		s0, s1, s2, s3 := a[0], a[1], a[2], a[3]
-		for k := q; k < len(h)-3; k += 16 {
-			hh := (*[4]float32)(h[k : k+4])
-			aa := (*[4]float32)(xa[k : k+4])
-			bb := (*[4]float32)(xb[k : k+4])
-			h0, b0 := dlyFmaTry(aa[0], alpha, hh[0])
-			h1, b1 := dlyFmaTry(aa[1], alpha, hh[1])
-			h2, b2 := dlyFmaTry(aa[2], alpha, hh[2])
-			h3, b3 := dlyFmaTry(aa[3], alpha, hh[3])
-			r0, c0 := dlyFmaTry(h0, bb[0], s0)
-			r1, c1 := dlyFmaTry(h1, bb[1], s1)
-			r2, c2 := dlyFmaTry(h2, bb[2], s2)
-			r3, c3 := dlyFmaTry(h3, bb[3], s3)
-			if b0 || b1 || b2 || b3 || c0 || c1 || c2 || c3 {
-				a[0], a[1], a[2], a[3] = s0, s1, s2, s3
-				dlyAxpyFmaDotSAvx2RefFrom(h, xa, xb, alpha, acc, q, k)
-				return
+	if n == 0 {
+		return
+	}
+	al := float64(alpha)
+	// On a flagged sum, the pass has updated its elements of h before
+	// element e and none after.
+	q, e := 0, 0
+pass:
+	for ; q < 16; q += 8 {
+		a := (*[8]float32)(acc[q : q+8])
+		s0, s1, s2, s3, s4, s5, s6, s7 := float64(a[0]), float64(a[1]), float64(a[2]), float64(a[3]), float64(a[4]), float64(a[5]), float64(a[6]), float64(a[7])
+		for k := q; k < len(h)-7; k += 16 {
+			hh := (*[8]float32)(h[k : k+8])
+			aa := (*[8]float32)(xa[k : k+8])
+			bb := (*[8]float32)(xb[k : k+8])
+			v0 := float64(aa[0])*al + float64(hh[0])
+			h0 := float32(v0)
+			g0 := float64(h0)
+			u0 := g0*float64(bb[0]) + s0
+			s0 = float64(float32(u0))
+			if fmafTie(v0, g0) {
+				e = k + 0
+				break pass
 			}
-			hh[0], hh[1], hh[2], hh[3] = h0, h1, h2, h3
-			s0, s1, s2, s3 = r0, r1, r2, r3
+			if fmafTie(u0, s0) {
+				e = k + 0
+				break pass
+			}
+			hh[0] = h0
+			v1 := float64(aa[1])*al + float64(hh[1])
+			h1 := float32(v1)
+			g1 := float64(h1)
+			u1 := g1*float64(bb[1]) + s1
+			s1 = float64(float32(u1))
+			if fmafTie(v1, g1) {
+				e = k + 1
+				break pass
+			}
+			if fmafTie(u1, s1) {
+				e = k + 1
+				break pass
+			}
+			hh[1] = h1
+			v2 := float64(aa[2])*al + float64(hh[2])
+			h2 := float32(v2)
+			g2 := float64(h2)
+			u2 := g2*float64(bb[2]) + s2
+			s2 = float64(float32(u2))
+			if fmafTie(v2, g2) {
+				e = k + 2
+				break pass
+			}
+			if fmafTie(u2, s2) {
+				e = k + 2
+				break pass
+			}
+			hh[2] = h2
+			v3 := float64(aa[3])*al + float64(hh[3])
+			h3 := float32(v3)
+			g3 := float64(h3)
+			u3 := g3*float64(bb[3]) + s3
+			s3 = float64(float32(u3))
+			if fmafTie(v3, g3) {
+				e = k + 3
+				break pass
+			}
+			if fmafTie(u3, s3) {
+				e = k + 3
+				break pass
+			}
+			hh[3] = h3
+			v4 := float64(aa[4])*al + float64(hh[4])
+			h4 := float32(v4)
+			g4 := float64(h4)
+			u4 := g4*float64(bb[4]) + s4
+			s4 = float64(float32(u4))
+			if fmafTie(v4, g4) {
+				e = k + 4
+				break pass
+			}
+			if fmafTie(u4, s4) {
+				e = k + 4
+				break pass
+			}
+			hh[4] = h4
+			v5 := float64(aa[5])*al + float64(hh[5])
+			h5 := float32(v5)
+			g5 := float64(h5)
+			u5 := g5*float64(bb[5]) + s5
+			s5 = float64(float32(u5))
+			if fmafTie(v5, g5) {
+				e = k + 5
+				break pass
+			}
+			if fmafTie(u5, s5) {
+				e = k + 5
+				break pass
+			}
+			hh[5] = h5
+			v6 := float64(aa[6])*al + float64(hh[6])
+			h6 := float32(v6)
+			g6 := float64(h6)
+			u6 := g6*float64(bb[6]) + s6
+			s6 = float64(float32(u6))
+			if fmafTie(v6, g6) {
+				e = k + 6
+				break pass
+			}
+			if fmafTie(u6, s6) {
+				e = k + 6
+				break pass
+			}
+			hh[6] = h6
+			v7 := float64(aa[7])*al + float64(hh[7])
+			h7 := float32(v7)
+			g7 := float64(h7)
+			u7 := g7*float64(bb[7]) + s7
+			s7 = float64(float32(u7))
+			if fmafTie(v7, g7) {
+				e = k + 7
+				break pass
+			}
+			if fmafTie(u7, s7) {
+				e = k + 7
+				break pass
+			}
+			hh[7] = h7
 		}
-		a[0], a[1], a[2], a[3] = s0, s1, s2, s3
+		a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7] = float32(s0), float32(s1), float32(s2), float32(s3), float32(s4), float32(s5), float32(s6), float32(s7)
+	}
+	if q < 16 {
+		dlyAxpyFmaDotSAvx2RefFrom(h, xa, xb, alpha, acc, q, e)
 	}
 }
 
-// dlyAxpyFmaDotSAvx2RefFrom finishes dlyAxpyFmaDotSAvx2Ref from element k of
-// the pass of lanes q..q+3, whose accumulators are in acc.
+// dlyAxpyFmaDotSAvx2RefFrom finishes dlyAxpyFmaDotSAvx2Ref from the pass
+// that starts at lane q: acc holds the accumulators as they were before the
+// pass, and the pass has updated its elements of h before element e (k+j
+// for lane j of the group at k) and none after.
 //
 //go:noinline
-func dlyAxpyFmaDotSAvx2RefFrom(h, xa, xb []float32, alpha float32, acc *[16]float32, q, k int) {
-	for ; q < 16; q += 4 {
-		for ; k < len(h)-3; k += 16 {
-			for j := 0; j < 4; j++ {
-				h[k+j] = fmaf(xa[k+j], alpha, h[k+j])
+func dlyAxpyFmaDotSAvx2RefFrom(h, xa, xb []float32, alpha float32, acc *[16]float32, q, e int) {
+	for ; q < 16; q += 8 {
+		for k := q; k < len(h)-7; k += 16 {
+			for j := 0; j < 8; j++ {
+				if k+j >= e {
+					h[k+j] = fmaf(xa[k+j], alpha, h[k+j])
+				}
 				acc[q+j] = fmaf(h[k+j], xb[k+j], acc[q+j])
 			}
 		}
-		k = q + 4
+		e = 0
 	}
 }
 
@@ -371,17 +539,22 @@ func dlyAxpyAccErrSse2Ref(h, xa, xb []float32, alpha, y float32, accErr []float3
 		aa := (*[8]float32)(xa[4*g : 4*g+8])
 		xx := (*[8]float32)(xb[4*g : 4*g+8])
 		ae := (*[2]float32)(accErr[g : g+2])
-		var u [8]float32
-		for j := range u {
-			u[j] = hh[j] + float32(alpha*aa[j])
-		}
-		*hh = u
-		p0, p1 := float32(u[0]*xx[0]), float32(u[1]*xx[1])
-		p2, p3 := float32(u[2]*xx[2]), float32(u[3]*xx[3])
-		q0, q1 := float32(u[4]*xx[4]), float32(u[5]*xx[5])
-		q2, q3 := float32(u[6]*xx[6]), float32(u[7]*xx[7])
+		u0 := hh[0] + float32(alpha*aa[0])
+		u1 := hh[1] + float32(alpha*aa[1])
+		u2 := hh[2] + float32(alpha*aa[2])
+		u3 := hh[3] + float32(alpha*aa[3])
+		hh[0], hh[1], hh[2], hh[3] = u0, u1, u2, u3
+		p0, p1 := float32(u0*xx[0]), float32(u1*xx[1])
+		p2, p3 := float32(u2*xx[2]), float32(u3*xx[3])
 		s += ((p0 + p1) + p2) + p3
 		e0 := s - y
+		u4 := hh[4] + float32(alpha*aa[4])
+		u5 := hh[5] + float32(alpha*aa[5])
+		u6 := hh[6] + float32(alpha*aa[6])
+		u7 := hh[7] + float32(alpha*aa[7])
+		hh[4], hh[5], hh[6], hh[7] = u4, u5, u6, u7
+		q0, q1 := float32(u4*xx[4]), float32(u5*xx[5])
+		q2, q3 := float32(u6*xx[6]), float32(u7*xx[7])
 		s += ((q0 + q1) + q2) + q3
 		e1 := s - y
 		ae[0] += float32(e0 * e0)
@@ -407,9 +580,10 @@ func dlyAccErrAvx2Ref(h, x []float32, y float32, accErr []float32) float32 {
 		p0, p1 := float32(hh[0]*xx[0]), float32(hh[1]*xx[1])
 		p2, p3 := float32(hh[2]*xx[2]), float32(hh[3]*xx[3])
 		t := s + ((p0 + p1) + (p2 + p3))
-		e := t - y
-		r, b := dlyFmaTry(e, e, accErr[g])
-		if b {
+		e := float64(t - y)
+		u := e*e + float64(accErr[g])
+		r := float32(u)
+		if fmafTie(u, float64(r)) {
 			return dlyAccErrAvx2RefFrom(h, x, y, accErr, g, s)
 		}
 		accErr[g] = r
@@ -444,21 +618,25 @@ func dlyAxpyFmaAccErrAvx2Ref(h, xa, xb []float32, alpha, y float32, accErr []flo
 	xa = xa[:n:n]
 	xb = xb[:n:n]
 	accErr = accErr[: n/4 : n/4]
+	al := float64(alpha)
 	var s float32
 	for g := range accErr {
 		hh := (*[4]float32)(h[4*g : 4*g+4])
 		aa := (*[4]float32)(xa[4*g : 4*g+4])
 		xx := (*[4]float32)(xb[4*g : 4*g+4])
-		h0, b0 := dlyFmaTry(aa[0], alpha, hh[0])
-		h1, b1 := dlyFmaTry(aa[1], alpha, hh[1])
-		h2, b2 := dlyFmaTry(aa[2], alpha, hh[2])
-		h3, b3 := dlyFmaTry(aa[3], alpha, hh[3])
+		v0 := float64(aa[0])*al + float64(hh[0])
+		v1 := float64(aa[1])*al + float64(hh[1])
+		v2 := float64(aa[2])*al + float64(hh[2])
+		v3 := float64(aa[3])*al + float64(hh[3])
+		h0, h1, h2, h3 := float32(v0), float32(v1), float32(v2), float32(v3)
 		p0, p1 := float32(h0*xx[0]), float32(h1*xx[1])
 		p2, p3 := float32(h2*xx[2]), float32(h3*xx[3])
 		t := s + ((p0 + p1) + (p2 + p3))
-		e := t - y
-		r, b4 := dlyFmaTry(e, e, accErr[g])
-		if b0 || b1 || b2 || b3 || b4 {
+		e := float64(t - y)
+		u := e*e + float64(accErr[g])
+		r := float32(u)
+		if fmafTie(v0, float64(h0)) || fmafTie(v1, float64(h1)) || fmafTie(v2, float64(h2)) ||
+			fmafTie(v3, float64(h3)) || fmafTie(u, float64(r)) {
 			return dlyAxpyFmaAccErrAvx2RefFrom(h, xa, xb, alpha, y, accErr, g, s)
 		}
 		hh[0], hh[1], hh[2], hh[3] = h0, h1, h2, h3
@@ -513,15 +691,18 @@ func dlyAxpyRef(h, x []float32, alpha float32) {
 func dlyAxpyFmaRef(h, x []float32, alpha float32) {
 	n := len(h)
 	x = x[:n:n]
+	al := float64(alpha)
 	k := 0
 	for ; k < n-3; k += 4 {
 		hh := (*[4]float32)(h[k : k+4])
 		xx := (*[4]float32)(x[k : k+4])
-		h0, b0 := dlyFmaTry(xx[0], alpha, hh[0])
-		h1, b1 := dlyFmaTry(xx[1], alpha, hh[1])
-		h2, b2 := dlyFmaTry(xx[2], alpha, hh[2])
-		h3, b3 := dlyFmaTry(xx[3], alpha, hh[3])
-		if b0 || b1 || b2 || b3 {
+		v0 := float64(xx[0])*al + float64(hh[0])
+		v1 := float64(xx[1])*al + float64(hh[1])
+		v2 := float64(xx[2])*al + float64(hh[2])
+		v3 := float64(xx[3])*al + float64(hh[3])
+		h0, h1, h2, h3 := float32(v0), float32(v1), float32(v2), float32(v3)
+		if fmafTie(v0, float64(h0)) || fmafTie(v1, float64(h1)) || fmafTie(v2, float64(h2)) ||
+			fmafTie(v3, float64(h3)) {
 			break
 		}
 		hh[0], hh[1], hh[2], hh[3] = h0, h1, h2, h3

@@ -584,6 +584,10 @@ func dlyZeroAcc(acc *[16]float32) { *acc = [16]float32{} }
 // registers).
 func dlyPeakLanes256(p []float32, mv *[16]float32, iv *[16]int32) bool { return false }
 
+// dlyLanesPureGo selects what serves the pure-Go references and the
+// archsimd kernels have no use for (the tables of squares of the x*x sums).
+const dlyLanesPureGo = false
+
 // dlyCoreLaneKernel runs the MatchedFilterCore loop of the lane with group
 // size g on one filter where the lane has its own core, and reports whether
 // it did; no lane of this build has one.

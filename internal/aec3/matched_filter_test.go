@@ -209,6 +209,14 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 				dlyX2LanesRef(g, x[len(x)-mg-len(lanes)+g:], mg, lanesC)
 				dlyRequireBits(t, "x2 lanes pair A", lanesA, lanes)
 				dlyRequireBits(t, "x2 lanes pair B", lanesB, lanesC)
+				if g != 16 {
+					// The sums of the windows from a table of squares.
+					r := 1 + rng.Intn(min(dlyX2Run, len(x)-mg+1))
+					var got, want [dlyX2Run]float32
+					dlyX2Sums(g, false, x, mg, r, &want)
+					dlyX2SumsSq(g, x, mg, r, dlyRandSlice(rng, dlyX2SqScratch(mg), 1), &got)
+					dlyRequireBits(t, "x2 sums from squares", got[:r], want[:r])
+				}
 				for a0 := range lanes {
 					var w [1]float32
 					for m := 0; m < mg/g; m++ {
@@ -282,6 +290,11 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 				var multi [dlyX2Run]float32
 				dlyX2WrappedMulti(g, xw, n, lo, r, &multi)
 				dlyRequireBits(t, "x2 wrapped multi", multi[:r], ref[:r])
+				if g != 16 && n+r-1 <= xSize {
+					var sq [dlyX2Run]float32
+					dlyX2WrappedSq(g, xw, n, lo, r, dlyRandSlice(rng, dlyX2SqScratch(n), 1), &sq)
+					dlyRequireBits(t, "x2 wrapped from squares", sq[:r], ref[:r])
+				}
 				for i := 0; i < r; i++ {
 					a := lo + i
 					var lanes [16]float32
@@ -351,25 +364,27 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 	}
 }
 
-// TestDlyFmaTryMatchesFmaf checks the boundary test of the AVX2 lane
-// references: whenever dlyFmaTry does not flag its sum, the rounded sum is
+// TestFmafTieMatchesFmaf checks the boundary test of the AVX2 lane
+// references: whenever fmafTie does not flag a sum, the rounded sum is
 // fmaf's result, on operands built to land on and next to float32 rounding
 // boundaries (normal and subnormal midpoints, the overflow threshold) and on
 // random ones.
-func TestDlyFmaTryMatchesFmaf(t *testing.T) {
+func TestFmafTieMatchesFmaf(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	check := func(a, b, c float32) {
-		r, suspect := dlyFmaTry(a, b, c)
+		s := fmafSum(a, b, c)
+		r := float32(s)
+		suspect := fmafTie(s, float64(r))
 		want := fmaf(a, b, c)
 		if !suspect && math.Float32bits(r) != math.Float32bits(want) && !(r != r && want != want) {
-			t.Fatalf("dlyFmaTry(%v, %v, %v) = %v unflagged, fmaf = %v", a, b, c, r, want)
+			t.Fatalf("fmafTie(%v, %v, %v) = %v unflagged, fmaf = %v", a, b, c, r, want)
 		}
-		if fmafHard(fmafSum(a, b, c)) && !suspect {
+		if fmafHard(s) && !suspect {
 			// Unflagged sums that fmaf sends to its slow path are tiny sums
 			// that are not boundaries; the slow path agrees with the rounded
 			// sum there (checked above).
-			if s := math.Abs(fmafSum(a, b, c)); !(s > 0 && s < 0x1p-126) {
-				t.Fatalf("dlyFmaTry(%v, %v, %v) misses a boundary pattern", a, b, c)
+			if m := math.Abs(s); !(m > 0 && m < 0x1p-126) {
+				t.Fatalf("fmafTie(%v, %v, %v) misses a boundary pattern", a, b, c)
 			}
 		}
 	}
@@ -478,5 +493,155 @@ func BenchmarkMatchedFilterCore(b *testing.B) {
 				mf.runCore(tc.startIdx, 1e30, 0.7, x, y, h, &updated, &errSum, tc.preEcho)
 			}
 		})
+	}
+}
+
+// TestDlyAvx2RefFlaggedSums runs the AVX2 lane references on data with
+// float32 rounding ties at random places, so that their loops leave for the
+// per-element functions from every lane and pass, after any number of
+// groups: (2^12+1)^2 = 2^24 + 2^13 + 1 has 25 significant bits, and so has
+// its sum with a multiple of 2^14 (an exact tie, which rounds to even); its
+// sum with 2^-40 lies above the tie, which is all its float64 rounding
+// keeps, and rounds up. The results are compared with the literal
+// per-element fmaf loops.
+func TestDlyAvx2RefFlaggedSums(t *testing.T) {
+	rng := rand.New(rand.NewSource(23))
+	const tie = 4097
+	// addend returns a value that leaves tie*tie on or just above a tie.
+	addend := func() float32 {
+		if rng.Intn(2) == 0 {
+			return 0x1p-40
+		}
+		return float32(rng.Intn(3)) * 0x1p14
+	}
+	flagged := 0
+	count := func(a, b, c float32) {
+		s := fmafSum(a, b, c)
+		if fmafTie(s, float64(float32(s))) {
+			flagged++
+		}
+	}
+	trials := 6000
+	if testing.Short() {
+		trials = 600
+	}
+	for trial := 0; trial < trials; trial++ {
+		n := 16 * rng.Intn(9)
+		h := dlyRandSlice(rng, n, 0.3)
+		x := dlyRandSlice(rng, n, 1000)
+		xa := dlyRandSlice(rng, n, 1000)
+		alpha := float32(rng.NormFloat64() * 1e-4)
+		var acc0 [16]float32
+		if trial%2 == 0 {
+			acc0 = dlyRandAcc(rng)
+		}
+		ties := rng.Intn(4)
+		if trial%7 == 0 {
+			// Ties in the update: alpha*xa + h.
+			alpha = tie
+		}
+		for i := 0; i < ties && n > 0; i++ {
+			k := rng.Intn(n)
+			if alpha == tie {
+				xa[k] = tie
+				h[k] = addend()
+			} else {
+				// A tie in the accumulation needs the lane's accumulator on
+				// the product's grid: zero the lane's earlier elements.
+				for j := k % 16; j < k; j += 16 {
+					h[j] = 0
+				}
+				acc0[k%16] = addend()
+				h[k], x[k] = tie, tie
+				if rng.Intn(2) == 0 {
+					xa[k] = 0 // the update leaves the tie in place
+				}
+			}
+		}
+
+		// Dot.
+		got, want := acc0, acc0
+		dlyDotSAvx2Ref(h, x, &got)
+		for k := range h {
+			count(h[k], x[k], want[k%16])
+			want[k%16] = fmaf(h[k], x[k], want[k%16])
+		}
+		dlyRequireBits(t, "dot", got[:], want[:])
+
+		// Squares: ties at the tie elements when their lane's sum is on the
+		// grid.
+		got, want = acc0, acc0
+		dlySqAvx2Ref(x, &got)
+		for k := range x {
+			count(x[k], x[k], want[k%16])
+			want[k%16] = fmaf(x[k], x[k], want[k%16])
+		}
+		dlyRequireBits(t, "sq", got[:], want[:])
+
+		// Update.
+		hA := append([]float32(nil), h...)
+		hW := append([]float32(nil), h...)
+		dlyAxpyFmaRef(hA, xa, alpha)
+		for k := range hW {
+			count(xa[k], alpha, hW[k])
+			hW[k] = fmaf(xa[k], alpha, hW[k])
+		}
+		dlyRequireBits(t, "axpy", hA, hW)
+
+		// Update and dot.
+		got, want = acc0, acc0
+		hA = append(hA[:0], h...)
+		dlyAxpyFmaDotSAvx2Ref(hA, xa, x, alpha, &got)
+		for k := range hW {
+			count(hW[k], x[k], want[k%16])
+			want[k%16] = fmaf(hW[k], x[k], want[k%16])
+		}
+		dlyRequireBits(t, "axpyDot h", hA, hW)
+		dlyRequireBits(t, "axpyDot", got[:], want[:])
+
+		// Accumulated error, with and without the update: the error of a
+		// group is a tie when its sum is zero and y is the tie's root.
+		y := float32(rng.NormFloat64() * 1000)
+		if trial%3 == 0 {
+			y = tie
+			for k := range h[:n/2] {
+				h[k] = 0
+			}
+		}
+		accErr0 := make([]float32, n/4)
+		for i := range accErr0 {
+			accErr0[i] = addend()
+		}
+		literal := func(hh []float32) ([]float32, float32) {
+			ae := append([]float32(nil), accErr0...)
+			var s float32
+			for g := range ae {
+				p0, p1 := float32(hh[4*g]*x[4*g]), float32(hh[4*g+1]*x[4*g+1])
+				p2, p3 := float32(hh[4*g+2]*x[4*g+2]), float32(hh[4*g+3]*x[4*g+3])
+				s += (p0 + p1) + (p2 + p3)
+				e := s - y
+				count(e, e, ae[g])
+				ae[g] = fmaf(e, e, ae[g])
+			}
+			return ae, s
+		}
+		aeA := append([]float32(nil), accErr0...)
+		sA := dlyAccErrAvx2Ref(h, x, y, aeA)
+		aeW, sW := literal(h)
+		dlyRequireBits(t, "accErr", append(aeA, sA), append(aeW, sW))
+
+		aeA = append(aeA[:0], accErr0...)
+		hA = append(hA[:0], h...)
+		hW = append(hW[:0], h...)
+		sA = dlyAxpyFmaAccErrAvx2Ref(hA, xa, x, alpha, y, aeA)
+		for k := range hW {
+			hW[k] = fmaf(xa[k], alpha, hW[k])
+		}
+		aeW, sW = literal(hW)
+		dlyRequireBits(t, "axpyAccErr h", hA, hW)
+		dlyRequireBits(t, "axpyAccErr", append(aeA, sA), append(aeW, sW))
+	}
+	if flagged < trials {
+		t.Fatalf("only %d flagged sums in %d trials", flagged, trials)
 	}
 }

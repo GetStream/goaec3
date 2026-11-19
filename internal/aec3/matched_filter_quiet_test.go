@@ -151,6 +151,7 @@ func (c dlyQuietCase) String() string {
 
 type dlyQuietStats struct {
 	skipped, ran, reported, preEchoUpdates int
+	filterSkips                            int // cores of single quiet filters not run
 }
 
 // dlyQuietRun drives a skipping and a non-skipping MatchedFilter side by
@@ -224,6 +225,10 @@ func dlyQuietRun(c dlyQuietCase, seed int64, numBlocks int, modes []int, tamper 
 			s.buf.Read = s.rng.Intn(len(s.buf.Buffer))
 		}
 	}
+	st.filterSkips = int(skip.QuietFilterSkipsForTesting())
+	if ref.QuietFilterSkipsForTesting() != 0 {
+		return "the filter without the skip skipped a filter core", st
+	}
 	return "", st
 }
 
@@ -270,8 +275,8 @@ func TestDlyQuietSkipStateMatchesNoSkip(t *testing.T) {
 		if diff != "" {
 			t.Errorf("%v: %s", c, diff)
 		}
-		t.Logf("%v: skipped %d, ran %d, lag reports %d, pre-echo updates %d", c, st.skipped, st.ran, st.reported,
-			st.preEchoUpdates)
+		t.Logf("%v: skipped %d, ran %d (%d filter cores skipped), lag reports %d, pre-echo updates %d", c,
+			st.skipped, st.ran, st.filterSkips, st.reported, st.preEchoUpdates)
 		total.skipped += st.skipped
 		total.ran += st.ran
 		total.reported += st.reported
@@ -284,6 +289,9 @@ func TestDlyQuietSkipStateMatchesNoSkip(t *testing.T) {
 			}
 			if c.preEcho && st.preEchoUpdates == 0 {
 				t.Errorf("%v: the pre-echo path never ran", c)
+			}
+			if st.filterSkips < numBlocks/30 {
+				t.Errorf("%v: only %d filter cores skipped in blocks that ran", c, st.filterSkips)
 			}
 		}
 	}
@@ -460,5 +468,55 @@ func BenchmarkMatchedFilterUpdateQuiet(b *testing.B) {
 				m.Update(s.buf, y, false)
 			}
 		})
+	}
+}
+
+// TestDlyQuietFilterSkipRunsAccumulatedErrorFilter covers the reason the
+// quiet-filter skip never applies to the filter that computes the
+// accumulated error: with the echo path delay in the overlap of two filters,
+// the older filter's win goes to the newer one, whose windows turn quiet
+// first when the render falls silent. Its accumulated error of such a block
+// still enters the pre-echo state, which must match the filter without the
+// skip.
+func TestDlyQuietFilterSkipRunsAccumulatedErrorFilter(t *testing.T) {
+	const numFilters = 5
+	sub := BlockSize / 4
+	numBlocks := 4000
+	if testing.Short() {
+		numBlocks = 1500
+	}
+	for _, opt := range []Aec3Optimization{OptNone, OptNeon, OptSse2, OptAvx2} {
+		newFilter := func() *MatchedFilter {
+			return NewMatchedFilter(opt, sub, MatchedFilterWindowSizeSubBlocks, numFilters,
+				MatchedFilterAlignmentShiftSizeSubBlocks, 150, 0.7, 0.3, 0.2, true)
+		}
+		skip, ref := newFilter(), newFilter()
+		ref.quietSkip = false
+		s := newDlyQuietScene(41, 4, numFilters, math.Float32frombits(skip.quietLimitBits))
+		// Lags 384 to 511 are in the windows of both filter 0 and filter 1.
+		s.lag = MatchedFilterAlignmentShiftSizeSubBlocks*sub + 50
+		quietWins := 0
+		for blk := 0; blk < numBlocks; blk++ {
+			mode := dlyQuietLoud
+			if blk%120 >= 70 {
+				mode = dlyQuietBelowLimit
+			}
+			y := s.block(mode, 150)
+			updatesBefore := ref.numberPreEchoUpdates
+			quiet := skip.detectPreEcho && skip.lastDetectedBestLagFilter >= 0 &&
+				skip.filterIsQuiet(s.buf, skip.lastDetectedBestLagFilter)
+			skip.Update(s.buf, y, false)
+			ref.Update(s.buf, y, false)
+			if d := dlyQuietStateDiff(skip, ref); d != "" {
+				t.Fatalf("opt %d block %d: %s", opt, blk, d)
+			}
+			if quiet && ref.numberPreEchoUpdates > updatesBefore {
+				quietWins++
+			}
+		}
+		if quietWins < 20 {
+			t.Fatalf("opt %d: the quiet accumulated-error filter won %d blocks; the scenario must make it win",
+				opt, quietWins)
+		}
 	}
 }

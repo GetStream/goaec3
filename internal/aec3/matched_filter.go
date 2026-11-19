@@ -226,6 +226,142 @@ func dlyX2Sums(g int, accErr bool, x []float32, n, r int, out *[dlyX2Run]float32
 	dlyX2Reduce(g, accErr, &lanes, r, out)
 }
 
+// The x*x sums of the unfused lanes from a table of squares.
+//
+// A lane chain adds the squares of every g-th sample, and each sample of a
+// stretch belongs to the chains of up to g windows (dlyX2Sums) or to the
+// accumulators of up to dlyX2Run windows (dlyX2Wrapped). The Sq routines
+// below square every sample of the stretch once, into scratch, and then only
+// add: eight chains side by side for the tables. The squares are rounded to
+// float32 before they are added, as the unfused lanes do (vmlaq_f32,
+// _mm_mul_ps + _mm_add_ps); the AVX2 lane fuses the two and takes no part.
+
+// dlyX2SqScratch is the scratch the Sq routines need for filters of hSize
+// coefficients.
+func dlyX2SqScratch(hSize int) int { return hSize + dlyX2Run + 8 }
+
+// dlyX2Chains8 stores in out[j], for j < 8, the sum of sq[j], sq[j+g],
+// sq[j+2g], ... (n/g terms) accumulated in order from +0, for g = 4 or 8.
+// len(sq) >= n-g+8.
+func dlyX2Chains8(sq []float32, g, n int, out *[8]float32) {
+	var q0, q1, q2, q3, q4, q5, q6, q7 float32
+	if n >= g {
+		sq = sq[: n-g+8 : n-g+8]
+		if g == 4 {
+			for k := 0; k < len(sq)-7; k += 4 {
+				w := (*[8]float32)(sq[k : k+8])
+				q0 += w[0]
+				q1 += w[1]
+				q2 += w[2]
+				q3 += w[3]
+				q4 += w[4]
+				q5 += w[5]
+				q6 += w[6]
+				q7 += w[7]
+			}
+		} else {
+			for k := 0; k < len(sq)-7; k += 8 {
+				w := (*[8]float32)(sq[k : k+8])
+				q0 += w[0]
+				q1 += w[1]
+				q2 += w[2]
+				q3 += w[3]
+				q4 += w[4]
+				q5 += w[5]
+				q6 += w[6]
+				q7 += w[7]
+			}
+		}
+	}
+	*out = [8]float32{q0, q1, q2, q3, q4, q5, q6, q7}
+}
+
+// dlyX2SumsSq is dlyX2Sums (not the accumulated-error core's) of the lane
+// with group size g = 4 or 8, with the squares of x[:n+r-1] in scratch.
+// len(scratch) >= dlyX2SqScratch(n).
+func dlyX2SumsSq(g int, x []float32, n, r int, scratch []float32, out *[dlyX2Run]float32) {
+	span := n + r - 1
+	sq := scratch[:dlyX2SqScratch(n)]
+	for i, v := range x[:span] {
+		sq[i] = float32(v * v)
+	}
+	// The chains run eight at a time; those beyond the r+g-1 that the
+	// windows use read scratch past the squares, and their sums are unused.
+	var lanes [dlyX2Run + 15]float32
+	for o := 0; o < r+g-1; o += 8 {
+		dlyX2Chains8(sq[o:], g, n, (*[8]float32)(lanes[o:o+8]))
+	}
+	dlyX2Reduce(g, false, &lanes, r, out)
+}
+
+// dlyAddLanes adds s[k+l] to acc[l] for the whole groups of g = 4 or 8
+// values of s, in order.
+func dlyAddLanes(g int, s []float32, acc *[16]float32) {
+	if g == 4 {
+		n := len(s) &^ 3
+		s = s[:n:n]
+		q0, q1, q2, q3 := acc[0], acc[1], acc[2], acc[3]
+		for k := 0; k < len(s)-3; k += 4 {
+			w := (*[4]float32)(s[k : k+4])
+			q0 += w[0]
+			q1 += w[1]
+			q2 += w[2]
+			q3 += w[3]
+		}
+		acc[0], acc[1], acc[2], acc[3] = q0, q1, q2, q3
+		return
+	}
+	n := len(s) &^ 7
+	s = s[:n:n]
+	q0, q1, q2, q3, q4, q5, q6, q7 := acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7]
+	for k := 0; k < len(s)-7; k += 8 {
+		w := (*[8]float32)(s[k : k+8])
+		q0 += w[0]
+		q1 += w[1]
+		q2 += w[2]
+		q3 += w[3]
+		q4 += w[4]
+		q5 += w[5]
+		q6 += w[6]
+		q7 += w[7]
+	}
+	acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7] = q0, q1, q2, q3, q4, q5, q6, q7
+}
+
+// dlyX2WrappedSq is dlyX2WrappedRef of the lane with group size g = 4 or 8,
+// with the squares of the hSize+r-1 samples from lo on, around the end of
+// the buffer, in scratch: the window of start index lo+t is
+// scratch[t:t+hSize]. hSize+r-1 <= len(x) and len(scratch) >=
+// dlyX2SqScratch(hSize).
+func dlyX2WrappedSq(g int, x []float32, hSize, lo, r int, scratch []float32, out *[dlyX2Run]float32) {
+	span := hSize + r - 1
+	sq := scratch[:span]
+	n1 := min(span, len(x)-lo)
+	for i, v := range x[lo : lo+n1] {
+		sq[i] = float32(v * v)
+	}
+	for i, v := range x[:span-n1] {
+		sq[n1+i] = float32(v * v)
+	}
+	for t := 0; t < r; t++ {
+		chunk1 := min(hSize, len(x)-(lo+t))
+		v1 := chunk1 &^ (g - 1)
+		v2 := (hSize - chunk1) &^ (g - 1)
+		w := sq[t : t+hSize]
+		var q [16]float32
+		dlyAddLanes(g, w[:v1], &q)
+		dlyAddLanes(g, w[chunk1:chunk1+v2], &q)
+		var tail float32
+		for _, v := range w[v1:chunk1] {
+			tail += v
+		}
+		for _, v := range w[chunk1+v2:] {
+			tail += v
+		}
+		out[t] = dlyReduceX2(g, false, &q, tail)
+	}
+}
+
 // dlyX2Lanes2Ref is dlyX2Lanes for two stretches of the same length.
 func dlyX2Lanes2Ref(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
 	dlyX2Lanes(g, xA, n, lanesA)
@@ -472,10 +608,17 @@ type dlyPiece struct {
 
 // dlyLaneFilter is one filter inside a lane core call.
 type dlyLaneFilter struct {
-	h        []float32
-	xStart   int
-	errorSum float32
-	updated  bool
+	h      []float32
+	xStart int
+	// sq, when not nil, is scratch for the x*x sums of the unfused lanes
+	// from a table of squares (dlyX2SqScratch(len(h)) values).
+	sq []float32
+	// skipIdle lets the core leave out the h*x sums of a call in which no
+	// sample updates the filter (see the idle-filter skip); errorSum is then
+	// not computed, and wasIdle reports it.
+	skipIdle, wasIdle bool
+	errorSum          float32
+	updated           bool
 
 	// The update of the previous sample, not yet applied: pend.alpha and
 	// pend.active, the sample's start index and first chunk, and whether
@@ -539,6 +682,59 @@ func (f *dlyLaneFilter) addRange(g int, x []float32, p0, q, off int) {
 	}
 }
 
+// x2Of returns the x*x sum of the current sample, from the table that holds
+// it or from a new one for the run of samples that starts with it; left is
+// the number of samples the call still has to process, including this one.
+func (f *dlyLaneFilter) x2Of(g int, x []float32, left int) float32 {
+	hSize, xSize, xs := len(f.h), len(x), f.xStart
+	if xs+hSize <= xSize && hSize&(g-1) == 0 {
+		if lo, r, ok := f.x2TableRun(g, x, left); ok {
+			if f.sq != nil && g == 4 {
+				// Eight chains of additions against four of products and
+				// additions; the SSE2 lane has eight chains either way.
+				dlyX2SumsSq(g, x[lo:], hSize, r, f.sq, &f.x2)
+			} else {
+				dlyX2Sums(g, false, x[lo:], hSize, r, &f.x2)
+			}
+			f.x2Lo, f.x2Hi = lo, lo+r
+		}
+		return f.x2[xs-f.x2Lo]
+	}
+	if xs < f.x2Lo || xs >= f.x2Hi {
+		r := min(left, xs+1, dlyX2Run)
+		lo := xs + 1 - r
+		if f.sq != nil && hSize+r-1 <= xSize {
+			dlyX2WrappedSq(g, x, hSize, lo, r, f.sq, &f.x2)
+		} else {
+			dlyX2Wrapped(g, x, hSize, lo, r, &f.x2)
+		}
+		f.x2Lo, f.x2Hi = lo, xs+1
+	}
+	return f.x2[xs-f.x2Lo]
+}
+
+// idle reports whether no capture sample of y updates the filter: an update
+// needs an x*x sum above the threshold and an unsaturated capture sample
+// (finish). The x*x sums it computes stay in the filter's table for the
+// samples that are then processed.
+func (f *dlyLaneFilter) idle(g int, x2SumThreshold float32, x, y []float32) bool {
+	xs := f.xStart
+	idle := true
+	for i, yi := range y {
+		if f.x2Of(g, x, len(y)-i) > x2SumThreshold && !dlySaturated(yi) {
+			idle = false
+			break
+		}
+		if f.xStart > 0 {
+			f.xStart--
+		} else {
+			f.xStart = len(x) - 1
+		}
+	}
+	f.xStart = xs
+	return idle
+}
+
 // prepare computes the x*x sum of the current sample and lists its h*x
 // work; left is the number of samples the call still has to process,
 // including this one.
@@ -548,12 +744,8 @@ func (f *dlyLaneFilter) prepare(g int, x []float32, left int) {
 	chunk1 := min(hSize, xSize-xs)
 	f.np = 0
 	f.sTail = 0
+	f.x2Sum = f.x2Of(g, x, left)
 	if chunk1 == hSize && hSize&(g-1) == 0 {
-		if lo, r, ok := f.x2TableRun(g, x, left); ok {
-			dlyX2Sums(g, false, x[lo:], hSize, r, &f.x2)
-			f.x2Lo, f.x2Hi = lo, lo+r
-		}
-		f.x2Sum = f.x2[xs-f.x2Lo]
 		if !f.pend.active {
 			f.addPiece(0, hSize, xs, 0, false)
 			return
@@ -566,15 +758,6 @@ func (f *dlyLaneFilter) prepare(g int, x []float32, left int) {
 	chunk2 := hSize - chunk1
 	v1 := chunk1 &^ (g - 1)
 	v2 := chunk2 &^ (g - 1)
-	if chunk1 != hSize || hSize&(g-1) != 0 {
-		if xs < f.x2Lo || xs >= f.x2Hi {
-			r := min(left, xs+1, dlyX2Run)
-			lo := xs + 1 - r
-			dlyX2Wrapped(g, x, hSize, lo, r, &f.x2)
-			f.x2Lo, f.x2Hi = lo, xs+1
-		}
-		f.x2Sum = f.x2[xs-f.x2Lo]
-	}
 	pend := &f.pend
 	if pend.active && !f.pendRuns {
 		pend.set(f.pendStart, f.pendChunk1, hSize, pend.alpha, g == 16)
@@ -718,8 +901,29 @@ func (f *dlyLaneFilter) flush(g int, x []float32) {
 // dlyCoreLanes runs the MatchedFilterCore loop of the SIMD lane with group
 // size g for the filter fa and, when fb is not nil, for fb in step with it.
 func dlyCoreLanes(g int, fa, fb *dlyLaneFilter, x2SumThreshold, smoothing float32, x, y []float32) {
+	if fa.skipIdle || (fb != nil && fb.skipIdle) {
+		if fb != nil {
+			dlyX2Tables2(g, fa, fb, x, len(y))
+		}
+		fa.wasIdle = fa.skipIdle && fa.idle(g, x2SumThreshold, x, y)
+		if fb != nil {
+			fb.wasIdle = fb.skipIdle && fb.idle(g, x2SumThreshold, x, y)
+		}
+		switch {
+		case fa.wasIdle && (fb == nil || fb.wasIdle):
+			return
+		case fa.wasIdle:
+			fa, fb = fb, nil
+		case fb != nil && fb.wasIdle:
+			fb = nil
+		}
+	}
 	xSize := len(x)
 	pair := fb != nil && g == 4 && dlyPairNeon
+	if fa.direct(g, x, len(y)) && (fb == nil || fb.direct(g, x, len(y))) {
+		dlyCoreDirect(g, fa, fb, pair, x2SumThreshold, smoothing, x, y)
+		return
+	}
 	for i, yi := range y {
 		left := len(y) - i
 		if fb != nil {
@@ -749,6 +953,82 @@ func dlyCoreLanes(g int, fa, fb *dlyLaneFilter, x2SumThreshold, smoothing float3
 	}
 }
 
+// direct reports whether no window of the next ny samples wraps and the
+// filter is a whole number of groups: every sample is then one stretch over
+// all of h, with the update of the sample before it fused in.
+func (f *dlyLaneFilter) direct(g int, x []float32, ny int) bool {
+	hSize := len(f.h)
+	return hSize > 0 && hSize&(g-1) == 0 && f.xStart-(ny-1) >= 0 && f.xStart+hSize <= len(x) && !f.pend.active
+}
+
+// dlyCoreDirect is the loop of dlyCoreLanes for filters that are direct
+// for all of y: the same kernels on the same stretches, without the list of
+// stretches that prepare builds and run walks for every sample.
+func dlyCoreDirect(g int, fa, fb *dlyLaneFilter, pair bool, x2SumThreshold, smoothing float32, x, y []float32) {
+	xSize := len(x)
+	hSize := len(fa.h)
+	if fb != nil && len(fb.h) != hSize {
+		pair = false
+	}
+	for i, yi := range y {
+		left := len(y) - i
+		if fb != nil {
+			dlyX2Tables2(g, fa, fb, x, left)
+		}
+		fa.x2Sum = fa.x2Of(g, x, left)
+		if fb != nil {
+			fb.x2Sum = fb.x2Of(g, x, left)
+		}
+		if pair {
+			accA := (*[4]float32)(fa.acc[:4])
+			accB := (*[4]float32)(fb.acc[:4])
+			*accA = [4]float32{}
+			*accB = [4]float32{}
+			ha, hb := fa.h, fb.h
+			xbA := x[fa.xStart : fa.xStart+hSize]
+			xbB := x[fb.xStart : fb.xStart+hSize]
+			switch {
+			case fa.pend.active && fb.pend.active:
+				dlyAxpyDotS2Neon(ha, x[fa.pendStart:fa.pendStart+hSize], xbA, fa.pend.alpha, accA,
+					hb, x[fb.pendStart:fb.pendStart+hSize], xbB, fb.pend.alpha, accB)
+			case fa.pend.active:
+				dlyAxpyDotDotS2Neon(ha, x[fa.pendStart:fa.pendStart+hSize], xbA, fa.pend.alpha, accA, hb, xbB, accB)
+			case fb.pend.active:
+				dlyAxpyDotDotS2Neon(hb, x[fb.pendStart:fb.pendStart+hSize], xbB, fb.pend.alpha, accB, ha, xbA, accA)
+			default:
+				dlyDotS2Neon(ha, xbA, accA, hb, xbB, accB)
+			}
+			fa.s = dlyReduceS(4, &fa.acc, 0)
+			fb.s = dlyReduceS(4, &fb.acc, 0)
+		} else {
+			fa.directSum(g, x)
+			if fb != nil {
+				fb.directSum(g, x)
+			}
+		}
+		fa.finish(x2SumThreshold, smoothing, yi, xSize)
+		if fb != nil {
+			fb.finish(x2SumThreshold, smoothing, yi, xSize)
+		}
+	}
+	fa.flush(g, x)
+	if fb != nil {
+		fb.flush(g, x)
+	}
+}
+
+// directSum computes the filter output of the current sample of a direct
+// filter.
+func (f *dlyLaneFilter) directSum(g int, x []float32) {
+	h := f.h
+	xb := x[f.xStart : f.xStart+len(h)]
+	if f.pend.active {
+		f.s = dlyAxpyDotSSum(g, h, x[f.pendStart:f.pendStart+len(h)], xb, f.pend.alpha)
+	} else {
+		f.s = dlyDotSSum(g, h, xb)
+	}
+}
+
 // dlyCoreLane runs the MatchedFilterCore loop of the SIMD lane with group
 // size g on one filter.
 func dlyCoreLane(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
@@ -756,13 +1036,33 @@ func dlyCoreLane(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y
 	if dlyCoreLaneKernel(g, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum) {
 		return
 	}
+	dlyCoreLaneSq(g, xStartIndex, x2SumThreshold, smoothing, x, nil, y, h, filtersUpdated, errorSum)
+}
+
+// dlyCoreLaneSq is dlyCoreLane through the pure-Go references. With sq not
+// nil (dlyX2SqScratch(len(h)) values of scratch), the unfused lanes compute
+// their x*x sums from a table of squares.
+func dlyCoreLaneSq(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, sq, y, h []float32,
+	filtersUpdated *bool, errorSum *float32) {
+	dlyCoreLaneSkip(g, xStartIndex, x2SumThreshold, smoothing, x, sq, y, h, filtersUpdated, errorSum, false)
+}
+
+// dlyCoreLaneSkip is dlyCoreLaneSq that, with skipIdle, leaves errorSum as
+// it is when no sample updates the filter, and reports that.
+func dlyCoreLaneSkip(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, sq, y, h []float32,
+	filtersUpdated *bool, errorSum *float32, skipIdle bool) bool {
 	var f dlyLaneFilter
 	f.h, f.xStart, f.errorSum = h, xStartIndex, *errorSum
+	f.skipIdle = skipIdle
+	if g != 16 && len(sq) >= dlyX2SqScratch(len(h)) {
+		f.sq = sq
+	}
 	dlyCoreLanes(g, &f, nil, x2SumThreshold, smoothing, x, y)
 	*errorSum = f.errorSum
 	if f.updated {
 		*filtersUpdated = true
 	}
+	return f.wasIdle
 }
 
 // dlyAccErrCore runs the accumulated-error core of the SIMD lane with group
@@ -1058,6 +1358,9 @@ type MatchedFilter struct {
 	quietSkip      bool
 	quietLimitBits uint32
 	loudHint       int
+	// quietFilterSkips counts the cores of single quiet filters that were
+	// not run (see filterIsQuiet).
+	quietFilterSkips uint64
 }
 
 // NewMatchedFilter mirrors the MatchedFilter constructor (without the data
@@ -1098,6 +1401,19 @@ func (m *MatchedFilter) init(optimization Aec3Optimization, subBlockSize, window
 		m.scratchSize = filterSize + subBlockSize
 		n += (numMatchedFilters+1)*m.accumulatedSize + m.scratchSize
 	}
+	// The scalar lane runs its filters in step (dlyCoreScalar); the unfused
+	// lanes compute x*x from a table of squares where they run in pure Go.
+	need := 0
+	switch {
+	case optimization == OptNone:
+		need = dlyScalarScratch(filterSize)
+	case dlyLanesPureGo && optimization != OptAvx2:
+		need = dlyX2SqScratch(filterSize)
+	}
+	if extra := need - m.scratchSize; extra > 0 {
+		m.scratchSize += extra
+		n += extra
+	}
 	m.storage = make([]float32, n)
 	m.resetAccumulatedErrors()
 	var quietLimit float32
@@ -1125,8 +1441,8 @@ func (m *MatchedFilter) instantaneousAccumulatedError() []float32 {
 	return m.storage[i : i+m.accumulatedSize : i+m.accumulatedSize]
 }
 
-// scratchMemory returns the scratch of the accumulated-error cores; it is
-// empty without detectPreEcho.
+// scratchMemory returns the scratch of the accumulated-error cores, of the
+// scalar lane and of the tables of squares; it is empty without any.
 func (m *MatchedFilter) scratchMemory() []float32 {
 	i := m.numFilters*(m.filterSize+m.accumulatedSize) + m.accumulatedSize
 	return m.storage[i : i+m.scratchSize : i+m.scratchSize]
@@ -1193,6 +1509,31 @@ func (m *MatchedFilter) resetAccumulatedErrors() {
 // every infinity and NaN above m, so non-finite render samples never count
 // as quiet.
 
+// Quiet-filter skip.
+//
+// The bound holds for one filter by itself: when |x[k]| <= m for every
+// render sample in the windows of a filter during a block (the filter
+// length plus the sub-block size minus one samples, the windows of
+// consecutive capture samples being one sample apart), that filter cannot
+// update in the block. A filter that does not update leaves no trace in
+// Update: its error sum is read only when it updated, and its lag is the
+// peak of its unchanged coefficients, computed from them where another
+// filter's decision needs it. Update does not run the core of such a filter
+// (filterIsQuiet) while other filters, whose windows hold louder samples,
+// run. The filter that computes the accumulated error always runs: Update
+// reads instantaneous_accumulated_error when that filter is the winner,
+// which the overlap rule can make it without an update of its own.
+
+// Idle-filter skip.
+//
+// The cores that have the x*x sums of a block before its h*x sums (the
+// pure-Go lane cores, the NEON lane's two-filter core and the scalar lane
+// in step) apply the condition itself rather than a bound on it: when no
+// capture sample of the block has an x*x sum above the threshold and is
+// unsaturated, the filter does not update, and for the reasons above its
+// h*x sums and its error sum are not computed. The filter that computes the
+// accumulated error always runs.
+
 // dlyQuietMargin is the relative margin of the quiet limit for a filter of
 // n samples.
 func dlyQuietMargin(n int) float64 { return 4 * float64(n+40) / (1 << 24) }
@@ -1227,13 +1568,73 @@ func MatchedFilterQuietLimit(filterSize int, excitationLimit float32) (float32, 
 	return dlyQuietLimit(filterSize, x2SumThreshold, dlyQuietMargin(filterSize))
 }
 
-// dlyQuietSkips counts the blocks every MatchedFilter skipped.
-var dlyQuietSkips atomic.Uint64
+// dlyQuietSkips counts the blocks every MatchedFilter skipped, once a test
+// has asked for the count: a counter shared by every canceller of the
+// process is not written otherwise.
+var (
+	dlyQuietSkips    atomic.Uint64
+	dlyQuietCounting atomic.Bool
+)
 
 // MatchedFilterQuietSkipsForTesting returns the number of Update calls, over
-// all matched filters of the process, that took the quiet-render skip. Tests
-// use it to check that a scenario reaches the skip.
-func MatchedFilterQuietSkipsForTesting() uint64 { return dlyQuietSkips.Load() }
+// all matched filters of the process, that took the quiet-render skip since
+// the first call of this function. Tests use it to check that a scenario
+// reaches the skip.
+func MatchedFilterQuietSkipsForTesting() uint64 {
+	dlyQuietCounting.Store(true)
+	return dlyQuietSkips.Load()
+}
+
+// QuietFilterSkipsForTesting returns the number of filter cores this matched
+// filter did not run because the windows of the filter were quiet while the
+// render buffer as a whole was not. Tests use it to check that a scenario
+// reaches the quiet-filter skip.
+func (m *MatchedFilter) QuietFilterSkipsForTesting() uint64 { return m.quietFilterSkips }
+
+// dlyQuiet reports whether every sample of x has a magnitude of at most the
+// one with the bit pattern limit.
+func dlyQuiet(x []float32, limit uint32) bool {
+	i := 0
+	for ; i+8 <= len(x); i += 8 {
+		xx := (*[8]float32)(x[i : i+8])
+		a := max(math.Float32bits(xx[0])&0x7fffffff, math.Float32bits(xx[1])&0x7fffffff)
+		b := max(math.Float32bits(xx[2])&0x7fffffff, math.Float32bits(xx[3])&0x7fffffff)
+		c := max(math.Float32bits(xx[4])&0x7fffffff, math.Float32bits(xx[5])&0x7fffffff)
+		d := max(math.Float32bits(xx[6])&0x7fffffff, math.Float32bits(xx[7])&0x7fffffff)
+		if max(a, b, c, d) > limit {
+			return false
+		}
+	}
+	for ; i < len(x); i++ {
+		if math.Float32bits(x[i])&0x7fffffff > limit {
+			return false
+		}
+	}
+	return true
+}
+
+// filterIsQuiet reports whether no render sample in the windows of filter n
+// for the current block exceeds the quiet limit in magnitude (see the
+// quiet-filter skip above), and counts the cores skipped for it.
+func (m *MatchedFilter) filterIsQuiet(renderBuffer *DownsampledRenderBuffer, n int) bool {
+	x := renderBuffer.Buffer
+	// The capture samples of the block have the start indices xStart,
+	// xStart-1, ..., xStart-(subBlockSize-1), around the start of the buffer.
+	span := m.filterSize + m.subBlockSize - 1
+	if !m.quietSkip || span > len(x) {
+		return false
+	}
+	lo := m.xStartIndex(renderBuffer, n) - (m.subBlockSize - 1)
+	if lo < 0 {
+		lo += len(x)
+	}
+	n1 := min(span, len(x)-lo)
+	if !dlyQuiet(x[lo:lo+n1], m.quietLimitBits) || !dlyQuiet(x[:span-n1], m.quietLimitBits) {
+		return false
+	}
+	m.quietFilterSkips++
+	return true
+}
 
 // renderIsQuiet reports whether every sample of the render buffer has a
 // magnitude of at most the quiet limit.
@@ -1289,8 +1690,35 @@ func (m *MatchedFilter) GetMaxFilterLag() int {
 	return m.numFilters*m.filterIntraLagShift + m.filterSize
 }
 
+// dlyLaneGroupSize returns the group size of a SIMD lane.
+func dlyLaneGroupSize(optimization Aec3Optimization) int {
+	switch optimization {
+	case OptNeon:
+		return 4
+	case OptSse2:
+		return 8
+	}
+	return 16
+}
+
 func (m *MatchedFilter) runCore(xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32, computePreEcho bool) {
+	m.runCoreSkip(xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum, computePreEcho, false)
+}
+
+// runCoreSkip is runCore; with skipIdle, a core that has its x*x sums
+// before its h*x sums does not compute the latter, nor errorSum, when no
+// sample updates the filter (see the idle-filter skip).
+func (m *MatchedFilter) runCoreSkip(xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
+	filtersUpdated *bool, errorSum *float32, computePreEcho, skipIdle bool) {
+	if dlyLanesPureGo && !computePreEcho && m.optimization != OptNone {
+		// The scratch is free: only the accumulated-error cores use it.
+		if dlyCoreLaneSkip(dlyLaneGroupSize(m.optimization), xStartIndex, x2SumThreshold, smoothing, x,
+			m.scratchMemory(), y, h, filtersUpdated, errorSum, m.quietSkip && skipIdle) {
+			m.quietFilterSkips++
+		}
+		return
+	}
 	switch m.optimization {
 	case OptSse2:
 		MatchedFilterCoreSse2(xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum,
@@ -1332,20 +1760,81 @@ func (m *MatchedFilter) runCoresPaired(renderBuffer *DownsampledRenderBuffer, y 
 				&updated[n], &errorSums[n], true)
 			continue
 		}
+		if m.filterIsQuiet(renderBuffer, n) {
+			continue
+		}
 		if first < 0 {
 			first = n
 			continue
 		}
-		fa = dlyLaneFilter{h: m.filter(first), xStart: m.xStartIndex(renderBuffer, first)}
-		fb = dlyLaneFilter{h: m.filter(n), xStart: m.xStartIndex(renderBuffer, n)}
+		fa = dlyLaneFilter{h: m.filter(first), xStart: m.xStartIndex(renderBuffer, first), skipIdle: m.quietSkip}
+		fb = dlyLaneFilter{h: m.filter(n), xStart: m.xStartIndex(renderBuffer, n), skipIdle: m.quietSkip}
 		dlyCoreLanes(4, &fa, &fb, x2SumThreshold, smoothing, x, y)
 		errorSums[first], updated[first] = fa.errorSum, fa.updated
 		errorSums[n], updated[n] = fb.errorSum, fb.updated
+		if fa.wasIdle {
+			m.quietFilterSkips++
+		}
+		if fb.wasIdle {
+			m.quietFilterSkips++
+		}
 		first = -1
 	}
 	if first >= 0 {
-		m.runCore(m.xStartIndex(renderBuffer, first), x2SumThreshold, smoothing, x, y, m.filter(first),
-			&updated[first], &errorSums[first], false)
+		m.runCoreSkip(m.xStartIndex(renderBuffer, first), x2SumThreshold, smoothing, x, y, m.filter(first),
+			&updated[first], &errorSums[first], false, true)
+	}
+}
+
+// dlyScalarInStep runs the filters of the scalar lane in step
+// (dlyCoreScalar); tests turn it off to compare with MatchedFilterCore.
+var dlyScalarInStep = true
+
+// runCoresScalar runs the scalar-lane cores of all filters for one block,
+// up to dlyScalarMax of them in step, and stores their error sums and
+// update flags. The cores of different filters share no state, so their
+// order is free; the filter that computes the accumulated error leads its
+// group.
+func (m *MatchedFilter) runCoresScalar(renderBuffer *DownsampledRenderBuffer, y []float32, x2SumThreshold,
+	smoothing float32, errorSums *[dlyMaxPairedFilters]float32, updated *[dlyMaxPairedFilters]bool) {
+	x := renderBuffer.Buffer
+	scratch := m.scratchMemory()
+	var order [dlyMaxPairedFilters]int
+	count := 0
+	accFilter := -1
+	if m.detectPreEcho && m.lastDetectedBestLagFilter >= 0 && m.lastDetectedBestLagFilter < m.numFilters {
+		accFilter = m.lastDetectedBestLagFilter
+		order[0] = accFilter
+		count = 1
+		clear(m.instantaneousAccumulatedError())
+	}
+	for n := 0; n < m.numFilters; n++ {
+		if n != accFilter && !m.filterIsQuiet(renderBuffer, n) {
+			order[count] = n
+			count++
+		}
+	}
+	for start := 0; start < count; {
+		size := min(count-start, dlyScalarMax)
+		if count-start == dlyScalarMax+1 {
+			// Two groups of two rather than three and a single chain.
+			size = 2
+		}
+		var fs [dlyScalarMax]dlyScalarFilter
+		for i := 0; i < size; i++ {
+			n := order[start+i]
+			fs[i].h, fs[i].xStart = m.filter(n), m.xStartIndex(renderBuffer, n)
+			if n == accFilter {
+				fs[i].accErr = m.instantaneousAccumulatedError()
+			}
+		}
+		dlyCoreScalar(fs[:size], x2SumThreshold, smoothing, x, y, scratch, m.quietSkip)
+		for i := 0; i < size; i++ {
+			n := order[start+i]
+			errorSums[n], updated[n] = fs[i].errorSum, fs[i].updated
+			m.quietFilterSkips += uint64(fs[i].idleRuns)
+		}
+		start += size
 	}
 }
 
@@ -1373,7 +1862,9 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 	if m.quietSkip && m.renderIsQuiet(renderBuffer.Buffer) {
 		// No filter can update: there is no winner (see the quiet-render
 		// skip above).
-		dlyQuietSkips.Add(1)
+		if dlyQuietCounting.Load() {
+			dlyQuietSkips.Add(1)
+		}
 		return
 	}
 	alignmentShift := 0
@@ -1389,6 +1880,13 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 	if paired {
 		m.runCoresPaired(renderBuffer, y, x2SumThreshold, smoothing, &pairedErrorSums, &pairedUpdated)
 	}
+	// The scalar lane runs its filters in step where its scratch and the
+	// render buffer allow (see dlyCoreScalar).
+	if m.optimization == OptNone && dlyScalarInStep && m.numFilters <= dlyMaxPairedFilters &&
+		m.filterSize+dlyX2Run <= len(renderBuffer.Buffer) && m.scratchSize >= dlyScalarScratch(m.filterSize) {
+		m.runCoresScalar(renderBuffer, y, x2SumThreshold, smoothing, &pairedErrorSums, &pairedUpdated)
+		paired = true
+	}
 	for n := 0; n < m.numFilters; n++ {
 		var errorSum float32
 		filtersUpdated := false
@@ -1396,8 +1894,10 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 			errorSum, filtersUpdated = pairedErrorSums[n], pairedUpdated[n]
 		} else {
 			computePreEcho := m.detectPreEcho && n == m.lastDetectedBestLagFilter
-			m.runCore(m.xStartIndex(renderBuffer, n), x2SumThreshold, smoothing, renderBuffer.Buffer, y,
-				m.filter(n), &filtersUpdated, &errorSum, computePreEcho)
+			if computePreEcho || !m.filterIsQuiet(renderBuffer, n) {
+				m.runCoreSkip(m.xStartIndex(renderBuffer, n), x2SumThreshold, smoothing, renderBuffer.Buffer, y,
+					m.filter(n), &filtersUpdated, &errorSum, computePreEcho, true)
+			}
 		}
 
 		// The lag estimate of a filter is the distance to the portion of the

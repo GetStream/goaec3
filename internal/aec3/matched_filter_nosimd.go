@@ -4,6 +4,10 @@ package aec3
 
 // Without archsimd every MatchedFilterCore lane runs its pure-Go reference.
 
+// dlyLanesPureGo selects what serves the pure-Go references and the
+// archsimd kernels have no use for (the tables of squares of the x*x sums).
+const dlyLanesPureGo = true
+
 func dlyDotSNeon(h, x []float32, acc *[4]float32) { dlyDotSNeonRef(h, x, acc) }
 
 func dlyAxpyDotSNeon(h, xa, xb []float32, alpha float32, acc *[4]float32) {

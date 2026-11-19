@@ -301,6 +301,20 @@ func TestDlyMatchedFilterCoreLanesMatchReference(t *testing.T) {
 				t.Fatalf("opt %d trial %d: updated %v/%v errorSum %v/%v", opt, trial, updA, updWant, esA, esWant)
 			}
 
+			if opt != OptAvx2 {
+				// The same core with x*x from a table of squares.
+				sq := dlyRandSlice(rng, dlyX2SqScratch(len(c.h)), 1)
+				hS := append([]float32(nil), c.h...)
+				var updS bool
+				esS := es0
+				dlyCoreLaneSq(g, c.xs, c.thr, 0.7, c.x, sq, c.y, hS, &updS, &esS)
+				dlyRequireBits(t, "squares h", hS, hWant)
+				if updS != updWant || math.Float32bits(esS) != math.Float32bits(esWant) {
+					t.Fatalf("squares opt %d trial %d: updated %v/%v errorSum %v/%v", opt, trial, updS, updWant,
+						esS, esWant)
+				}
+			}
+
 			for _, pair := range []bool{false, true} {
 				dlyPairNeon = pair
 				fa := dlyLaneFilter{h: append([]float32(nil), c.h...), xStart: c.xs, errorSum: es0}
@@ -408,9 +422,12 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 		name     string
 		opt      Aec3Optimization
 		startIdx int
+		accErr   bool
 	}{
-		{"None", OptNone, 100}, {"Neon", OptNeon, 100}, {"Sse2", OptSse2, 100}, {"Avx2", OptAvx2, 100},
-		{"NeonWrap", OptNeon, len(x) - 300}, {"Sse2Wrap", OptSse2, len(x) - 300}, {"Avx2Wrap", OptAvx2, len(x) - 300},
+		{"None", OptNone, 100, false}, {"Neon", OptNeon, 100, false}, {"Sse2", OptSse2, 100, false},
+		{"Avx2", OptAvx2, 100, false}, {"NeonWrap", OptNeon, len(x) - 300, false},
+		{"Sse2Wrap", OptSse2, len(x) - 300, false}, {"Avx2Wrap", OptAvx2, len(x) - 300, false},
+		{"NeonAccErr", OptNeon, 100, true}, {"Sse2AccErr", OptSse2, 100, true}, {"Avx2AccErr", OptAvx2, 100, true},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			mf := NewMatchedFilter(tc.opt, 16, 32, 5, 24, 150, 0.7, 0.7, 0.2, true)
@@ -419,7 +436,7 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 			var errSum float32
 			for i := 0; i < b.N; i++ {
 				copy(h, h0)
-				mf.runCore(tc.startIdx, 1, 0.7, x, y, h, &updated, &errSum, false)
+				mf.runCore(tc.startIdx, 1, 0.7, x, y, h, &updated, &errSum, tc.accErr)
 			}
 		})
 	}
@@ -464,6 +481,35 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 			var out [dlyX2Run]float32
 			for i := 0; i < b.N; i++ {
 				dlyX2Wrapped(g, x, 512, len(x)-300, 16, &out)
+			}
+		})
+	}
+
+	// Update of the scalar lane for one block (five filters, one of them
+	// with the accumulated error): through MatchedFilterCore one filter at
+	// a time, and with the filters in step.
+	savedInStep := dlyScalarInStep
+	defer func() { dlyScalarInStep = savedInStep }()
+	for _, inStep := range []bool{false, true} {
+		name := "UpdateScalarSingle"
+		if inStep {
+			name = "UpdateScalarInStep"
+		}
+		b.Run(name, func(b *testing.B) {
+			dlyScalarInStep = inStep
+			m := NewMatchedFilter(OptNone, 16, MatchedFilterWindowSizeSubBlocks, 5,
+				MatchedFilterAlignmentShiftSizeSubBlocks, 150, 0.7, 0.3, 0.2, true)
+			s := newDlyQuietScene(77, 4, 5, math.Float32frombits(m.quietLimitBits))
+			for i := 0; i < 200; i++ {
+				m.Update(s.buf, s.block(dlyQuietLoud, 150), false)
+			}
+			blocks := make([][]float32, 64)
+			for i := range blocks {
+				blocks[i] = append([]float32(nil), s.block(dlyQuietLoud, 150)...)
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				m.Update(s.buf, blocks[i%len(blocks)], false)
 			}
 		})
 	}

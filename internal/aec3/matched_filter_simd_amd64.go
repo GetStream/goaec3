@@ -621,6 +621,10 @@ func dlyX2Wrapped(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) 
 //   - AVX2  (*[32]float32): [0:8] s_256, [8:16] s_256_8, [16:24] x2_sum_256,
 //     [24:32] x2_sum_256_8.
 
+// dlyLanesPureGo selects what serves the pure-Go references and the
+// archsimd kernels have no use for (the tables of squares of the x*x sums).
+const dlyLanesPureGo = false
+
 // dlyCoreLaneKernel runs the MatchedFilterCore loop of the lane with group
 // size g on one filter where the lane has its own core, and reports whether
 // it did.

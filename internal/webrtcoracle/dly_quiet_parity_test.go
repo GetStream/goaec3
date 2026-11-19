@@ -119,7 +119,8 @@ func TestDlyMatchedFilterCoreQuietNeverUpdates(t *testing.T) {
 // magnitude 0.1% above the excitation limit (which updates the filters).
 // The capture is the delayed render, so the filters lock whenever they run.
 // The lag estimates must agree on every block, and the Go filter must take
-// the quiet-render skip on some blocks and run on others.
+// the quiet-render skip on some blocks, run on others, and skip single quiet
+// filters in those.
 func TestDlyMatchedFilterQuietParity(t *testing.T) {
 	for _, factor := range []int{4, 8} {
 		for _, preEcho := range []bool{false, true} {
@@ -204,9 +205,14 @@ func TestDlyMatchedFilterQuietParity(t *testing.T) {
 						}
 					}
 					skips := int(aec3.MatchedFilterQuietSkipsForTesting() - skipsBefore)
-					t.Logf("skipped %d of %d blocks; lag reports per mode %v", skips, numBlocks, reports)
+					filterSkips := g.QuietFilterSkipsForTesting()
+					t.Logf("skipped %d of %d blocks and %d filter cores in the others; lag reports per mode %v", skips,
+						numBlocks, filterSkips, reports)
 					if skips < 200 || numBlocks-skips < 200 {
 						t.Errorf("skipped %d of %d blocks: the scenario must both skip and run the filters", skips, numBlocks)
+					}
+					if filterSkips < 200 {
+						t.Errorf("skipped %d filter cores: the scenario must skip single quiet filters", filterSkips)
 					}
 					if reports[0] == 0 || reports[5] == 0 {
 						t.Errorf("lag reports per mode %v: loud render and render just above the excitation limit must report lags",
