@@ -49,6 +49,46 @@ func kernFir3Spec(x []float32, h *[3]float32, out []float32, from, to int) {
 	}
 }
 
+// kernRefinedLeakSpec is the H_error leakage loop of
+// RefinedFilterUpdateGain::Compute as the C++ writes it.
+func kernRefinedLeakSpec(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []float32, disallowLeakageDiverged bool,
+	leakageConverged, leakageDiverged, errorFloor, errorCeil float32, hError *[FftLengthBy2Plus1]float32) {
+	for k := range hError {
+		if E2Refined[k] <= E2Coarse[k] || disallowLeakageDiverged {
+			hError[k] += float32(leakageConverged * erl[k])
+		} else {
+			hError[k] += float32(leakageDiverged * erl[k])
+		}
+		hError[k] = stdMax(hError[k], errorFloor)
+		hError[k] = stdMin(hError[k], errorCeil)
+	}
+}
+
+func TestKernRefinedLeakMatchesSpec(t *testing.T) {
+	rng := rand.New(rand.NewSource(43))
+	for trial := 0; trial < 20000; trial++ {
+		refined, coarse, erl := kernEdge65(rng), kernEdge65(rng), kernEdge65(rng)
+		if trial%3 == 0 {
+			// Equal and nearly equal powers, where <= decides.
+			for k := range coarse {
+				if rng.Intn(2) == 0 {
+					coarse[k] = refined[k]
+				}
+			}
+		}
+		got := *kernEdge65(rng)
+		want := got
+		p := [4]float32{float32(rng.NormFloat64()), float32(rng.NormFloat64()), float32(rng.Float64()), 1 + float32(rng.Float64())}
+		if trial%5 == 0 {
+			p = [4]float32{0.00005, 0.05, 0.001, 2}
+		}
+		dis := rng.Intn(3) == 0
+		kernRefinedLeakGeneric(refined, coarse, erl[:], dis, p[0], p[1], p[2], p[3], &got)
+		kernRefinedLeakSpec(refined, coarse, erl[:], dis, p[0], p[1], p[2], p[3], &want)
+		kernCheckExact(t, "RefinedLeak", got[:], want[:])
+	}
+}
+
 // kernSpectrumAvx2Spec is FftData::SpectrumAVX2 with one fmaf per bin.
 func kernSpectrumAvx2Spec(re, im, out *[FftLengthBy2Plus1]float32) {
 	for k := 0; k < FftLengthBy2; k++ {

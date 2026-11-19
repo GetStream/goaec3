@@ -1,5 +1,7 @@
 package aec3
 
+import "math"
+
 // Elementwise helpers for the per-block bin loops (65-bin spectra, 64-sample
 // blocks). Each output element is one IEEE operation (or a fixed sequence of
 // them) on the corresponding inputs, so the archsimd kernels in
@@ -306,14 +308,22 @@ func kernRefinedHErrorGeneric(mu, X2, hError *[FftLengthBy2Plus1]float32) {
 func kernRefinedLeakGeneric(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []float32, disallowLeakageDiverged bool,
 	leakageConverged, leakageDiverged, errorFloor, errorCeil float32, hError *[FftLengthBy2Plus1]float32) {
 	erl = erl[:FftLengthBy2Plus1]
+	// The leakage factor of a bin is picked as a bit pattern, which the
+	// compiler turns into a conditional move: the comparison depends on the
+	// data and would mispredict as a branch. The product is the one of the
+	// branch that the C++ takes.
+	conv, div := math.Float32bits(leakageConverged), math.Float32bits(leakageDiverged)
+	if disallowLeakageDiverged {
+		div = conv
+	}
 	for k := range hError {
-		if E2Refined[k] <= E2Coarse[k] || disallowLeakageDiverged {
-			hError[k] += float32(leakageConverged * erl[k])
-		} else {
-			hError[k] += float32(leakageDiverged * erl[k])
+		leak := div
+		if E2Refined[k] <= E2Coarse[k] {
+			leak = conv
 		}
-		hError[k] = stdMax(hError[k], errorFloor)
-		hError[k] = stdMin(hError[k], errorCeil)
+		h := hError[k] + float32(math.Float32frombits(leak)*erl[k])
+		h = stdMax(h, errorFloor)
+		hError[k] = stdMin(h, errorCeil)
 	}
 }
 
