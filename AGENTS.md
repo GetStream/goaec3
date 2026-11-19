@@ -123,6 +123,45 @@ write changelog narrative.
 - C++ classes that take an `Aec3Optimization` argument keep it in Go so tests
   can drive both lanes against the oracle in one binary.
 
+## Pure-Go lane references (no GOEXPERIMENT)
+
+These rules come from the matched filter, which is about half of a pure-Go
+frame (`matched_filter_kernels.go`, `matched_filter_scalar.go`).
+
+- A fused float32 multiply-add is `fl64(a*b + c)` narrowed to float32 unless
+  the float64 sum is a float32 rounding boundary (`fmafTie` in `fmaf.go`).
+  A loop tests every sum, leaves on a hit and hands the work to a
+  `//go:noinline` function that calls `fmaf` per element and restarts from
+  what the loop has stored, so the loop keeps no value alive for it.
+  `math.FMA` on the widened operands returns the same float64 sum (the
+  product is exact) and removes neither the test nor a conversion.
+- The cost of that emulation on amd64 is its instruction count (about twenty
+  per fused update and accumulation, against eight for the unfused lanes):
+  a form with fewer conversions or loads is faster in proportion, a form
+  that adds a store and a load to convert in place is slower.
+- amd64 has fifteen float registers, and the compiler schedules a value
+  without a use in its own basic block (the addition of an accumulator)
+  after every value that has one (the products). A block with eight chains
+  spills one of them; split the body into blocks (a test between half
+  groups, the tie test of each fused sum, a bounds check).
+- A chain of additions costs the latency of an addition per step however
+  idle the CPU is. Independent chains run side by side: the scalar lane runs
+  up to three filters in step (`dlyCoreScalar`), the x*x sums of the unfused
+  lanes run eight chains over a table of squares.
+- Work that cannot change state is not done: Update returns early when the
+  render buffer is quiet, skips the core of a filter whose windows are quiet
+  (`filterIsQuiet`), and the cores that have their x*x sums first skip the
+  h*x sums of a filter that no sample of the block updates
+  (`dlyLaneFilter.idle`); the arguments are in `matched_filter.go`. Blocks
+  whose windows do not wrap run without the list of stretches
+  (`dlyCoreDirect`).
+- Where the unfused lanes are bound by the instruction count (two multiplies
+  and two additions per coefficient), the reference is at its floor; only
+  the archsimd kernels go below it.
+- Timings on a shared Mac and under Rosetta do not predict x86: decide from
+  the kernel benchmarks of `bench.yml`, which run base and head on the same
+  runner.
+
 ## Memory safety: no unsafe
 
 - No non-test file imports `unsafe` (so there is no `unsafe.Pointer`,
