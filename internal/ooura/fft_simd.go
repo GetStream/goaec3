@@ -29,17 +29,13 @@ type vec = archsimd.Float32x4
 
 func ld(p *[4]float32) vec { return archsimd.LoadFloat32x4Array(p) }
 
-// w8 is the four floats at offset j (0 or 4) of the 8-float window of a
-// that starts at base.
-func w8(a *[128]float32, base, j int) *[4]float32 {
-	return (*[4]float32)((*[8]float32)(a[base : base+8])[j : j+4])
-}
+// f4 is the four floats at the constant offset off of a window. Each pass
+// takes one window per iteration (a[j:j+c] for its counter j) and reaches
+// its vectors at constant offsets from it, which the compiler turns into
+// one base register and displacement addressing.
+func f4w60(p *[60]float32, off int) *[4]float32 { return (*[4]float32)(p[off : off+4]) }
 
-// w32 is the four floats at offset j (0, 4, ..., 28) of the 32-float window
-// of a that starts at base.
-func w32(a *[128]float32, base, j int) *[4]float32 {
-	return (*[4]float32)((*[32]float32)(a[base : base+32])[j : j+4])
-}
+func f4w100(p *[100]float32, off int) *[4]float32 { return (*[4]float32)(p[off : off+4]) }
 
 // tab is t[k2:k2+4] for k2 in {0, 4, ..., 28}.
 func tab(t *[32]float32, k2 int) vec {
@@ -116,13 +112,13 @@ func inverseFftSimd(a *[128]float32) {
 func bitrv2Cft1stSimd(a, t *[128]float32) {
 	swap := archsimd.LoadFloat32x4Array(&swapSign)
 	thi := (*[64]float32)(t[64:])
-	for r := 0; r < 4; r++ {
+	// r is the residue and q its two bits reversed.
+	blocks := func(r, q int) {
 		src := (*[116]float32)(a[4*r : 4*r+116])
 		v0, v1 := ld((*[4]float32)(src[0:4])), ld((*[4]float32)(src[16:20]))
 		v2, v3 := ld((*[4]float32)(src[32:36])), ld((*[4]float32)(src[48:52]))
 		v4, v5 := ld((*[4]float32)(src[64:68])), ld((*[4]float32)(src[80:84]))
 		v6, v7 := ld((*[4]float32)(src[96:100])), ld((*[4]float32)(src[112:116]))
-		q := (r>>1 | r<<1) & 3
 		b01, b23, b45, b67 := cft1stBlock(lo64(v0, v1), lo64(v4, v5), lo64(v2, v3), lo64(v6, v7), swap, 4*q)
 		d := (*[16]float32)(t[16*q : 16*q+16])
 		lo64(b01, b23).StoreArray((*[4]float32)(d[0:4]))
@@ -136,6 +132,10 @@ func bitrv2Cft1stSimd(a, t *[128]float32) {
 		hi64(b01, b23).StoreArray((*[4]float32)(d[8:12]))
 		hi64(b45, b67).StoreArray((*[4]float32)(d[12:16]))
 	}
+	blocks(0, 0)
+	blocks(1, 2)
+	blocks(2, 1)
+	blocks(3, 3)
 }
 
 // cft1stBlock is the arithmetic of the cft1st_128 iteration j = 4*k2
@@ -163,20 +163,24 @@ func cft1stBlock(a01, a23, a45, a67, swap vec, k2 int) (b01, b23, b45, b67 vec) 
 func cftmdlSimd(s, a *[128]float32) {
 	swap := archsimd.LoadFloat32x4Array(&swapSign)
 	wk1rv := archsimd.LoadFloat32x4Array(&cftmdlWk1r)
-	for j := 0; j < 8; j += 4 {
-		A0, A8, A16, A24 := ld(w8(s, 0, j)), ld(w8(s, 8, j)), ld(w8(s, 16, j)), ld(w8(s, 24, j))
-		A32, A40, A48, A56 := ld(w8(s, 32, j)), ld(w8(s, 40, j)), ld(w8(s, 48, j)), ld(w8(s, 56, j))
+	first := func(j int) {
+		sp := (*[60]float32)(s[j : j+60])
+		ap := (*[60]float32)(a[j : j+60])
+		A0, A8, A16, A24 := ld(f4w60(sp, 0)), ld(f4w60(sp, 8)), ld(f4w60(sp, 16)), ld(f4w60(sp, 24))
+		A32, A40, A48, A56 := ld(f4w60(sp, 32)), ld(f4w60(sp, 40)), ld(f4w60(sp, 48)), ld(f4w60(sp, 56))
 		xx0a, xx1a, adda, suba, yy4a := cftmdlFirst(lo64(A0, A32), lo64(A8, A40), lo64(A16, A48), lo64(A24, A56), swap, wk1rv)
 		xx0b, xx1b, addb, subb, yy4b := cftmdlFirst(hi64(A0, A32), hi64(A8, A40), hi64(A16, A48), hi64(A24, A56), swap, wk1rv)
-		lo64(xx0a, xx0b).StoreArray(w8(a, 0, j))
-		hi64(xx0a, xx0b).StoreArray(w8(a, 32, j))
-		lo64(xx1a, xx1b).StoreArray(w8(a, 16, j))
-		negEven(rev64(hi64(xx1a, xx1b))).StoreArray(w8(a, 48, j))
-		lo64(adda, addb).StoreArray(w8(a, 8, j))
-		lo64(suba, subb).StoreArray(w8(a, 24, j))
-		lo64(yy4a, yy4b).StoreArray(w8(a, 40, j))
-		rev64(hi64(yy4a, yy4b)).StoreArray(w8(a, 56, j))
+		lo64(xx0a, xx0b).StoreArray(f4w60(ap, 0))
+		hi64(xx0a, xx0b).StoreArray(f4w60(ap, 32))
+		lo64(xx1a, xx1b).StoreArray(f4w60(ap, 16))
+		negEven(rev64(hi64(xx1a, xx1b))).StoreArray(f4w60(ap, 48))
+		lo64(adda, addb).StoreArray(f4w60(ap, 8))
+		lo64(suba, subb).StoreArray(f4w60(ap, 24))
+		lo64(yy4a, yy4b).StoreArray(f4w60(ap, 40))
+		rev64(hi64(yy4a, yy4b)).StoreArray(f4w60(ap, 56))
 	}
+	first(0)
+	first(4)
 	const k2 = 4
 	wk2rv := tab(&rdftWk2r, k2)
 	wk2iv := tab(&rdftWk2i, k2)
@@ -184,20 +188,25 @@ func cftmdlSimd(s, a *[128]float32) {
 	wk3rv := tab(&rdftWk3r, k2)
 	wk3iv := tab(&rdftWk3i, k2)
 	wk1rv = tab(&rdftWk1r, k2)
-	for j := 0; j < 8; j += 4 {
-		A0, A8, A16, A24 := ld(w8(s, 64, j)), ld(w8(s, 72, j)), ld(w8(s, 80, j)), ld(w8(s, 88, j))
-		A32, A40, A48, A56 := ld(w8(s, 96, j)), ld(w8(s, 104, j)), ld(w8(s, 112, j)), ld(w8(s, 120, j))
+	shi, ahi := (*[64]float32)(s[64:]), (*[64]float32)(a[64:])
+	second := func(j int) {
+		sp := (*[60]float32)(shi[j : j+60])
+		ap := (*[60]float32)(ahi[j : j+60])
+		A0, A8, A16, A24 := ld(f4w60(sp, 0)), ld(f4w60(sp, 8)), ld(f4w60(sp, 16)), ld(f4w60(sp, 24))
+		A32, A40, A48, A56 := ld(f4w60(sp, 32)), ld(f4w60(sp, 40)), ld(f4w60(sp, 48)), ld(f4w60(sp, 56))
 		xxa, xx4a, xx12a, xx22a := cftmdlSecond(lo64(A0, A32), lo64(A8, A40), lo64(A16, A48), lo64(A24, A56), swap, wk1rv, wk1iv, wk2rv, wk2iv, wk3rv, wk3iv)
 		xxb, xx4b, xx12b, xx22b := cftmdlSecond(hi64(A0, A32), hi64(A8, A40), hi64(A16, A48), hi64(A24, A56), swap, wk1rv, wk1iv, wk2rv, wk2iv, wk3rv, wk3iv)
-		lo64(xxa, xxb).StoreArray(w8(a, 64, j))
-		hi64(xxa, xxb).StoreArray(w8(a, 96, j))
-		lo64(xx4a, xx4b).StoreArray(w8(a, 80, j))
-		hi64(xx4a, xx4b).StoreArray(w8(a, 112, j))
-		lo64(xx12a, xx12b).StoreArray(w8(a, 72, j))
-		hi64(xx12a, xx12b).StoreArray(w8(a, 104, j))
-		lo64(xx22a, xx22b).StoreArray(w8(a, 88, j))
-		hi64(xx22a, xx22b).StoreArray(w8(a, 120, j))
+		lo64(xxa, xxb).StoreArray(f4w60(ap, 0))
+		hi64(xxa, xxb).StoreArray(f4w60(ap, 32))
+		lo64(xx4a, xx4b).StoreArray(f4w60(ap, 16))
+		hi64(xx4a, xx4b).StoreArray(f4w60(ap, 48))
+		lo64(xx12a, xx12b).StoreArray(f4w60(ap, 8))
+		hi64(xx12a, xx12b).StoreArray(f4w60(ap, 40))
+		lo64(xx22a, xx22b).StoreArray(f4w60(ap, 24))
+		hi64(xx22a, xx22b).StoreArray(f4w60(ap, 56))
 	}
+	second(0)
+	second(4)
 }
 
 // cftmdlSecond is the body of the second cftmdl_128 loop for one
@@ -242,8 +251,9 @@ func cftmdlFirst(a0032, a0840, a1648, a2456, swap, wk1rv vec) (xx0, xx1, add, su
 // same IEEE result.
 func cftfsubTailSimd(a *[128]float32) {
 	swap := archsimd.LoadFloat32x4Array(&swapSign)
-	for j := 0; j < 32; j += 4 {
-		q0, q1, q2, q3 := w32(a, 0, j), w32(a, 32, j), w32(a, 64, j), w32(a, 96, j)
+	step := func(j int) {
+		w := (*[100]float32)(a[j : j+100])
+		q0, q1, q2, q3 := f4w100(w, 0), f4w100(w, 32), f4w100(w, 64), f4w100(w, 96)
 		p0, p1, p2, p3 := ld(q0), ld(q1), ld(q2), ld(q3)
 		x0 := p0.Add(p1)
 		x1 := p0.Sub(p1)
@@ -254,6 +264,14 @@ func cftfsubTailSimd(a *[128]float32) {
 		x1.Add(x3s).StoreArray(q1)
 		x1.Sub(x3s).StoreArray(q3)
 	}
+	step(0)
+	step(4)
+	step(8)
+	step(12)
+	step(16)
+	step(20)
+	step(24)
+	step(28)
 }
 
 // cftbsubTailSimd is the scalar final pass of cftbsub_128. The C code's
@@ -261,8 +279,9 @@ func cftfsubTailSimd(a *[128]float32) {
 // imaginary lanes first reproduces every expression.
 func cftbsubTailSimd(a *[128]float32) {
 	sgn := archsimd.LoadFloat32x4Array(&signIm)
-	for j := 0; j < 32; j += 4 {
-		q0, q1, q2, q3 := w32(a, 0, j), w32(a, 32, j), w32(a, 64, j), w32(a, 96, j)
+	step := func(j int) {
+		w := (*[100]float32)(a[j : j+100])
+		q0, q1, q2, q3 := f4w100(w, 0), f4w100(w, 32), f4w100(w, 64), f4w100(w, 96)
 		n0, n1 := ld(q0).Mul(sgn), ld(q1).Mul(sgn)
 		p2, p3 := ld(q2), ld(q3)
 		x0 := n0.Add(n1)
@@ -274,6 +293,14 @@ func cftbsubTailSimd(a *[128]float32) {
 		x1.Sub(x3w).StoreArray(q1)
 		x1.Add(x3w).StoreArray(q3)
 	}
+	step(0)
+	step(4)
+	step(8)
+	step(12)
+	step(16)
+	step(20)
+	step(24)
+	step(28)
 }
 
 // The vectorized rftfsub/rftbsub iterations m = 0..6 cover j2 = 2+8m:
@@ -448,7 +475,7 @@ func rftfsubSplit(a *[128]float32, re, im *[65]float32) {
 	// prevR and prevI are the reversed bins 64-4m..67-4m, whose last lane is
 	// bin 64-4m; r0 and r1 the results for bins 65-4m..68-4m.
 	var prevR, prevI, r0, r1 vec
-	for m := 0; m < 8; m++ {
+	step := func(m int) {
 		n := 7 - m
 		lo := (*[8]float32)(a[8*m : 8*m+8])
 		hi := (*[8]float32)(ahi[8*n : 8*n+8])
@@ -477,6 +504,14 @@ func rftfsubSplit(a *[128]float32, re, im *[65]float32) {
 		}
 		r0, r1 = k0, k1
 	}
+	step(0)
+	step(1)
+	step(2)
+	step(3)
+	step(4)
+	step(5)
+	step(6)
+	step(7)
 	// Bins 32..35: bin 32 as the frame has it, then the last results.
 	ext3(r0, r0).SetElem(0, re32).StoreArray(hi4(re, 0))
 	ext3(r1, r1).SetElem(0, im32).StoreArray(hi4(im, 0))
@@ -494,7 +529,7 @@ func rftbsubSplit(re, im *[65]float32, t *[128]float32) {
 	// prevR and prevI are as in rftfsubSplit; pzh is the interleaved results
 	// for bins 66-4m and 65-4m, in that order.
 	var prevR, prevI, pzh vec
-	for m := 0; m < 8; m++ {
+	step := func(m int) {
 		n := 7 - m
 		p0, p1 := ld(lo4(re, m)), ld(lo4(im, m))
 		rhR, rhI := rev4(ld(hi4(re, n))), rev4(ld(hi4(im, n)))
@@ -524,6 +559,14 @@ func rftbsubSplit(re, im *[65]float32, t *[128]float32) {
 		}
 		pzh = zh
 	}
+	step(0)
+	step(1)
+	step(2)
+	step(3)
+	step(4)
+	step(5)
+	step(6)
+	step(7)
 	// a[64:68]: bin 32, its imaginary part negated, and bin 33.
 	var x vec
 	x = x.SetElem(0, re[32]).SetElem(1, -im[32])
