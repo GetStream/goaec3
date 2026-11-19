@@ -18,13 +18,18 @@ func (r *ReverbFrequencyResponse) FrequencyResponse() *[FftLengthBy2Plus1]float3
 }
 
 // stAverageDecayWithinFilter is the tail/direct-path energy ratio, skipping
-// the DC bin.
+// the DC bin. Both energies accumulate in bin order; the tail energy is only
+// used with a nonzero direct path, and running the two chains side by side
+// halves the wait for them.
 func stAverageDecayWithinFilter(directPath, tail *[FftLengthBy2Plus1]float32) float32 {
-	directPathEnergy := stAccumulate(directPath[1:])
+	var directPathEnergy, tailEnergy float32
+	for k := 1; k < FftLengthBy2Plus1; k++ {
+		directPathEnergy += directPath[k]
+		tailEnergy += tail[k]
+	}
 	if directPathEnergy == 0 {
 		return 0
 	}
-	tailEnergy := stAccumulate(tail[1:])
 	return tailEnergy / directPathEnergy
 }
 
@@ -48,8 +53,13 @@ func (r *ReverbFrequencyResponse) update(frequencyResponse [][FftLengthBy2Plus1]
 	if r.useConservativeTailFrequencyResponse {
 		kernStdMax(tail[:], r.tailResponse[:], r.tailResponse[:])
 	}
+	// Each bin depends on the updated bin before it, which stays in a
+	// register instead of being read back from the array.
+	t := &r.tailResponse
+	prev := t[0]
 	for k := 1; k < FftLengthBy2; k++ {
-		avgNeighbour := 0.5 * (r.tailResponse[k-1] + r.tailResponse[k+1])
-		r.tailResponse[k] = stdMax(r.tailResponse[k], avgNeighbour)
+		avgNeighbour := 0.5 * (prev + t[k+1])
+		prev = stdMax(t[k], avgNeighbour)
+		t[k] = prev
 	}
 }

@@ -133,6 +133,10 @@ func stUpdateErleBand(erle *float32, newErle float32, lowRenderEnergy bool, minE
 	*erle = stSafeClamp(*erle+float32(alpha*(newErle-*erle)), minErle, maxErle)
 }
 
+// updateBands and the loops below take each per-channel array through a
+// local pointer: indexing the slices of s inside a bin loop reloads the
+// slice and checks the channel on every access, because the stores of the
+// loop may alias s.
 func (s *SubbandErleEstimator) updateBands(convergedFilters []bool) {
 	for ch := range s.accumY2 {
 		if !convergedFilters[ch] {
@@ -141,42 +145,52 @@ func (s *SubbandErleEstimator) updateBands(convergedFilters []bool) {
 		if s.accumNumPoints[ch] != stErlePointsToAccumulate {
 			continue
 		}
+		accumY2, accumE2 := &s.accumY2[ch], &s.accumE2[ch]
+		lowRender := &s.accumLowRenderEnergy[ch]
 		var newErle [FftLengthBy2]float32
 		var isErleUpdated [FftLengthBy2]bool
 		for k := 1; k < FftLengthBy2; k++ {
-			if s.accumE2[ch][k] > 0 {
-				newErle[k] = s.accumY2[ch][k] / s.accumE2[ch][k]
+			if accumE2[k] > 0 {
+				newErle[k] = accumY2[k] / accumE2[k]
 				isErleUpdated[k] = true
 			}
 		}
+		minErle := s.minErle
+		maxErle := &s.maxErle
 		if s.useOnsetDetection {
+			comingOnset, holdCounters := &s.comingOnset[ch], &s.holdCounters[ch]
+			erleDuringOnsets := &s.erleDuringOnsets[ch]
+			useMinErleDuringOnsets := s.useMinErleDuringOnsets
 			for k := 1; k < FftLengthBy2; k++ {
-				if isErleUpdated[k] && !s.accumLowRenderEnergy[ch][k] {
-					if s.comingOnset[ch][k] {
-						s.comingOnset[ch][k] = false
-						if !s.useMinErleDuringOnsets {
+				if isErleUpdated[k] && !lowRender[k] {
+					if comingOnset[k] {
+						comingOnset[k] = false
+						if !useMinErleDuringOnsets {
 							alpha := float32(0.15)
-							if newErle[k] < s.erleDuringOnsets[ch][k] {
+							if newErle[k] < erleDuringOnsets[k] {
 								alpha = 0.3
 							}
-							s.erleDuringOnsets[ch][k] = stSafeClamp(
-								s.erleDuringOnsets[ch][k]+float32(alpha*(newErle[k]-s.erleDuringOnsets[ch][k])),
-								s.minErle, s.maxErle[k])
+							erleDuringOnsets[k] = stSafeClamp(
+								erleDuringOnsets[k]+float32(alpha*(newErle[k]-erleDuringOnsets[k])),
+								minErle, maxErle[k])
 						}
 					}
-					s.holdCounters[ch][k] = stBlocksForOnsetDetection
+					holdCounters[k] = stBlocksForOnsetDetection
 				}
 			}
 		}
+		erle, erleUnbounded := &s.erle[ch], &s.erleUnbounded[ch]
+		erleOnsetCompensated := &s.erleOnsetCompensated[ch]
+		useOnsetDetection := s.useOnsetDetection
 		for k := 1; k < FftLengthBy2; k++ {
 			if isErleUpdated[k] {
-				lowRenderEnergy := s.accumLowRenderEnergy[ch][k]
-				stUpdateErleBand(&s.erle[ch][k], newErle[k], lowRenderEnergy, s.minErle, s.maxErle[k])
-				if s.useOnsetDetection {
-					stUpdateErleBand(&s.erleOnsetCompensated[ch][k], newErle[k], lowRenderEnergy, s.minErle, s.maxErle[k])
+				lowRenderEnergy := lowRender[k]
+				stUpdateErleBand(&erle[k], newErle[k], lowRenderEnergy, minErle, maxErle[k])
+				if useOnsetDetection {
+					stUpdateErleBand(&erleOnsetCompensated[k], newErle[k], lowRenderEnergy, minErle, maxErle[k])
 				}
 				const unboundedErleMax float32 = 100000.0
-				stUpdateErleBand(&s.erleUnbounded[ch][k], newErle[k], lowRenderEnergy, s.minErle, unboundedErleMax)
+				stUpdateErleBand(&erleUnbounded[k], newErle[k], lowRenderEnergy, minErle, unboundedErleMax)
 			}
 		}
 	}
@@ -184,15 +198,18 @@ func (s *SubbandErleEstimator) updateBands(convergedFilters []bool) {
 
 func (s *SubbandErleEstimator) decreaseErlePerBandForLowRenderSignals() {
 	for ch := range s.accumY2 {
+		holdCounters, comingOnset := &s.holdCounters[ch], &s.comingOnset[ch]
+		erleOnsetCompensated, erleDuringOnsets := &s.erleOnsetCompensated[ch], &s.erleDuringOnsets[ch]
 		for k := 1; k < FftLengthBy2; k++ {
-			s.holdCounters[ch][k]--
-			if s.holdCounters[ch][k] <= stBlocksForOnsetDetection-stBlocksToHoldErle {
-				if s.erleOnsetCompensated[ch][k] > s.erleDuringOnsets[ch][k] {
-					s.erleOnsetCompensated[ch][k] = stdMax(s.erleDuringOnsets[ch][k], 0.97*s.erleOnsetCompensated[ch][k])
+			c := holdCounters[k] - 1
+			holdCounters[k] = c
+			if c <= stBlocksForOnsetDetection-stBlocksToHoldErle {
+				if erleOnsetCompensated[k] > erleDuringOnsets[k] {
+					erleOnsetCompensated[k] = stdMax(erleDuringOnsets[k], 0.97*erleOnsetCompensated[k])
 				}
-				if s.holdCounters[ch][k] <= 0 {
-					s.comingOnset[ch][k] = true
-					s.holdCounters[ch][k] = 0
+				if c <= 0 {
+					comingOnset[k] = true
+					holdCounters[k] = 0
 				}
 			}
 		}
@@ -221,8 +238,9 @@ func (s *SubbandErleEstimator) updateAccumulatedSpectra(X2 *[FftLengthBy2Plus1]f
 		}
 		kernAdd(Y2[ch][:], s.accumY2[ch][:], s.accumY2[ch][:])
 		kernAdd(E2[ch][:], s.accumE2[ch][:], s.accumE2[ch][:])
+		lowRender := &s.accumLowRenderEnergy[ch]
 		for k := range X2 {
-			s.accumLowRenderEnergy[ch][k] = s.accumLowRenderEnergy[ch][k] || X2[k] < stX2BandEnergyThreshold
+			lowRender[k] = lowRender[k] || X2[k] < stX2BandEnergyThreshold
 		}
 		s.accumNumPoints[ch]++
 	}

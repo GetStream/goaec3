@@ -151,10 +151,23 @@ func (f *FullBandErleEstimator) Reset() {
 func (f *FullBandErleEstimator) Update(X2 []float32, Y2, E2 [][FftLengthBy2Plus1]float32, convergedFilters []bool) {
 	for ch := range Y2 {
 		if convergedFilters[ch] {
-			X2Sum := stAccumulate(X2)
+			// The three sums accumulate in bin order. The capture and
+			// error sums are only used with enough render power; running
+			// the chains side by side takes a third of the wait for them.
+			var X2Sum, Y2Sum, E2Sum float32
+			if len(X2) == FftLengthBy2Plus1 {
+				x, y, e := (*[FftLengthBy2Plus1]float32)(X2), &Y2[ch], &E2[ch]
+				for k := range x {
+					X2Sum += x[k]
+					Y2Sum += y[k]
+					E2Sum += e[k]
+				}
+			} else {
+				X2Sum = stAccumulate(X2)
+				Y2Sum = stAccumulate(Y2[ch][:])
+				E2Sum = stAccumulate(E2[ch][:])
+			}
 			if X2Sum > stX2BandEnergyThreshold*float32(len(X2)) {
-				Y2Sum := stAccumulate(Y2[ch][:])
-				E2Sum := stAccumulate(E2[ch][:])
 				if f.instantaneousErle[ch].Update(Y2Sum, E2Sum) {
 					f.holdCountersInstantaneousErle[ch] = stBlocksToHoldErle
 					f.erleTimeDomainLog2[ch] += float32(0.05 * (f.instantaneousErle[ch].erleLog2.Value - f.erleTimeDomainLog2[ch]))
