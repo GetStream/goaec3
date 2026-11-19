@@ -1,5 +1,7 @@
 package aec3
 
+import "math"
+
 const stDefaultTransparentModeGain float32 = 0.01
 
 type stReverbType int
@@ -20,7 +22,7 @@ type ResidualEchoEstimator struct {
 	lateReflectionsGeneralGain             float32
 	erleOnsetCompensationInDominantNearend bool
 	X2NoiseFloor                           [FftLengthBy2Plus1]float32
-	X2NoiseFloorCounter                    [FftLengthBy2Plus1]int
+	X2NoiseFloorCounter                    [FftLengthBy2Plus1]int32
 	echoReverb                             ReverbModel
 }
 
@@ -48,7 +50,7 @@ func (r *ResidualEchoEstimator) init(config *EchoCanceller3Config, numRenderChan
 func (r *ResidualEchoEstimator) reset() {
 	r.echoReverb.Reset()
 	for k := range r.X2NoiseFloorCounter {
-		r.X2NoiseFloorCounter[k] = r.config.EchoModel.NoiseFloorHold
+		r.X2NoiseFloorCounter[k] = r.noiseFloorHold()
 		r.X2NoiseFloor[k] = r.config.EchoModel.MinNoiseFloorPower
 	}
 }
@@ -171,21 +173,18 @@ func (r *ResidualEchoEstimator) renderPowerAt(renderBuffer *RenderBuffer, offset
 	return &X2[0]
 }
 
+// noiseFloorHold is config.EchoModel.NoiseFloorHold as the 32-bit counters
+// see it. The counters start at the hold and count up to it from zero, so a
+// hold beyond 32 bits acts as the nearest 32-bit value.
+func (r *ResidualEchoEstimator) noiseFloorHold() int32 {
+	return int32(min(max(r.config.EchoModel.NoiseFloorHold, math.MinInt32), math.MaxInt32))
+}
+
 func (r *ResidualEchoEstimator) updateRenderNoisePower(renderBuffer *RenderBuffer) {
 	var renderPowerData [FftLengthBy2Plus1]float32
 	renderPower := r.renderPowerAt(renderBuffer, 0, &renderPowerData)
-	for k := 0; k < FftLengthBy2Plus1; k++ {
-		if renderPower[k] < r.X2NoiseFloor[k] {
-			r.X2NoiseFloor[k] = renderPower[k]
-			r.X2NoiseFloorCounter[k] = 0
-		} else {
-			if r.X2NoiseFloorCounter[k] >= r.config.EchoModel.NoiseFloorHold {
-				r.X2NoiseFloor[k] = stdMax(r.X2NoiseFloor[k]*1.1, r.config.EchoModel.MinNoiseFloorPower)
-			} else {
-				r.X2NoiseFloorCounter[k]++
-			}
-		}
-	}
+	kernNoiseFloorUpdate(renderPower, &r.X2NoiseFloor, &r.X2NoiseFloorCounter, r.noiseFloorHold(),
+		r.config.EchoModel.MinNoiseFloorPower)
 }
 
 func (r *ResidualEchoEstimator) updateReverb(reverbType stReverbType, aecState *AecState, renderBuffer *RenderBuffer, dominantNearend bool) {

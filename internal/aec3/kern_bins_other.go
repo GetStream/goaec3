@@ -75,3 +75,14 @@ func kernPeakBin(x *[FftLengthBy2Plus1]float32) int { return kernPeakBinGeneric(
 func kernNarrowBands(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32) {
 	kernNarrowBandsGeneric(x, narrow)
 }
+
+func kernNoiseFloorUpdate(renderPower, noiseFloor *[FftLengthBy2Plus1]float32, counter *[FftLengthBy2Plus1]int32,
+	hold int32, minPower float32) {
+	kernNoiseFloorUpdateGeneric(renderPower, noiseFloor, counter, hold, minPower)
+}
+
+func kernStdMinScalar(x []float32, a float32) { kernStdMinScalarGeneric(x, a) }
+
+func kernSumMaxSq(x *[BlockSize]float32, sum, mx float32) (float32, float32) {
+	return kernSumMaxSqGeneric(x, sum, mx)
+}

@@ -397,3 +397,65 @@ func kernNarrowBandsGeneric(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2
 		narrow[k-1] |= -int32(rsaB2i(x[k] > 3*rsaMax(x[k-1], x[k+1])))
 	}
 }
+
+// kernNoiseFloorUpdateGeneric is the bin loop of
+// ResidualEchoEstimator::UpdateRenderNoisePower. A counter never exceeds
+// hold, so 32 bits hold it.
+func kernNoiseFloorUpdateGeneric(renderPower, noiseFloor *[FftLengthBy2Plus1]float32, counter *[FftLengthBy2Plus1]int32,
+	hold int32, minPower float32) {
+	for k := range noiseFloor {
+		if renderPower[k] < noiseFloor[k] {
+			noiseFloor[k] = renderPower[k]
+			counter[k] = 0
+		} else if counter[k] >= hold {
+			noiseFloor[k] = stdMax(noiseFloor[k]*1.1, minPower)
+		} else {
+			counter[k]++
+		}
+	}
+}
+
+// kernStdMinScalarGeneric sets x = std::min(x, a) = (a < x ? a : x)
+// element-wise.
+func kernStdMinScalarGeneric(x []float32, a float32) {
+	for i, v := range x {
+		x[i] = stdMin(v, a)
+	}
+}
+
+// kernSumMaxSqGeneric continues two folds over the squares of x in index
+// order: sum += x*x and mx = std::max(mx, x*x)
+// (SuppressionGain::LowNoiseRenderDetector::Detect).
+func kernSumMaxSqGeneric(x *[BlockSize]float32, sum, mx float32) (float32, float32) {
+	for _, v := range x {
+		x2 := float32(v * v)
+		sum += x2
+		mx = stdMax(mx, x2)
+	}
+	return sum, mx
+}
+
+// kernSumSq3 returns the sums of squares of three blocks, each accumulated
+// in index order from +0. The three folds are independent serial chains of
+// additions, so they advance side by side in one loop; each sum is the one
+// its own loop gives.
+func kernSumSq3(a, b, c *[BlockSize]float32) (sa, sb, sc float32) {
+	for i := range a {
+		sa += float32(a[i] * a[i])
+		sb += float32(b[i] * b[i])
+		sc += float32(c[i] * c[i])
+	}
+	return sa, sb, sc
+}
+
+// kernSumSq5 is kernSumSq3 for five blocks.
+func kernSumSq5(a, b, c, d, e *[BlockSize]float32) (sa, sb, sc, sd, se float32) {
+	for i := range a {
+		sa += float32(a[i] * a[i])
+		sb += float32(b[i] * b[i])
+		sc += float32(c[i] * c[i])
+		sd += float32(d[i] * d[i])
+		se += float32(e[i] * e[i])
+	}
+	return sa, sb, sc, sd, se
+}

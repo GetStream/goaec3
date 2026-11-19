@@ -67,14 +67,6 @@ func (s *SubtractorOutput) Reset() {
 	s.Y2 = 0
 }
 
-func sumOfSquares(x []float32) float32 {
-	var acc float32
-	for _, v := range x {
-		acc += float32(v * v)
-	}
-	return acc
-}
-
 func maxAbsOf(x []float32) float32 {
 	if mn, mx, ok := kernMinMax(x); ok {
 		return stdMax(mx, -mn)
@@ -92,11 +84,8 @@ func maxAbsOf(x []float32) float32 {
 }
 
 func (s *SubtractorOutput) ComputeMetrics(y []float32) {
-	s.Y2 = sumOfSquares(y)
-	s.E2RefinedSum = sumOfSquares(s.ERefined[:])
-	s.E2CoarseSum = sumOfSquares(s.ECoarse[:])
-	s.S2Refined = sumOfSquares(s.SRefined[:])
-	s.S2Coarse = sumOfSquares(s.SCoarse[:])
+	s.Y2, s.E2RefinedSum, s.E2CoarseSum, s.S2Refined, s.S2Coarse = kernSumSq5(
+		(*[BlockSize]float32)(y), &s.ERefined, &s.ECoarse, &s.SRefined, &s.SCoarse)
 	s.SRefinedMaxAbs = maxAbsOf(s.SRefined[:])
 	s.SCoarseMaxAbs = maxAbsOf(s.SCoarse[:])
 }

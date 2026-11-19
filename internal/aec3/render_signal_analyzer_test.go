@@ -292,3 +292,86 @@ func TestKernPeakBinAndNarrowBands(t *testing.T) {
 		t.Fatalf("only %d peaks in the last bins", late)
 	}
 }
+
+// PoorSignalExcitation and MaskRegionsAroundNarrowBands answer from facts
+// cached by Update; the reference scans the counters as the C++ does.
+func (r *refRenderSignalAnalyzer) PoorSignalExcitation() bool {
+	for _, a := range r.narrowBandCounters {
+		if a > 10 {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *refRenderSignalAnalyzer) MaskRegionsAroundNarrowBands(v *[FftLengthBy2Plus1]float32) {
+	if r.narrowBandCounters[0] > afirCounterThreshold {
+		v[1], v[0] = 0, 0
+	}
+	for k := 2; k < FftLengthBy2-1; k++ {
+		if r.narrowBandCounters[k-1] > afirCounterThreshold {
+			v[k-2], v[k-1], v[k], v[k+1], v[k+2] = 0, 0, 0, 0, 0
+		}
+	}
+	if r.narrowBandCounters[FftLengthBy2-2] > afirCounterThreshold {
+		v[FftLengthBy2], v[FftLengthBy2-1] = 0, 0
+	}
+}
+
+func TestRenderSignalAnalyzerCachedCounterFacts(t *testing.T) {
+	rng := rand.New(rand.NewSource(23))
+	var poor, masked, steps int
+	for trial := 0; trial < 60; trial++ {
+		size := 20
+		numChannels := 1 + rng.Intn(3)
+		bb := NewBlockBuffer(size, 1, numChannels)
+		sb := NewSpectrumBuffer(size, numChannels)
+		rb := NewRenderBuffer(bb, sb, NewFftBuffer(size, numChannels))
+		got := &RenderSignalAnalyzer{strongPeakFreezeDuration: 5}
+		want := &refRenderSignalAnalyzer{strongPeakFreezeDuration: 5}
+		delay := 0
+		for step := 0; step < 300; step++ {
+			// The spectra stay for runs of steps so that counters grow past
+			// both thresholds.
+			if rng.Intn(15) == 0 {
+				delay = rng.Intn(size)
+				for i := range sb.Size {
+					for ch := range sb.At(i) {
+						rsaTestSpectrum(rng, &sb.At(i)[ch])
+					}
+				}
+			}
+			hasDelay := rng.Intn(40) != 0
+			got.Update(rb, delay, hasDelay)
+			want.Update(rb, delay, hasDelay)
+			if got.narrowBandCounters != want.narrowBandCounters {
+				t.Fatalf("trial %d, step %d: counters differ", trial, step)
+			}
+			if got.PoorSignalExcitation() != want.PoorSignalExcitation() {
+				t.Fatalf("trial %d, step %d: PoorSignalExcitation %v, want %v", trial, step,
+					got.PoorSignalExcitation(), want.PoorSignalExcitation())
+			}
+			var a, b [FftLengthBy2Plus1]float32
+			for k := range a {
+				a[k] = float32(1 + rng.Float64())
+			}
+			b = a
+			c := a
+			got.MaskRegionsAroundNarrowBands(&a)
+			want.MaskRegionsAroundNarrowBands(&b)
+			if a != b {
+				t.Fatalf("trial %d, step %d: masks differ", trial, step)
+			}
+			steps++
+			if want.PoorSignalExcitation() {
+				poor++
+			}
+			if b != c {
+				masked++
+			}
+		}
+	}
+	if poor < steps/20 || masked < steps/20 || poor > steps*19/20 || masked > steps*19/20 {
+		t.Fatalf("coverage: %d steps, %d with poor excitation, %d masked", steps, poor, masked)
+	}
+}

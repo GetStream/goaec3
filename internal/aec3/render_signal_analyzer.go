@@ -13,6 +13,11 @@ type RenderSignalAnalyzer struct {
 	narrowPeakBand           int
 	hasNarrowPeakBand        bool
 	narrowPeakCounter        int
+	// Facts about narrowBandCounters, kept current by
+	// identifySmallNarrowBandRegions (the only writer of the counters):
+	// some counter is above 10, some counter is above afirCounterThreshold.
+	poorSignalExcitation bool
+	narrowBandsToMask    bool
 }
 
 func NewRenderSignalAnalyzer(config *EchoCanceller3Config) *RenderSignalAnalyzer {
@@ -29,6 +34,8 @@ func (r *RenderSignalAnalyzer) Update(renderBuffer *RenderBuffer, delayPartition
 func (r *RenderSignalAnalyzer) identifySmallNarrowBandRegions(renderBuffer *RenderBuffer, delayPartitions int, hasDelay bool) {
 	if !hasDelay {
 		r.narrowBandCounters = [FftLengthBy2 - 1]int{}
+		r.poorSignalExcitation = false
+		r.narrowBandsToMask = false
 		return
 	}
 	// narrow[k-1] is all ones when bin k is a narrow band in some channel
@@ -38,10 +45,18 @@ func (r *RenderSignalAnalyzer) identifySmallNarrowBandRegions(renderBuffer *Rend
 	for ch := range X2 {
 		kernNarrowBands(&X2[ch], &narrow)
 	}
+	// above10 and aboveThreshold turn negative when some counter (never
+	// negative) exceeds 10 or afirCounterThreshold.
+	above10, aboveThreshold := 0, 0
 	for k := range r.narrowBandCounters {
 		// Increment, or reset to zero, without a branch.
-		r.narrowBandCounters[k] = (r.narrowBandCounters[k] + 1) & int(narrow[k])
+		c := (r.narrowBandCounters[k] + 1) & int(narrow[k])
+		r.narrowBandCounters[k] = c
+		above10 |= 10 - c
+		aboveThreshold |= afirCounterThreshold - c
 	}
+	r.poorSignalExcitation = above10 < 0
+	r.narrowBandsToMask = aboveThreshold < 0
 }
 
 // rsaMax is std::max(a, b): a unless a < b, so a NaN b yields a. It selects
@@ -119,16 +134,14 @@ func afirMaxAbsMinMax(x []float32) float32 {
 
 // PoorSignalExcitation reports whether the render signal is poorly exciting.
 func (r *RenderSignalAnalyzer) PoorSignalExcitation() bool {
-	for _, a := range r.narrowBandCounters {
-		if a > 10 {
-			return true
-		}
-	}
-	return false
+	return r.poorSignalExcitation
 }
 
 // MaskRegionsAroundNarrowBands zeros v around narrow-band regions.
 func (r *RenderSignalAnalyzer) MaskRegionsAroundNarrowBands(v *[FftLengthBy2Plus1]float32) {
+	if !r.narrowBandsToMask {
+		return
+	}
 	if r.narrowBandCounters[0] > afirCounterThreshold {
 		v[1], v[0] = 0, 0
 	}

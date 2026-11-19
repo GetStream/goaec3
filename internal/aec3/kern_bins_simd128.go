@@ -757,3 +757,99 @@ func kernNarrowBands(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32)
 	f(56)
 	f(59)
 }
+
+// kernNoiseFloorUpdate evaluates the three outcomes of a bin and selects
+// per lane.
+func kernNoiseFloorUpdate(renderPower, noiseFloor *[FftLengthBy2Plus1]float32, counter *[FftLengthBy2Plus1]int32,
+	hold int32, minPower float32) {
+	if !kernHas128 {
+		kernNoiseFloorUpdateGeneric(renderPower, noiseFloor, counter, hold, minPower)
+		return
+	}
+	holdV := archsimd.BroadcastInt32x4(hold)
+	one := archsimd.BroadcastInt32x4(1)
+	var zero archsimd.Int32x4
+	c11 := archsimd.BroadcastFloat32x4(1.1)
+	minV := archsimd.BroadcastFloat32x4(minPower)
+	f := func(k int) {
+		_ = c11 // a captured vector makes the compiler inline the closure
+		p := kernLd4(renderPower, k)
+		n := kernLd4(noiseFloor, k)
+		cp := (*[4]int32)(counter[k : k+4])
+		c := archsimd.LoadInt32x4Array(cp)
+		lower := p.Less(n)
+		held := holdV.LessEqual(c)
+		kernSt4(noiseFloor, k, p.IfElse(lower, vStdMax(n.Mul(c11), minV).IfElse(held, n)))
+		zero.IfElse(lower, c.IfElse(held, c.Add(one))).StoreArray(cp)
+	}
+	g := func(k int) {
+		_ = c11
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
+	const k = FftLengthBy2
+	if renderPower[k] < noiseFloor[k] {
+		noiseFloor[k] = renderPower[k]
+		counter[k] = 0
+	} else if counter[k] >= hold {
+		noiseFloor[k] = stdMax(noiseFloor[k]*1.1, minPower)
+	} else {
+		counter[k]++
+	}
+}
+
+func kernStdMinScalar(x []float32, a float32) {
+	if !kernHas128 {
+		kernStdMinScalarGeneric(x, a)
+		return
+	}
+	av := archsimd.BroadcastFloat32x4(a)
+	j := 0
+	for ; j+4 <= len(x); j += 4 {
+		vStdMin(archsimd.LoadFloat32x4(x[j:]), av).Store(x[j:])
+	}
+	for ; j < len(x); j++ {
+		x[j] = stdMin(x[j], a)
+	}
+}
+
+// kernSumMaxSq keeps the sum as the serial chain of additions it is and
+// takes the maximum per lane. std::max(mx, x2) = (mx < x2 ? x2 : mx) keeps
+// mx on a NaN x2 and stays NaN on a NaN mx, and every other x2 is +0 or
+// positive, so the fold is the largest of mx and the non-NaN squares (or
+// NaN) in any order: the four lanes start from mx and fold together at the
+// end.
+func kernSumMaxSq(x *[BlockSize]float32, sum, mx float32) (float32, float32) {
+	if !kernHas128 {
+		return kernSumMaxSqGeneric(x, sum, mx)
+	}
+	for _, v := range x {
+		sum += float32(v * v)
+	}
+	m := archsimd.BroadcastFloat32x4(mx)
+	f := func(k int) {
+		_ = m // a captured vector makes the compiler inline the closure
+		v := kernLd64(x, k)
+		m = vStdMax(m, v.Mul(v))
+	}
+	g := func(k int) {
+		_ = m
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
+	var lanes [4]float32
+	m.StoreArray(&lanes)
+	return sum, stdMax(stdMax(lanes[0], lanes[1]), stdMax(lanes[2], lanes[3]))
+}

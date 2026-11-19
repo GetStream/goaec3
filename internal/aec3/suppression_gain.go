@@ -22,9 +22,7 @@ func sgLimitLowFrequencyGains(gain *[FftLengthBy2Plus1]float32) {
 func sgLimitHighFrequencyGains(conservativeHfSuppression bool, gain *[FftLengthBy2Plus1]float32) {
 	const firstBandToLimit = (64 * 2000) / 8000
 	minUpperGain := gain[firstBandToLimit]
-	for k := firstBandToLimit + 1; k < FftLengthBy2Plus1; k++ {
-		gain[k] = stdMin(gain[k], minUpperGain)
-	}
+	kernStdMinScalar(gain[firstBandToLimit+1:], minUpperGain)
 	gain[FftLengthBy2] = gain[FftLengthBy2Minus1]
 
 	if conservativeHfSuppression {
@@ -37,9 +35,7 @@ func sgLimitHighFrequencyGains(conservativeHfSuppression bool, gain *[FftLengthB
 			sum += g
 		}
 		hfGainBound := sum * oneByBandsInSum
-		for k := upperAccurateBandPlus1; k < FftLengthBy2Plus1; k++ {
-			gain[k] = stdMin(gain[k], hfGainBound)
-		}
+		kernStdMinScalar(gain[upperAccurateBandPlus1:], hfGainBound)
 	}
 }
 
@@ -72,12 +68,26 @@ func sgLowFrequencyEnergy(spectrum *[FftLengthBy2Plus1]float32) float32 {
 	return sum
 }
 
-func sgSumOfSquares(x []float32) float32 {
-	var sum float32
-	for _, v := range x {
-		sum += float32(v * v)
+// sgBandEnergies returns the largest sum of squares over the channels of
+// band 0 of render, and over the channels of its upper bands (render has at
+// least two bands). The C++ folds std::max(energy, sum of squares) from +0
+// over the channels of band 0, and over the channels of band 1 and then of
+// band 2. A sum of squares is NaN, which the fold skips, or at least +0, so
+// each fold is the largest non-NaN sum (or +0) in any order of the sums; the
+// sums of the bands of a channel are accumulated side by side.
+func sgBandEnergies(render *Block) (lowBandEnergy, highBandEnergy float32) {
+	for ch := 0; ch < render.NumChannels(); ch++ {
+		b0 := (*[BlockSize]float32)(render.View(0, ch))
+		b1 := (*[BlockSize]float32)(render.View(1, ch))
+		b2 := b1
+		if render.NumBands() > 2 {
+			b2 = (*[BlockSize]float32)(render.View(2, ch))
+		}
+		e0, e1, e2 := kernSumSq3(b0, b1, b2)
+		lowBandEnergy = stdMax(lowBandEnergy, e0)
+		highBandEnergy = stdMax(stdMax(highBandEnergy, e1), e2)
 	}
-	return sum
+	return lowBandEnergy, highBandEnergy
 }
 
 // sgLowNoiseRenderDetector mirrors SuppressionGain::LowNoiseRenderDetector.
@@ -90,11 +100,7 @@ type sgLowNoiseRenderDetector struct {
 func (d *sgLowNoiseRenderDetector) Detect(render *Block) bool {
 	var x2Sum, x2Max float32
 	for ch := 0; ch < render.NumChannels(); ch++ {
-		for _, x := range render.View(0, ch) {
-			x2 := float32(x * x)
-			x2Sum += x2
-			x2Max = stdMax(x2Max, x2)
-		}
+		x2Sum, x2Max = kernSumMaxSq((*[BlockSize]float32)(render.View(0, ch)), x2Sum, x2Max)
 	}
 	x2Sum = x2Sum / float32(render.NumChannels())
 
@@ -304,7 +310,6 @@ func (s *SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][F
 	if render.NumBands() == 1 {
 		return 1
 	}
-	numRenderChannels := render.NumChannels()
 
 	if hasNarrowPeakBand && narrowPeakBand > FftLengthBy2Plus1-10 {
 		return 0.001
@@ -324,16 +329,7 @@ func (s *SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][F
 	}
 
 	// Compute the upper and lower band energies.
-	var lowBandEnergy float32
-	for ch := 0; ch < numRenderChannels; ch++ {
-		lowBandEnergy = stdMax(lowBandEnergy, sgSumOfSquares(render.View(0, ch)))
-	}
-	var highBandEnergy float32
-	for k := 1; k < render.NumBands(); k++ {
-		for ch := 0; ch < numRenderChannels; ch++ {
-			highBandEnergy = stdMax(highBandEnergy, sgSumOfSquares(render.View(k, ch)))
-		}
-	}
+	lowBandEnergy, highBandEnergy := sgBandEnergies(render)
 
 	// If there is more power in the lower frequencies than the upper
 	// frequencies, or if the power in upper frequencies is low, do not bound
