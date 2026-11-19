@@ -75,24 +75,47 @@ func kernSub(x, y, z []float32) {
 	}
 }
 
-// kernSumRows keeps sixteen bins of dst in registers while all rows
-// accumulate into them, in row order starting from +0.
+// kernSumRows keeps the 64 bins of dst in sixteen registers while all rows
+// accumulate into them, in row order starting from +0: one pass over the
+// rows, and the additions of a row do not wait for each other.
 func kernSumRows(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]float32) {
-	for k := 0; k < FftLengthBy2; k += 16 {
-		var a0, a1, a2, a3 f32x4
-		for _, r := range rows {
-			p := (*[16]float32)(r[k : k+16])
-			a0 = a0.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[0:4])))
-			a1 = a1.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[4:8])))
-			a2 = a2.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[8:12])))
-			a3 = a3.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[12:16])))
-		}
-		p := (*[16]float32)(dst[k : k+16])
-		a0.StoreArray((*[4]float32)(p[0:4]))
-		a1.StoreArray((*[4]float32)(p[4:8]))
-		a2.StoreArray((*[4]float32)(p[8:12]))
-		a3.StoreArray((*[4]float32)(p[12:16]))
+	var a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15 f32x4
+	for _, r := range rows {
+		p := (*[64]float32)(r[0:64])
+		a0 = a0.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[0:4])))
+		a1 = a1.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[4:8])))
+		a2 = a2.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[8:12])))
+		a3 = a3.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[12:16])))
+		a4 = a4.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[16:20])))
+		a5 = a5.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[20:24])))
+		a6 = a6.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[24:28])))
+		a7 = a7.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[28:32])))
+		a8 = a8.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[32:36])))
+		a9 = a9.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[36:40])))
+		a10 = a10.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[40:44])))
+		a11 = a11.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[44:48])))
+		a12 = a12.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[48:52])))
+		a13 = a13.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[52:56])))
+		a14 = a14.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[56:60])))
+		a15 = a15.Add(archsimd.LoadFloat32x4Array((*[4]float32)(p[60:64])))
 	}
+	p := (*[64]float32)(dst[0:64])
+	a0.StoreArray((*[4]float32)(p[0:4]))
+	a1.StoreArray((*[4]float32)(p[4:8]))
+	a2.StoreArray((*[4]float32)(p[8:12]))
+	a3.StoreArray((*[4]float32)(p[12:16]))
+	a4.StoreArray((*[4]float32)(p[16:20]))
+	a5.StoreArray((*[4]float32)(p[20:24]))
+	a6.StoreArray((*[4]float32)(p[24:28]))
+	a7.StoreArray((*[4]float32)(p[28:32]))
+	a8.StoreArray((*[4]float32)(p[32:36]))
+	a9.StoreArray((*[4]float32)(p[36:40]))
+	a10.StoreArray((*[4]float32)(p[40:44]))
+	a11.StoreArray((*[4]float32)(p[44:48]))
+	a12.StoreArray((*[4]float32)(p[48:52]))
+	a13.StoreArray((*[4]float32)(p[52:56]))
+	a14.StoreArray((*[4]float32)(p[56:60]))
+	a15.StoreArray((*[4]float32)(p[60:64]))
 	var last float32
 	for _, r := range rows {
 		last += r[FftLengthBy2]
