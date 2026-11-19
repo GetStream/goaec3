@@ -25,6 +25,13 @@ func kernMulAdd2(a, b, c, d, z []float32) {
 	}
 	n := len(z)
 	a, b, c, d = a[:n], b[:n], c[:n], d[:n]
+	if kernIs64(n) {
+		if n == 65 {
+			z[64] = float32(a[64]*b[64]) + float32(c[64]*d[64])
+		}
+		kernMulAdd2x64((*[64]float32)(a), (*[64]float32)(b), (*[64]float32)(c), (*[64]float32)(d), (*[64]float32)(z))
+		return
+	}
 	j := 0
 	for ; j+4 <= n; j += 4 {
 		p := archsimd.LoadFloat32x4(a[j:]).Mul(archsimd.LoadFloat32x4(b[j:]))
@@ -42,6 +49,13 @@ func kernAxpy(x []float32, a float32, z []float32) {
 		return
 	}
 	z = z[:len(x)]
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] += float32(x[64] * a)
+		}
+		kernAxpy64((*[64]float32)(x), a, (*[64]float32)(z))
+		return
+	}
 	av := archsimd.BroadcastFloat32x4(a)
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
@@ -58,6 +72,13 @@ func kernOneMinusSq(x, z []float32) {
 		return
 	}
 	z = z[:len(x)]
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] = 1 - float32(x[64]*x[64])
+		}
+		kernOneMinusSq64((*[64]float32)(x), (*[64]float32)(z))
+		return
+	}
 	one := archsimd.BroadcastFloat32x4(1)
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
@@ -76,6 +97,15 @@ func kernDiffPower(yr, er, yi, ei, z []float32) {
 	}
 	n := len(z)
 	yr, er, yi, ei = yr[:n], er[:n], yi[:n], ei[:n]
+	if kernIs64(n) {
+		if n == 65 {
+			dr := yr[64] - er[64]
+			di := yi[64] - ei[64]
+			z[64] = float32(dr*dr) + float32(di*di)
+		}
+		kernDiffPower64((*[64]float32)(yr), (*[64]float32)(er), (*[64]float32)(yi), (*[64]float32)(ei), (*[64]float32)(z))
+		return
+	}
 	j := 0
 	for ; j+4 <= n; j += 4 {
 		dr := archsimd.LoadFloat32x4(yr[j:]).Sub(archsimd.LoadFloat32x4(er[j:]))
@@ -96,6 +126,13 @@ func kernStdMin(x, y, z []float32) {
 	}
 	y = y[:len(x)]
 	z = z[:len(x)]
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] = stdMin(x[64], y[64])
+		}
+		kernStdMin64((*[64]float32)(x), (*[64]float32)(y), (*[64]float32)(z))
+		return
+	}
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
 		vStdMin(archsimd.LoadFloat32x4(x[j:]), archsimd.LoadFloat32x4(y[j:])).Store(z[j:])
@@ -108,6 +145,13 @@ func kernStdMin(x, y, z []float32) {
 func kernStdMaxScalar(x []float32, a float32) {
 	if !kernHas128 {
 		kernStdMaxScalarGeneric(x, a)
+		return
+	}
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			x[64] = stdMax(x[64], a)
+		}
+		kernStdMaxScalar64((*[64]float32)(x), a)
 		return
 	}
 	av := archsimd.BroadcastFloat32x4(a)
@@ -126,6 +170,13 @@ func kernSmooth(s, y []float32, c float32) {
 		return
 	}
 	y = y[:len(s)]
+	if kernIs64(len(s)) {
+		if len(s) == 65 {
+			s[64] += float32(c * (y[64] - s[64]))
+		}
+		kernSmooth64((*[64]float32)(s), (*[64]float32)(y), c)
+		return
+	}
 	cv := archsimd.BroadcastFloat32x4(c)
 	j := 0
 	for ; j+4 <= len(s); j += 4 {
@@ -146,7 +197,9 @@ func kernNoAudibleEcho(nearend, echo, masker, enrT, enrS, emrT, gain *[FftLength
 		return
 	}
 	one := archsimd.BroadcastFloat32x4(1)
-	for k := 0; k < FftLengthBy2; k += 4 {
+	var zero f32x4
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		e := archsimd.LoadFloat32x4Array((*[4]float32)(echo[k : k+4]))
 		enr := e.Div(archsimd.LoadFloat32x4Array((*[4]float32)(nearend[k : k+4])).Add(one))
 		emr := e.Div(archsimd.LoadFloat32x4Array((*[4]float32)(masker[k : k+4])).Add(one))
@@ -156,6 +209,17 @@ func kernNoAudibleEcho(nearend, echo, masker, enrT, enrS, emrT, gain *[FftLength
 		g := vStdMax(es.Sub(enr).Div(es.Sub(et)), mt.Div(emr))
 		g.IfElse(enr.Greater(et).And(emr.Greater(mt)), one).StoreArray((*[4]float32)(gain[k : k+4]))
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	const n = FftLengthBy2
 	kernNoAudibleEchoBin(nearend, echo, masker, enrT, enrS, emrT, gain, n)
 }
@@ -179,10 +243,22 @@ func kernMinGain(w *[FftLengthBy2Plus1]float32, minEchoPower float32, minGain *[
 	one := archsimd.BroadcastFloat32x4(1)
 	var zero f32x4
 	mp := archsimd.BroadcastFloat32x4(minEchoPower)
-	for k := 0; k < FftLengthBy2; k += 4 {
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		wv := archsimd.LoadFloat32x4Array((*[4]float32)(w[k : k+4]))
 		vStdMin(mp.Div(wv).IfElse(wv.Greater(zero), one), one).StoreArray((*[4]float32)(minGain[k : k+4]))
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	const n = FftLengthBy2
 	if w[n] > 0 {
 		minGain[n] = minEchoPower / w[n]
@@ -220,13 +296,26 @@ func kernNoiseUpdate(n, s *[FftLengthBy2Plus1]float32) {
 	c09 := archsimd.BroadcastFloat32x4(0.9)
 	c01 := archsimd.BroadcastFloat32x4(0.1)
 	c1 := archsimd.BroadcastFloat32x4(1.0002)
-	for k := 0; k < FftLengthBy2; k += 4 {
+	var zero f32x4
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		p := (*[4]float32)(n[k : k+4])
 		a := archsimd.LoadFloat32x4Array(p)
 		b := archsimd.LoadFloat32x4Array((*[4]float32)(s[k : k+4]))
 		u := c09.Mul(b).Add(c01.Mul(a)).Mul(c1)
 		u.IfElse(b.Less(a), a.Mul(c1)).StoreArray(p)
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	kernNoiseUpdateBin(n, s, FftLengthBy2)
 }
 
@@ -245,12 +334,25 @@ func kernNoiseInitialUpdate(n, ini *[FftLengthBy2Plus1]float32) {
 		return
 	}
 	c := archsimd.BroadcastFloat32x4(0.001)
-	for k := 0; k < FftLengthBy2; k += 4 {
+	var zero f32x4
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		p := (*[4]float32)(ini[k : k+4])
 		a := archsimd.LoadFloat32x4Array((*[4]float32)(n[k : k+4]))
 		b := archsimd.LoadFloat32x4Array(p)
 		b.Add(c.Mul(a.Sub(b))).IfElse(a.Greater(b), a).StoreArray(p)
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	const k = FftLengthBy2
 	a, b := n[k], ini[k]
 	if a > b {
@@ -288,6 +390,13 @@ func kernDiv(x, y, z []float32) {
 	}
 	y = y[:len(x)]
 	z = z[:len(x)]
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] = x[64] / y[64]
+		}
+		kernDiv64((*[64]float32)(x), (*[64]float32)(y), (*[64]float32)(z))
+		return
+	}
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
 		archsimd.LoadFloat32x4(x[j:]).Div(archsimd.LoadFloat32x4(y[j:])).Store(z[j:])
@@ -304,6 +413,13 @@ func kernReverb(r, p, s []float32, d float32) {
 	}
 	p = p[:len(r)]
 	s = s[:len(r)]
+	if kernIs64(len(r)) {
+		if len(r) == 65 {
+			r[64] = (r[64] + float32(p[64]*s[64])) * d
+		}
+		kernReverb64((*[64]float32)(r), (*[64]float32)(p), (*[64]float32)(s), d)
+		return
+	}
 	dv := archsimd.BroadcastFloat32x4(d)
 	j := 0
 	for ; j+4 <= len(r); j += 4 {
@@ -323,6 +439,13 @@ func kernStdMax(x, y, z []float32) {
 	}
 	y = y[:len(x)]
 	z = z[:len(x)]
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] = stdMax(x[64], y[64])
+		}
+		kernStdMax64((*[64]float32)(x), (*[64]float32)(y), (*[64]float32)(z))
+		return
+	}
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
 		vStdMax(archsimd.LoadFloat32x4(x[j:]), archsimd.LoadFloat32x4(y[j:])).Store(z[j:])
@@ -349,12 +472,24 @@ func kernRefinedMu(X2, hError, E2 *[FftLengthBy2Plus1]float32, gate, sp float32,
 	gv := archsimd.BroadcastFloat32x4(gate)
 	spv := archsimd.BroadcastFloat32x4(sp)
 	var zero f32x4
-	for k := 0; k < FftLengthBy2; k += 4 {
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		x := kernLd4(X2, k)
 		h := kernLd4(hError, k)
 		d := half.Mul(h).Mul(x).Add(spv.Mul(kernLd4(E2, k)))
 		kernSt4(mu, k, h.Div(d).IfElse(x.GreaterEqual(gv), zero))
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	const k = FftLengthBy2
 	if X2[k] >= gate {
 		h := hError[k]
@@ -370,10 +505,23 @@ func kernRefinedHError(mu, X2, hError *[FftLengthBy2Plus1]float32) {
 		return
 	}
 	half := archsimd.BroadcastFloat32x4(0.5)
-	for k := 0; k < FftLengthBy2; k += 4 {
+	var zero f32x4
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		h := kernLd4(hError, k)
 		kernSt4(hError, k, h.Sub(half.Mul(kernLd4(mu, k)).Mul(kernLd4(X2, k)).Mul(h)))
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	const k = FftLengthBy2
 	hError[k] -= float32(float32(float32(0.5*mu[k])*X2[k]) * hError[k])
 }
@@ -390,7 +538,9 @@ func kernRefinedLeak(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []floa
 	ld := archsimd.BroadcastFloat32x4(leakageDiverged)
 	fl := archsimd.BroadcastFloat32x4(errorFloor)
 	ce := archsimd.BroadcastFloat32x4(errorCeil)
-	for k := 0; k < FftLengthBy2; k += 4 {
+	var zero f32x4
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		l := lc
 		if !disallowLeakageDiverged {
 			l = lc.IfElse(kernLd4(E2Refined, k).LessEqual(kernLd4(E2Coarse, k)), ld)
@@ -398,6 +548,17 @@ func kernRefinedLeak(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []floa
 		h := kernLd4(hError, k).Add(l.Mul(kernLd4(e, k)))
 		kernSt4(hError, k, vStdMin(vStdMax(h, fl), ce))
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	const k = FftLengthBy2
 	if E2Refined[k] <= E2Coarse[k] || disallowLeakageDiverged {
 		hError[k] += float32(leakageConverged * e[k])
@@ -416,10 +577,22 @@ func kernCoarseMu(X2 *[FftLengthBy2Plus1]float32, gate, rate float32, mu *[FftLe
 	gv := archsimd.BroadcastFloat32x4(gate)
 	rv := archsimd.BroadcastFloat32x4(rate)
 	var zero f32x4
-	for k := 0; k < FftLengthBy2; k += 4 {
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		x := kernLd4(X2, k)
 		kernSt4(mu, k, rv.Div(x).IfElse(x.Greater(gv), zero))
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	const k = FftLengthBy2
 	if X2[k] > gate {
 		mu[k] = rate / X2[k]
@@ -434,6 +607,13 @@ func kernReverbScalar(r, p []float32, s, d float32) {
 		return
 	}
 	p = p[:len(r)]
+	if kernIs64(len(r)) {
+		if len(r) == 65 {
+			r[64] = (r[64] + float32(p[64]*s)) * d
+		}
+		kernReverbScalar64((*[64]float32)(r), (*[64]float32)(p), s, d)
+		return
+	}
 	sv := archsimd.BroadcastFloat32x4(s)
 	dv := archsimd.BroadcastFloat32x4(d)
 	j := 0

@@ -32,11 +32,21 @@ func fftDataSpectrum(opt Aec3Optimization, re, im, out *[FftLengthBy2Plus1]float
 
 // kernSpectrumAvx2 is FftData::SpectrumAVX2: fma(r, r, i*i) for bins 0..63.
 func kernSpectrumAvx2(re, im, out *[FftLengthBy2Plus1]float32) {
-	for k := 0; k+8 <= FftLengthBy2; k += 8 {
+	var zero archsimd.Float32x8
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		r := archsimd.LoadFloat32x8Array((*[8]float32)(re[k : k+8]))
 		i := archsimd.LoadFloat32x8Array((*[8]float32)(im[k : k+8]))
 		r.MulAdd(r, i.Mul(i)).StoreArray((*[8]float32)(out[k : k+8]))
 	}
+	f(0)
+	f(8)
+	f(16)
+	f(24)
+	f(32)
+	f(40)
+	f(48)
+	f(56)
 	archsimd.ClearAVXUpperBits()
 	const n = FftLengthBy2
 	out[n] = float32(re[n]*re[n]) + float32(im[n]*im[n])
@@ -44,11 +54,21 @@ func kernSpectrumAvx2(re, im, out *[FftLengthBy2Plus1]float32) {
 
 // kernSpectrumSse2 is the unfused r*r + i*i of the scalar/SSE2 lanes.
 func kernSpectrumSse2(re, im, out *[FftLengthBy2Plus1]float32) {
-	for k := 0; k+8 <= FftLengthBy2; k += 8 {
+	var zero archsimd.Float32x8
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		r := archsimd.LoadFloat32x8Array((*[8]float32)(re[k : k+8]))
 		i := archsimd.LoadFloat32x8Array((*[8]float32)(im[k : k+8]))
 		r.Mul(r).Add(i.Mul(i)).StoreArray((*[8]float32)(out[k : k+8]))
 	}
+	f(0)
+	f(8)
+	f(16)
+	f(24)
+	f(32)
+	f(40)
+	f(48)
+	f(56)
 	archsimd.ClearAVXUpperBits()
 	const n = FftLengthBy2
 	out[n] = float32(re[n]*re[n]) + float32(im[n]*im[n])
@@ -57,11 +77,24 @@ func kernSpectrumSse2(re, im, out *[FftLengthBy2Plus1]float32) {
 // kernSpectrumSse2x4 is kernSpectrumSse2 with 128-bit operations, for
 // CPUs (or GODEBUG settings) with AVX but not AVX2.
 func kernSpectrumSse2x4(re, im, out *[FftLengthBy2Plus1]float32) {
-	for k := 0; k+4 <= FftLengthBy2; k += 4 {
+	var zero f32x4
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		r := archsimd.LoadFloat32x4Array((*[4]float32)(re[k : k+4]))
 		i := archsimd.LoadFloat32x4Array((*[4]float32)(im[k : k+4]))
 		r.Mul(r).Add(i.Mul(i)).StoreArray((*[4]float32)(out[k : k+4]))
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	const n = FftLengthBy2
 	out[n] = float32(re[n]*re[n]) + float32(im[n]*im[n])
 }
@@ -69,6 +102,17 @@ func kernSpectrumSse2x4(re, im, out *[FftLengthBy2Plus1]float32) {
 func vectorMultiply(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
+	if kernHasAVX && kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] = x[64] * y[64]
+		}
+		if kernHasAVX2 {
+			kernMul64y((*[64]float32)(x), (*[64]float32)(y), (*[64]float32)(z))
+		} else {
+			kernMul64((*[64]float32)(x), (*[64]float32)(y), (*[64]float32)(z))
+		}
+		return
+	}
 	j := 0
 	if kernHasAVX2 {
 		for ; j+8 <= len(x); j += 8 {
@@ -88,6 +132,17 @@ func vectorMultiply(x, y, z []float32) {
 
 func vectorAccumulate(x, z []float32) {
 	z = z[:len(x)]
+	if kernHasAVX && kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] += x[64]
+		}
+		if kernHasAVX2 {
+			kernAdd64y((*[64]float32)(z), (*[64]float32)(x), (*[64]float32)(z))
+		} else {
+			kernAdd64((*[64]float32)(z), (*[64]float32)(x), (*[64]float32)(z))
+		}
+		return
+	}
 	j := 0
 	if kernHasAVX2 {
 		for ; j+8 <= len(x); j += 8 {
@@ -107,6 +162,17 @@ func vectorAccumulate(x, z []float32) {
 
 // kernVectorSqrt is VectorMath::Sqrt (sqrtps is IEEE sqrt).
 func kernVectorSqrt(x []float32) {
+	if kernHasAVX && kernIs64(len(x)) {
+		if len(x) == 65 {
+			kernVectorSqrtGeneric(x[64:])
+		}
+		if kernHasAVX2 {
+			kernSqrt64y((*[64]float32)(x))
+		} else {
+			kernSqrt64((*[64]float32)(x))
+		}
+		return
+	}
 	j := 0
 	if kernHasAVX2 {
 		for ; j+8 <= len(x); j += 8 {

@@ -119,6 +119,28 @@ func TestKernBinsElementwise(t *testing.T) {
 			kernScale(got, a, got)
 			kernScaleGeneric(want, a, want)
 			kernCheckExact(t, "Scale in place", got, want)
+			// In place, as the call sites use the helpers: the result
+			// replaces the first, the second or the only operand.
+			inPlace := func(name string, f, g func(v, w []float32)) {
+				copy(got, x)
+				copy(want, x)
+				f(got, y[:n])
+				g(want, y[:n])
+				kernCheckExact(t, name+" in place", got, want)
+			}
+			inPlace("Add", func(v, w []float32) { kernAdd(v, w, v) }, func(v, w []float32) { kernAddGeneric(v, w, v) })
+			inPlace("Add second", func(v, w []float32) { kernAdd(w, v, v) }, func(v, w []float32) { kernAddGeneric(w, v, v) })
+			inPlace("Sub", func(v, w []float32) { kernSub(v, w, v) }, func(v, w []float32) { kernSubGeneric(v, w, v) })
+			inPlace("StdMin", func(v, w []float32) { kernStdMin(v, w, v) }, func(v, w []float32) { kernStdMinGeneric(v, w, v) })
+			inPlace("StdMin second", func(v, w []float32) { kernStdMin(w, v, v) }, func(v, w []float32) { kernStdMinGeneric(w, v, v) })
+			inPlace("StdMax", func(v, w []float32) { kernStdMax(v, w, v) }, func(v, w []float32) { kernStdMaxGeneric(v, w, v) })
+			inPlace("StdMax second", func(v, w []float32) { kernStdMax(w, v, v) }, func(v, w []float32) { kernStdMaxGeneric(w, v, v) })
+			inPlace("Div", func(v, w []float32) { kernDiv(v, w, v) }, func(v, w []float32) { kernDivGeneric(v, w, v) })
+			inPlace("MulAdd2", func(v, w []float32) { kernMulAdd2(v, w, c, d, v) }, func(v, w []float32) { kernMulAdd2Generic(v, w, c, d, v) })
+			inPlace("OneMinusSq", func(v, w []float32) { kernOneMinusSq(v, v) }, func(v, w []float32) { kernOneMinusSqGeneric(v, v) })
+			inPlace("DiffPower", func(v, w []float32) { kernDiffPower(v, w, c, d, v) }, func(v, w []float32) { kernDiffPowerGeneric(v, w, c, d, v) })
+			inPlace("Multiply", func(v, w []float32) { vectorMultiply(v, w, v) }, func(v, w []float32) { vectorMultiplyGeneric(v, w, v) })
+			inPlace("Multiply second", func(v, w []float32) { vectorMultiply(w, v, v) }, func(v, w []float32) { vectorMultiplyGeneric(w, v, v) })
 		}
 	}
 }

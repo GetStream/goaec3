@@ -80,6 +80,8 @@ func TestAfirAVXOnlyKernels(t *testing.T) {
 	TestRenderBufferSpectralSums(t)
 	TestKernBinsElementwise(t)
 	TestKernSpectrum(t)
+	TestKernVectorKernels(t)
+	TestKernMinMax(t)
 }
 
 // TestAfirFreqRespPartitionX86 checks the partition kernels against the

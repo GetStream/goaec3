@@ -8,6 +8,13 @@ import "simd/archsimd"
 
 func kernScale(x []float32, a float32, z []float32) {
 	z = z[:len(x)]
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] = x[64] * a
+		}
+		kernScale64((*[64]float32)(x), a, (*[64]float32)(z))
+		return
+	}
 	av := archsimd.BroadcastFloat32x4(a)
 	j := 0
 	for ; j+8 <= len(x); j += 8 {
@@ -25,6 +32,13 @@ func kernScale(x []float32, a float32, z []float32) {
 func kernAdd(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] = x[64] + y[64]
+		}
+		kernAdd64((*[64]float32)(x), (*[64]float32)(y), (*[64]float32)(z))
+		return
+	}
 	j := 0
 	for ; j+8 <= len(x); j += 8 {
 		archsimd.LoadFloat32x4(x[j:]).Add(archsimd.LoadFloat32x4(y[j:])).Store(z[j:])
@@ -41,6 +55,13 @@ func kernAdd(x, y, z []float32) {
 func kernSub(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			z[64] = x[64] - y[64]
+		}
+		kernSub64((*[64]float32)(x), (*[64]float32)(y), (*[64]float32)(z))
+		return
+	}
 	j := 0
 	for ; j+8 <= len(x); j += 8 {
 		archsimd.LoadFloat32x4(x[j:]).Sub(archsimd.LoadFloat32x4(y[j:])).Store(z[j:])
@@ -82,13 +103,26 @@ func kernSumRows(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]flo
 // kernUnpack deinterleaves v into re[0..63] (even) and im[0..63] (odd),
 // then moves the Nyquist real part from im[0] to re[64].
 func kernUnpack(v *[FftLength]float32, re, im *[FftLengthBy2Plus1]float32) {
-	for k := 0; k < FftLengthBy2; k += 4 {
+	var zero f32x4
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		p := (*[8]float32)(v[2*k : 2*k+8])
 		a := archsimd.LoadFloat32x4Array((*[4]float32)(p[0:4])).ToBits()
 		b := archsimd.LoadFloat32x4Array((*[4]float32)(p[4:8])).ToBits()
 		a.ConcatEven(b).BitsToFloat32().StoreArray((*[4]float32)(re[k : k+4]))
 		a.ConcatOdd(b).BitsToFloat32().StoreArray((*[4]float32)(im[k : k+4]))
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	re[FftLengthBy2] = im[0]
 	im[0] = 0
 	im[FftLengthBy2] = 0
@@ -97,13 +131,26 @@ func kernUnpack(v *[FftLength]float32, re, im *[FftLengthBy2Plus1]float32) {
 // kernPack interleaves re[0..63] and im[0..63] into v, then puts the Nyquist
 // real part re[64] in v[1].
 func kernPack(re, im *[FftLengthBy2Plus1]float32, v *[FftLength]float32) {
-	for k := 0; k < FftLengthBy2; k += 4 {
+	var zero f32x4
+	f := func(k int) {
+		_ = zero // a captured vector makes the compiler inline the closure
 		a := archsimd.LoadFloat32x4Array((*[4]float32)(re[k : k+4])).ToBits()
 		b := archsimd.LoadFloat32x4Array((*[4]float32)(im[k : k+4])).ToBits()
 		p := (*[8]float32)(v[2*k : 2*k+8])
 		a.InterleaveLo(b).BitsToFloat32().StoreArray((*[4]float32)(p[0:4]))
 		a.InterleaveHi(b).BitsToFloat32().StoreArray((*[4]float32)(p[4:8]))
 	}
+	g := func(k int) {
+		_ = zero
+		f(k)
+		f(k + 4)
+		f(k + 8)
+		f(k + 12)
+	}
+	g(0)
+	g(16)
+	g(32)
+	g(48)
 	v[1] = re[FftLengthBy2]
 }
 
@@ -120,13 +167,18 @@ const kernMinMaxFast = true
 // own loop. Any other extreme value has a single bit pattern.
 func kernMinMax(x []float32) (mn, mx float32, ok bool) {
 	if len(x) >= 8 {
-		vmn := archsimd.LoadFloat32x4(x)
-		vmx := vmn
-		j := 4
-		for ; j+4 <= len(x); j += 4 {
-			v := archsimd.LoadFloat32x4(x[j:])
-			vmn = vmn.Min(v)
-			vmx = vmx.Max(v)
+		var vmn, vmx f32x4
+		j := 64
+		if len(x) == 64 {
+			vmn, vmx = kernMinMax64((*[64]float32)(x))
+		} else {
+			vmn = archsimd.LoadFloat32x4(x)
+			vmx = vmn
+			for j = 4; j+4 <= len(x); j += 4 {
+				v := archsimd.LoadFloat32x4(x[j:])
+				vmn = vmn.Min(v)
+				vmx = vmx.Max(v)
+			}
 		}
 		mn, mx = vmn.ReduceMin(), vmx.ReduceMax()
 		for ; j < len(x); j++ {
@@ -142,6 +194,13 @@ func kernMinMax(x []float32) (mn, mx float32, ok bool) {
 
 // kernClamp is kernClampGeneric: std::min(std::max(x, lo), hi).
 func kernClamp(x []float32, lo, hi float32) {
+	if kernIs64(len(x)) {
+		if len(x) == 65 {
+			x[64] = stdMin(stdMax(x[64], lo), hi)
+		}
+		kernClamp64((*[64]float32)(x), lo, hi)
+		return
+	}
 	lv, hv := archsimd.BroadcastFloat32x4(lo), archsimd.BroadcastFloat32x4(hi)
 	j := 0
 	for ; j+8 <= len(x); j += 8 {
@@ -158,3 +217,30 @@ func kernClamp(x []float32, lo, hi float32) {
 
 // kernHas128 reports whether the 128-bit kernels run (always on arm64).
 const kernHas128 = true
+
+// kernMinMaxStep folds x[k:k+4] into the lane minima and maxima.
+func kernMinMaxStep(x *[64]float32, k int, mn, mx f32x4) (f32x4, f32x4) {
+	v := kernLd64(x, k)
+	return mn.Min(v), mx.Max(v)
+}
+
+// kernMinMax64 returns the lane minima and maxima of a block. FMIN and FMAX
+// propagate NaN and order -0 below +0 whatever the operand order, so the
+// block is folded as four independent chains.
+func kernMinMax64(x *[64]float32) (f32x4, f32x4) {
+	mn0, mn1, mn2, mn3 := kernLd64(x, 0), kernLd64(x, 4), kernLd64(x, 8), kernLd64(x, 12)
+	mx0, mx1, mx2, mx3 := mn0, mn1, mn2, mn3
+	mn0, mx0 = kernMinMaxStep(x, 16, mn0, mx0)
+	mn1, mx1 = kernMinMaxStep(x, 20, mn1, mx1)
+	mn2, mx2 = kernMinMaxStep(x, 24, mn2, mx2)
+	mn3, mx3 = kernMinMaxStep(x, 28, mn3, mx3)
+	mn0, mx0 = kernMinMaxStep(x, 32, mn0, mx0)
+	mn1, mx1 = kernMinMaxStep(x, 36, mn1, mx1)
+	mn2, mx2 = kernMinMaxStep(x, 40, mn2, mx2)
+	mn3, mx3 = kernMinMaxStep(x, 44, mn3, mx3)
+	mn0, mx0 = kernMinMaxStep(x, 48, mn0, mx0)
+	mn1, mx1 = kernMinMaxStep(x, 52, mn1, mx1)
+	mn2, mx2 = kernMinMaxStep(x, 56, mn2, mx2)
+	mn3, mx3 = kernMinMaxStep(x, 60, mn3, mx3)
+	return mn0.Min(mn1).Min(mn2.Min(mn3)), mx0.Max(mx1).Max(mx2.Max(mx3))
+}
