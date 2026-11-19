@@ -65,27 +65,32 @@ var sqrtHanning128 = [FftLength]float32{
 // Aec3Fft wraps the 128-point Ooura real FFT. The zero value is ready to use.
 // The kernel lane (scalar vs NEON/SSE2 butterflies) follows the build: the
 // default build on arm64/amd64 reproduces the libwebrtc SIMD path bit-exactly,
-// the purego build reproduces the scalar C path.
-type Aec3Fft struct{}
+// the purego build reproduces the scalar C path. An Aec3Fft holds the work
+// area of its transforms and serves one goroutine at a time.
+type Aec3Fft struct {
+	scratch ooura.Scratch
+	x       [FftLength]float32
+}
 
 func NewAec3Fft() *Aec3Fft { return &Aec3Fft{} }
 
 // Fft transforms x into X (the transform followed by
 // FftData::CopyFromPackedArray). It uses x as work space.
-func (*Aec3Fft) Fft(x *[FftLength]float32, X *FftData) {
-	ooura.FftSplit(x, &X.Re, &X.Im)
+func (f *Aec3Fft) Fft(x *[FftLength]float32, X *FftData) {
+	ooura.FftSplit(x, &X.Re, &X.Im, &f.scratch)
 }
 
 // Ifft inverse transforms X into x, unscaled (FftData::CopyToPackedArray
 // followed by the transform).
-func (*Aec3Fft) Ifft(X *FftData, x *[FftLength]float32) {
-	ooura.InverseFftSplit(&X.Re, &X.Im, x)
+func (f *Aec3Fft) Ifft(X *FftData, x *[FftLength]float32) {
+	ooura.InverseFftSplit(&X.Re, &X.Im, x, &f.scratch)
 }
 
 // ZeroPaddedFft windows x (64 samples) into the upper half of a zeroed
 // 128-sample frame and transforms it.
 func (f *Aec3Fft) ZeroPaddedFft(x []float32, window Window, X *FftData) {
-	var fft [FftLength]float32
+	fft := &f.x
+	clear(fft[:FftLengthBy2])
 	x = x[:FftLengthBy2]
 	switch window {
 	case WindowRectangular:
@@ -95,12 +100,12 @@ func (f *Aec3Fft) ZeroPaddedFft(x []float32, window Window, X *FftData) {
 	default:
 		panic("aec3: unsupported window for ZeroPaddedFft")
 	}
-	f.Fft(&fft, X)
+	f.Fft(fft, X)
 }
 
 // PaddedFft transforms the concatenation [xOld, x] with the given window.
 func (f *Aec3Fft) PaddedFft(x, xOld []float32, window Window, X *FftData) {
-	var fft [FftLength]float32
+	fft := &f.x
 	x = x[:FftLengthBy2]
 	xOld = xOld[:FftLengthBy2]
 	switch window {
@@ -113,7 +118,7 @@ func (f *Aec3Fft) PaddedFft(x, xOld []float32, window Window, X *FftData) {
 	default:
 		panic("aec3: unsupported window for PaddedFft")
 	}
-	f.Fft(&fft, X)
+	f.Fft(fft, X)
 }
 
 // aec3FftPair runs two transforms of Aec3Fft at a time (ooura.FftSplitPair): each

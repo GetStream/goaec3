@@ -414,22 +414,27 @@ func hi4(x *[65]float32, n int) *[4]float32 {
 	return (*[4]float32)((*[32]float32)(x[32:64])[4*n : 4*n+4])
 }
 
+// Scratch is the work area of FftSplit and InverseFftSplit. It needs no
+// initialization and carries nothing from one call to the next; keeping it
+// with the caller saves clearing a frame on the stack per transform.
+type Scratch struct {
+	t [128]float32
+}
+
 // fftSplitSimd is fftSimd followed by FftData::CopyFromPackedArray into re
-// and im. It leaves a in an intermediate state.
-func fftSplitSimd(a *[128]float32, re, im *[65]float32) {
-	var t [128]float32
-	bitrv2Cft1stSimd(a, &t)
-	cftmdlSimd(&t, a)
+// and im. It leaves a in an intermediate state; t is work space.
+func fftSplitSimd(a *[128]float32, re, im *[65]float32, t *[128]float32) {
+	bitrv2Cft1stSimd(a, t)
+	cftmdlSimd(t, a)
 	cftfsubTailSimd(a)
 	rftfsubSplit(a, re, im)
 }
 
 // inverseFftSplitSimd is FftData::CopyToPackedArray of re and im followed by
-// inverseFftSimd, into a.
-func inverseFftSplitSimd(re, im *[65]float32, a *[128]float32) {
-	var t [128]float32
-	rftbsubSplit(re, im, &t)
-	bitrv2Cft1stSimd(&t, a)
+// inverseFftSimd, into a; t is work space.
+func inverseFftSplitSimd(re, im *[65]float32, a *[128]float32, t *[128]float32) {
+	rftbsubSplit(re, im, t)
+	bitrv2Cft1stSimd(t, a)
 	cftmdlSimd(a, a)
 	cftbsubTailSimd(a)
 }

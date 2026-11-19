@@ -20,8 +20,17 @@ func TestSimdMatchesRef(t *testing.T) {
 // TestSplitSimdMatchesRef checks the split archsimd transforms against the
 // lane references with the FftData copy.
 func TestSplitSimdMatchesRef(t *testing.T) {
-	compareSplit(t, "neon", fftSplitSimd, inverseFftSplitSimd, fftNeonRef, inverseFftNeonRef)
-	compareSplit(t, "sse2", fftSplitSimd, inverseFftSplitSimd, fftSSE2Ref, inverseFftSSE2Ref)
+	for i := range splitScratch.t {
+		splitScratch.t[i] = float32(math.NaN())
+	}
+	compareSplit(t, "neon", simdFftSplit, simdInverseFftSplit, fftNeonRef, inverseFftNeonRef)
+	compareSplit(t, "sse2", simdFftSplit, simdInverseFftSplit, fftSSE2Ref, inverseFftSSE2Ref)
+}
+
+func simdFftSplit(a *[128]float32, re, im *[65]float32) { fftSplitSimd(a, re, im, &splitScratch.t) }
+
+func simdInverseFftSplit(re, im *[65]float32, a *[128]float32) {
+	inverseFftSplitSimd(re, im, a, &splitScratch.t)
 }
 
 // With NaNs and infinities in the input the split transforms produce the
@@ -32,7 +41,7 @@ func TestSplitSimdNonFinite(t *testing.T) {
 		x, y := a, a
 		fftSimd(&y)
 		unpack(&y, &wre, &wim)
-		fftSplitSimd(&x, &re, &im)
+		simdFftSplit(&x, &re, &im)
 		for i := range re {
 			if !same32(re[i], wre[i]) || !same32(im[i], wim[i]) {
 				t.Fatalf("fwd input %d bin %d: got (%#x, %#x) want (%#x, %#x)", n, i, math.Float32bits(re[i]),
@@ -44,7 +53,7 @@ func TestSplitSimdNonFinite(t *testing.T) {
 		var want, got [128]float32
 		pack(&re, &im, &want)
 		inverseFftSimd(&want)
-		inverseFftSplitSimd(&re, &im, &got)
+		simdInverseFftSplit(&re, &im, &got)
 		checkSameNaN(t, "inv", n, &got, &want)
 	}
 }

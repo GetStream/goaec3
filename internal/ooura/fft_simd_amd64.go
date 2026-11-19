@@ -25,17 +25,17 @@ func inverseFft(a *[128]float32) {
 	}
 }
 
-func fftSplit(a *[128]float32, re, im *[65]float32) {
+func fftSplit(a *[128]float32, re, im *[65]float32, s *Scratch) {
 	if useSimd {
-		fftSplitSimd(a, re, im)
+		fftSplitSimd(a, re, im, &s.t)
 	} else {
 		fftSplitFast(a, re, im)
 	}
 }
 
-func inverseFftSplit(re, im *[65]float32, a *[128]float32) {
+func inverseFftSplit(re, im *[65]float32, a *[128]float32, s *Scratch) {
 	if useSimd {
-		inverseFftSplitSimd(re, im, a)
+		inverseFftSplitSimd(re, im, a, &s.t)
 	} else {
 		inverseFftSplitFast(re, im, a)
 	}

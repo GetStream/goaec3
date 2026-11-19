@@ -23,12 +23,14 @@ func InverseFft(a *[128]float32) { inverseFft(a) }
 // FftData::CopyFromPackedArray does: re[k] and im[k] are the real and
 // imaginary part of bin k, and im[0] and im[64] are zero. It leaves a in an
 // unspecified state.
-func FftSplit(a *[128]float32, re, im *[65]float32) { fftSplit(a, re, im) }
+func FftSplit(a *[128]float32, re, im *[65]float32, s *Scratch) { fftSplit(a, re, im, s) }
 
 // InverseFftSplit computes InverseFft of the frame that aec3's
 // FftData::CopyToPackedArray makes of re and im (im[0] and im[64] are not
 // read) into a.
-func InverseFftSplit(re, im *[65]float32, a *[128]float32) { inverseFftSplit(re, im, a) }
+func InverseFftSplit(re, im *[65]float32, a *[128]float32, s *Scratch) {
+	inverseFftSplit(re, im, a, s)
+}
 
 // FftSplitPair computes FftSplit(a, re0, im0) and FftSplit(b, re1, im1).
 // Each result is bit-identical to the single transform; where the CPU has
@@ -43,6 +45,10 @@ func FftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairSc
 func InverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
 	inverseFftSplitPair(re0, im0, re1, im1, a, b, s)
 }
+
+// single is the work area of the single transforms that a pair runs where
+// it has no kernel of its own.
+func (s *PairScratch) single() *Scratch { return &s.s }
 
 // unpack is FftData::CopyFromPackedArray.
 func unpack(v *[128]float32, re, im *[65]float32) {

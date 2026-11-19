@@ -67,18 +67,19 @@ func comparePairs(t *testing.T, name string, in [][128]float32, nan bool, fwd ff
 }
 
 func TestFftSplitPairMatchesSingle(t *testing.T) {
-	comparePairs(t, "build", testInputs(), false, FftSplitPair, InverseFftSplitPair, FftSplit, InverseFftSplit)
+	comparePairs(t, "build", testInputs(), false, FftSplitPair, InverseFftSplitPair, buildFftSplit, buildInverseFftSplit)
 	comparePairs(t, "fast", testInputs(), false, FftSplitPair, InverseFftSplitPair, fftSplitFast, inverseFftSplitFast)
-	comparePairs(t, "nonfinite", nonFiniteInputs(), true, FftSplitPair, InverseFftSplitPair, FftSplit, InverseFftSplit)
+	comparePairs(t, "nonfinite", nonFiniteInputs(), true, FftSplitPair, InverseFftSplitPair, buildFftSplit, buildInverseFftSplit)
 }
 
 func TestFftSplitNoAllocs(t *testing.T) {
 	var a, b [128]float32
 	var re, im [2][65]float32
 	var s PairScratch
+	var s1 Scratch
 	if n := testing.AllocsPerRun(100, func() {
-		FftSplit(&a, &re[0], &im[0])
-		InverseFftSplit(&re[0], &im[0], &a)
+		FftSplit(&a, &re[0], &im[0], &s1)
+		InverseFftSplit(&re[0], &im[0], &a, &s1)
 		FftSplitPair(&a, &b, &re[0], &im[0], &re[1], &im[1], &s)
 		InverseFftSplitPair(&re[0], &im[0], &re[1], &im[1], &a, &b, &s)
 	}); n != 0 {
@@ -124,7 +125,9 @@ func twoInverseSplits(f inverseFftSplitFunc) inverseFftSplitPairFunc {
 // the FftData copy.
 func BenchmarkFftSplit(b *testing.B) {
 	b.Run("pair", func(b *testing.B) { benchSplitPair(b, FftSplitPair, InverseFftSplitPair) })
-	b.Run("two", func(b *testing.B) { benchSplitPair(b, twoSplits(FftSplit), twoInverseSplits(InverseFftSplit)) })
+	b.Run("two", func(b *testing.B) {
+		benchSplitPair(b, twoSplits(buildFftSplit), twoInverseSplits(buildInverseFftSplit))
+	})
 	b.Run("packed", func(b *testing.B) {
 		benchSplitPair(b,
 			twoSplits(func(a *[128]float32, re, im *[65]float32) { Fft(a); unpack(a, re, im) }),

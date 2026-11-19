@@ -190,8 +190,19 @@ func compareSplit(t *testing.T, name string, fwd fftSplitFunc, inv inverseFftSpl
 	}
 }
 
+// splitScratch is the work area of the single split transforms under test.
+// It is reused across inputs and poisoned by the tests that have access to
+// its contents.
+var splitScratch Scratch
+
+func buildFftSplit(a *[128]float32, re, im *[65]float32) { FftSplit(a, re, im, &splitScratch) }
+
+func buildInverseFftSplit(re, im *[65]float32, a *[128]float32) {
+	InverseFftSplit(re, im, a, &splitScratch)
+}
+
 func TestFftSplitMatchesPacked(t *testing.T) {
-	compareSplit(t, "build", FftSplit, InverseFftSplit, Fft, InverseFft)
+	compareSplit(t, "build", buildFftSplit, buildInverseFftSplit, Fft, InverseFft)
 	compareSplit(t, "fast", fftSplitFast, inverseFftSplitFast, fftRef, inverseFftRef)
 }
 

@@ -34,6 +34,7 @@ type vec8 = archsimd.Float32x8
 // needs no initialization and carries nothing from one call to the next.
 type PairScratch struct {
 	t, u [256]float32
+	s    Scratch
 }
 
 var usePair = archsimd.X86.AVX2()
@@ -43,8 +44,8 @@ func fftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairSc
 		fftSplitPairSimd(a, b, re0, im0, re1, im1, s)
 		return
 	}
-	fftSplit(a, re0, im0)
-	fftSplit(b, re1, im1)
+	fftSplit(a, re0, im0, s.single())
+	fftSplit(b, re1, im1, s.single())
 }
 
 func inverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
@@ -52,8 +53,8 @@ func inverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s 
 		inverseFftSplitPairSimd(re0, im0, re1, im1, a, b, s)
 		return
 	}
-	inverseFftSplit(re0, im0, a)
-	inverseFftSplit(re1, im1, b)
+	inverseFftSplit(re0, im0, a, s.single())
+	inverseFftSplit(re1, im1, b, s.single())
 }
 
 func ld8(p *[8]float32) vec8 { return archsimd.LoadFloat32x8Array(p) }
