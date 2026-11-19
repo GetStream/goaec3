@@ -1,6 +1,7 @@
 package aec3
 
 import (
+	"math"
 	"math/rand"
 	"testing"
 )
@@ -45,6 +46,81 @@ func kernFir3Spec(x []float32, h *[3]float32, out []float32, from, to int) {
 			tmp += float32(x[k-j] * h[j])
 		}
 		out[k] = tmp
+	}
+}
+
+// kernSpectrumAvx2Spec is FftData::SpectrumAVX2 with one fmaf per bin.
+func kernSpectrumAvx2Spec(re, im, out *[FftLengthBy2Plus1]float32) {
+	for k := 0; k < FftLengthBy2; k++ {
+		out[k] = fmaf(re[k], re[k], float32(im[k]*im[k]))
+	}
+	out[FftLengthBy2] = float32(re[FftLengthBy2]*re[FftLengthBy2]) + float32(im[FftLengthBy2]*im[FftLengthBy2])
+}
+
+// TestKernSpectrumAvx2RefMatchesSpec drives kernSpectrumAvx2Ref through its
+// grouped fast path and its slow-path hand-off: plain values, rounding ties
+// ((1+2^-12)^2 = 1 + 2^-11 + 2^-24 is one), results below 2^-126, zeros,
+// Inf and NaN, at every position of a group, also with out aliasing re or
+// im.
+func TestKernSpectrumAvx2RefMatchesSpec(t *testing.T) {
+	rng := rand.New(rand.NewSource(41))
+	tie := float32(4097.0 / 4096.0)
+	special := func(v *[FftLengthBy2Plus1]float32, isRe bool) {
+		for n := rng.Intn(4); n > 0; n-- {
+			k := rng.Intn(FftLengthBy2Plus1)
+			switch rng.Intn(6) {
+			case 0:
+				if isRe {
+					v[k] = tie
+				} else {
+					v[k] = 0
+				}
+			case 1:
+				v[k] = float32(rng.NormFloat64() * 1e-20)
+			case 2:
+				v[k] = float32(rng.NormFloat64() * 1e-23)
+			case 3:
+				v[k] = 0
+			case 4:
+				v[k] = float32(math.Inf(1 - 2*rng.Intn(2)))
+			default:
+				v[k] = float32(math.NaN())
+			}
+		}
+	}
+	slow := 0
+	for trial := 0; trial < 20000; trial++ {
+		var re, im, got, want [FftLengthBy2Plus1]float32
+		copy(re[:], kernRandVec(rng, FftLengthBy2Plus1))
+		copy(im[:], kernRandVec(rng, FftLengthBy2Plus1))
+		if trial%4 != 0 {
+			special(&re, true)
+			special(&im, false)
+		}
+		if trial%16 == 5 {
+			// A tie in re with im = 0 at a chosen bin.
+			k := rng.Intn(FftLengthBy2)
+			re[k], im[k] = tie, 0
+		}
+		for k := 0; k < FftLengthBy2; k++ {
+			if fmafHard(fmafSum(re[k], re[k], float32(im[k]*im[k]))) {
+				slow++
+				break
+			}
+		}
+		copy(got[:], kernRandVec(rng, FftLengthBy2Plus1))
+		kernSpectrumAvx2Spec(&re, &im, &want)
+		kernSpectrumAvx2Ref(&re, &im, &got)
+		kernCheckExact(t, "SpectrumAvx2Ref", got[:], want[:])
+		r2, i2 := re, im
+		kernSpectrumAvx2Ref(&r2, &i2, &r2)
+		kernCheckExact(t, "SpectrumAvx2Ref in place (re)", r2[:], want[:])
+		r2 = re
+		kernSpectrumAvx2Ref(&r2, &i2, &i2)
+		kernCheckExact(t, "SpectrumAvx2Ref in place (im)", i2[:], want[:])
+	}
+	if slow < 1000 {
+		t.Fatalf("only %d inputs reached the slow path", slow)
 	}
 }
 

@@ -52,6 +52,15 @@ import "math"
 //	if fmafHard(s) {
 //		r = fmafSlow(a, b, c)
 //	}
+//
+// A call inside a loop makes the compiler keep everything that lives across
+// it (the counter, pointers, accumulators) in stack slots that the loop
+// writes on every iteration, taken or not. The form that avoids it keeps the
+// loop free of calls: compute fmafSum for a group of elements, test them with
+// one `if fmafHard(s0) || fmafHard(s1) || ...`, and on a hit hand the rest of
+// the work to a //go:noinline function that uses fmaf, then return
+// (kernSpectrumAvx2Ref in kern_ref.go). Nothing is live after that call, so
+// the loop spills nothing.
 func fmaf(a, b, c float32) float32 {
 	s := fmafSum(a, b, c)
 	if fmafHard(s) {

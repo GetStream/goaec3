@@ -4,6 +4,8 @@ import (
 	"math"
 	"math/rand"
 	"testing"
+
+	"github.com/GetStream/goaec3/internal/ooura"
 )
 
 func kernRandVec(rng *rand.Rand, n int) []float32 {
@@ -118,6 +120,27 @@ func BenchmarkKern(b *testing.B) {
 	b.Run("SpectrumGeneric", func(b *testing.B) {
 		for b.Loop() {
 			fftDataSpectrumGeneric(&re, &im, &out)
+		}
+	})
+	b.Run("SpectrumAvx2Ref", func(b *testing.B) {
+		for b.Loop() {
+			kernSpectrumAvx2Ref(&re, &im, &out)
+		}
+	})
+	var frame, work [FftLength]float32
+	for i := range frame {
+		frame[i] = float32(rng.NormFloat64())
+	}
+	b.Run("OouraFft", func(b *testing.B) {
+		for b.Loop() {
+			work = frame
+			ooura.Fft(&work)
+		}
+	})
+	b.Run("OouraInverseFft", func(b *testing.B) {
+		for b.Loop() {
+			work = frame
+			ooura.InverseFft(&work)
 		}
 	})
 	b.Run("Multiply", func(b *testing.B) {
