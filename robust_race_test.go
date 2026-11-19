@@ -70,6 +70,7 @@ func TestConcurrentRenderAndCapture(t *testing.T) {
 			}()
 			capture := robustFrame(c.numCapture, n)
 			linear := robustFrame(c.numCapture, LinearOutputFrameSize)
+			stereoSeen := false
 			for i := range frames {
 				// The capture scene replays the render signal on this
 				// goroutine to build an echo.
@@ -96,9 +97,12 @@ func TestConcurrentRenderAndCapture(t *testing.T) {
 				if math.IsNaN(m.EchoReturnLoss) || math.IsNaN(m.EchoReturnLossEnhancement) {
 					t.Fatalf("metrics %+v", m)
 				}
+				stereoSeen = stereoSeen || e.ec.StereoRenderProcessingActiveForTesting()
 			}
 			wg.Wait()
-			if c.mc && !testing.Short() && !e.ec.StereoRenderProcessingActiveForTesting() {
+			// Stereo processing may end again when the render goroutine
+			// finishes early, so the test asks whether it was ever active.
+			if c.mc && !testing.Short() && !stereoSeen {
 				t.Error("stereo processing never became active: the re-initialization was not exercised")
 			}
 		})
