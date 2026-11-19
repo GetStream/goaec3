@@ -29,6 +29,7 @@ type RenderDelayBuffer struct {
 	renderMixer                                AlignmentMixer
 	renderDecimator                            Decimator
 	fft                                        Aec3Fft
+	fftPair                                    aec3FftPair
 	bufferHeadroom                             int
 	lastCallWasRender                          bool
 	numApiCallsInARow                          int
@@ -343,10 +344,19 @@ func (r *RenderDelayBuffer) insertBlock(block *Block, previousWrite int) {
 	for i := range ds {
 		out[i] = ds[len(ds)-1-i]
 	}
-	for channel := 0; channel < numRenderChannels; channel++ {
-		r.fft.PaddedFft(dst.View(0, channel), b.At(previousWrite).View(0, channel), WindowRectangular,
-			&f.At(f.Write)[channel])
-		f.At(f.Write)[channel].Spectrum(r.optimization, s.At(s.Write)[channel][:])
+	// The channels are transformed two at a time, then a last one alone.
+	prev := b.At(previousWrite)
+	X := f.At(f.Write)
+	channel := 0
+	for ; channel+1 < numRenderChannels; channel += 2 {
+		r.fftPair.PaddedFftRectangular(dst.View(0, channel), prev.View(0, channel),
+			dst.View(0, channel+1), prev.View(0, channel+1), &X[channel], &X[channel+1])
+		X[channel].Spectrum(r.optimization, s.At(s.Write)[channel][:])
+		X[channel+1].Spectrum(r.optimization, s.At(s.Write)[channel+1][:])
+	}
+	if channel < numRenderChannels {
+		r.fft.PaddedFft(dst.View(0, channel), prev.View(0, channel), WindowRectangular, &X[channel])
+		X[channel].Spectrum(r.optimization, s.At(s.Write)[channel][:])
 	}
 }
 

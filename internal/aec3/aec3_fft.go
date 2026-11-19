@@ -158,3 +158,13 @@ func (p *aec3FftPair) PaddedFft(x0, xOld0, x1, xOld1 []float32, X0, X1 *FftData)
 	vectorMultiply(x1[:FftLengthBy2], sqrtHanning128[FftLengthBy2:], p.x1[FftLengthBy2:])
 	p.Fft(&p.x0, &p.x1, X0, X1)
 }
+
+// PaddedFftRectangular is Aec3Fft.PaddedFft with the rectangular window for
+// (x0, xOld0, X0) and (x1, xOld1, X1).
+func (p *aec3FftPair) PaddedFftRectangular(x0, xOld0, x1, xOld1 []float32, X0, X1 *FftData) {
+	copy(p.x0[:FftLengthBy2], xOld0[:FftLengthBy2])
+	copy(p.x0[FftLengthBy2:], x0[:FftLengthBy2])
+	copy(p.x1[:FftLengthBy2], xOld1[:FftLengthBy2])
+	copy(p.x1[FftLengthBy2:], x1[:FftLengthBy2])
+	p.Fft(&p.x0, &p.x1, X0, X1)
+}

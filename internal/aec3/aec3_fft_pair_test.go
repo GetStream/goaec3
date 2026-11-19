@@ -50,6 +50,12 @@ func TestAec3FftPairMatchesSingle(t *testing.T) {
 		pair.PaddedFft(x0[FftLengthBy2:], x0[:FftLengthBy2], x1[FftLengthBy2:], x1[:FftLengthBy2], &X0, &X1)
 		afirEqualFft(t, "PaddedFft/0", &X0, &W0)
 		afirEqualFft(t, "PaddedFft/1", &X1, &W1)
+
+		single.PaddedFft(x0[FftLengthBy2:], x0[:FftLengthBy2], WindowRectangular, &W0)
+		single.PaddedFft(x1[FftLengthBy2:], x1[:FftLengthBy2], WindowRectangular, &W1)
+		pair.PaddedFftRectangular(x0[FftLengthBy2:], x0[:FftLengthBy2], x1[FftLengthBy2:], x1[:FftLengthBy2], &X0, &X1)
+		afirEqualFft(t, "PaddedFftRectangular/0", &X0, &W0)
+		afirEqualFft(t, "PaddedFftRectangular/1", &X1, &W1)
 	}
 }
 
