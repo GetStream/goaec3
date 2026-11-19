@@ -35,15 +35,20 @@ type RenderDelayController struct {
 
 // NewRenderDelayController mirrors RenderDelayController::Create.
 func NewRenderDelayController(config *EchoCanceller3Config, sampleRateHz, numCaptureChannels int) *RenderDelayController {
+	c := &RenderDelayController{}
+	c.init(config, sampleRateHz, numCaptureChannels)
+	return c
+}
+
+func (c *RenderDelayController) init(config *EchoCanceller3Config, sampleRateHz, numCaptureChannels int) {
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate for RenderDelayController")
 	}
-	c := &RenderDelayController{
+	*c = RenderDelayController{
 		hysteresisLimitBlocks:    config.Delay.HysteresisLimitBlocks,
 		lastDelayEstimateQuality: DelayQualityCoarse,
 	}
 	c.delayEstimator.init(config, numCaptureChannels)
-	return c
 }
 
 // Reset resets the delay controller. If the delay confidence is reset, the

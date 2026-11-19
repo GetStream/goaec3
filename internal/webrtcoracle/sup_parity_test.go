@@ -297,6 +297,7 @@ func TestSupMultiChannelContentDetectorParity(t *testing.T) {
 					frame[b][ch] = flat[i : i+n]
 				}
 			}
+			goFrame := aec3.NewFrame(numBands, c.numCh) // the layout of flat
 			stereo := false
 			changes := 0
 			for blk := 0; blk < 12000; blk++ {
@@ -314,7 +315,8 @@ func TestSupMultiChannelContentDetectorParity(t *testing.T) {
 						}
 					}
 				}
-				changed := d.UpdateDetection(frame)
+				copy(goFrame.Samples(), flat)
+				changed := d.UpdateDetection(goFrame)
 				wc, wp, wt := o.UpdateDetection(flat, numBands, c.numCh, n)
 				if changed != wc || d.IsProperMultiChannelContentDetected() != wp ||
 					d.IsTemporaryMultiChannelContentDetected() != wt {

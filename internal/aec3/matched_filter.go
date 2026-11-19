@@ -1023,25 +1023,34 @@ type MatchedFilterLagEstimate struct {
 // MatchedFilter produces recursively updated cross-correlation estimates for
 // several signal shifts where the intra-shift spacing is uniform
 // (matched_filter.h).
+//
+// The filters and, with pre-echo detection, the accumulated errors and the
+// scratch memory share one pointer-free array; filter, accumulatedError,
+// instantaneousAccumulatedError and scratchMemory return views of it.
 type MatchedFilter struct {
-	optimization                  Aec3Optimization
-	subBlockSize                  int
-	filterIntraLagShift           int
-	filters                       [][]float32
-	accumulatedError              [][]float32
-	instantaneousAccumulatedError []float32
-	scratchMemory                 []float32
-	reportedLagEstimate           MatchedFilterLagEstimate
-	hasReportedLagEstimate        bool
-	winnerLag                     int
-	hasWinnerLag                  bool
-	lastDetectedBestLagFilter     int
-	numberPreEchoUpdates          int
-	excitationLimit               float32
-	smoothingFast                 float32
-	smoothingSlow                 float32
-	matchingFilterThreshold       float32
-	detectPreEcho                 bool
+	optimization        Aec3Optimization
+	subBlockSize        int
+	filterIntraLagShift int
+	numFilters          int
+	filterSize          int
+	accumulatedSize     int // samples of one accumulated error
+	scratchSize         int
+	// storage holds the filters [numFilters][filterSize] and, with
+	// detectPreEcho, the accumulated errors [numFilters][accumulatedSize],
+	// the instantaneous accumulated error [accumulatedSize] and the scratch
+	// memory [scratchSize].
+	storage                   []float32
+	reportedLagEstimate       MatchedFilterLagEstimate
+	hasReportedLagEstimate    bool
+	winnerLag                 int
+	hasWinnerLag              bool
+	lastDetectedBestLagFilter int
+	numberPreEchoUpdates      int
+	excitationLimit           float32
+	smoothingFast             float32
+	smoothingSlow             float32
+	matchingFilterThreshold   float32
+	detectPreEcho             bool
 
 	// Quiet-render skip (see renderIsQuiet): quietSkip enables it,
 	// quietLimitBits is the bit pattern of the largest quiet magnitude and
@@ -1072,7 +1081,8 @@ func (m *MatchedFilter) init(optimization Aec3Optimization, subBlockSize, window
 		optimization:              optimization,
 		subBlockSize:              subBlockSize,
 		filterIntraLagShift:       alignmentShiftSubBlocks * subBlockSize,
-		filters:                   make([][]float32, numMatchedFilters),
+		numFilters:                numMatchedFilters,
+		filterSize:                windowSizeSubBlocks * subBlockSize,
 		lastDetectedBestLagFilter: -1,
 		excitationLimit:           excitationLimit,
 		smoothingFast:             smoothingFast,
@@ -1080,26 +1090,58 @@ func (m *MatchedFilter) init(optimization Aec3Optimization, subBlockSize, window
 		matchingFilterThreshold:   matchingFilterThreshold,
 		detectPreEcho:             detectPreEcho,
 	}
-	filterSize := windowSizeSubBlocks * subBlockSize
-	for n := range m.filters {
-		m.filters[n] = make([]float32, filterSize)
-	}
+	filterSize := m.filterSize
+	n := numMatchedFilters * filterSize
 	if detectPreEcho {
-		m.accumulatedError = make([][]float32, numMatchedFilters)
-		for n := range m.accumulatedError {
-			e := make([]float32, filterSize/dlyAccumulatedErrorSubSampleRate)
-			for k := range e {
-				e[k] = 1
-			}
-			m.accumulatedError[n] = e
-		}
-		m.instantaneousAccumulatedError = make([]float32, filterSize/dlyAccumulatedErrorSubSampleRate)
+		m.accumulatedSize = filterSize / dlyAccumulatedErrorSubSampleRate
 		// One window per sample of a sub-block (see dlyAccErrCore).
-		m.scratchMemory = make([]float32, filterSize+subBlockSize)
+		m.scratchSize = filterSize + subBlockSize
+		n += (numMatchedFilters+1)*m.accumulatedSize + m.scratchSize
 	}
+	m.storage = make([]float32, n)
+	m.resetAccumulatedErrors()
 	var quietLimit float32
 	quietLimit, m.quietSkip = MatchedFilterQuietLimit(filterSize, excitationLimit)
 	m.quietLimitBits = math.Float32bits(quietLimit)
+}
+
+// filter returns the coefficients of filter n.
+func (m *MatchedFilter) filter(n int) []float32 {
+	i := n * m.filterSize
+	return m.storage[i : i+m.filterSize : i+m.filterSize]
+}
+
+// accumulatedError returns the accumulated error of filter n. It exists with
+// detectPreEcho.
+func (m *MatchedFilter) accumulatedError(n int) []float32 {
+	i := m.numFilters*m.filterSize + n*m.accumulatedSize
+	return m.storage[i : i+m.accumulatedSize : i+m.accumulatedSize]
+}
+
+// instantaneousAccumulatedError returns the accumulated error of the last
+// block of the filter that computes it; it is empty without detectPreEcho.
+func (m *MatchedFilter) instantaneousAccumulatedError() []float32 {
+	i := m.numFilters * (m.filterSize + m.accumulatedSize)
+	return m.storage[i : i+m.accumulatedSize : i+m.accumulatedSize]
+}
+
+// scratchMemory returns the scratch of the accumulated-error cores; it is
+// empty without detectPreEcho.
+func (m *MatchedFilter) scratchMemory() []float32 {
+	i := m.numFilters*(m.filterSize+m.accumulatedSize) + m.accumulatedSize
+	return m.storage[i : i+m.scratchSize : i+m.scratchSize]
+}
+
+// resetAccumulatedErrors sets the accumulated error of every filter to 1.
+func (m *MatchedFilter) resetAccumulatedErrors() {
+	if !m.detectPreEcho {
+		return
+	}
+	i := m.numFilters * m.filterSize
+	e := m.storage[i : i+m.numFilters*m.accumulatedSize]
+	for k := range e {
+		e[k] = 1
+	}
 }
 
 // Quiet-render skip.
@@ -1225,17 +1267,11 @@ func (m *MatchedFilter) renderIsQuiet(x []float32) bool {
 
 // Reset resets the matched filter.
 func (m *MatchedFilter) Reset(fullReset bool) {
-	for _, f := range m.filters {
-		clear(f)
-	}
+	clear(m.storage[:m.numFilters*m.filterSize])
 	m.hasWinnerLag = false
 	m.hasReportedLagEstimate = false
 	if fullReset {
-		for _, e := range m.accumulatedError {
-			for k := range e {
-				e[k] = 1
-			}
-		}
+		m.resetAccumulatedErrors()
 		m.numberPreEchoUpdates = 0
 	}
 }
@@ -1250,7 +1286,7 @@ func (m *MatchedFilter) GetBestLagEstimate() (MatchedFilterLagEstimate, bool) {
 
 // GetMaxFilterLag returns the maximum filter lag.
 func (m *MatchedFilter) GetMaxFilterLag() int {
-	return len(m.filters)*m.filterIntraLagShift + len(m.filters[0])
+	return m.numFilters*m.filterIntraLagShift + m.filterSize
 }
 
 func (m *MatchedFilter) runCore(xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
@@ -1258,16 +1294,16 @@ func (m *MatchedFilter) runCore(xStartIndex int, x2SumThreshold, smoothing float
 	switch m.optimization {
 	case OptSse2:
 		MatchedFilterCoreSse2(xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum,
-			computePreEcho, m.instantaneousAccumulatedError, m.scratchMemory)
+			computePreEcho, m.instantaneousAccumulatedError(), m.scratchMemory())
 	case OptAvx2:
 		MatchedFilterCoreAvx2(xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum,
-			computePreEcho, m.instantaneousAccumulatedError, m.scratchMemory)
+			computePreEcho, m.instantaneousAccumulatedError(), m.scratchMemory())
 	case OptNeon:
 		MatchedFilterCoreNeon(xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum,
-			computePreEcho, m.instantaneousAccumulatedError, m.scratchMemory)
+			computePreEcho, m.instantaneousAccumulatedError(), m.scratchMemory())
 	default:
 		MatchedFilterCore(xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum,
-			computePreEcho, m.instantaneousAccumulatedError)
+			computePreEcho, m.instantaneousAccumulatedError())
 	}
 }
 
@@ -1290,9 +1326,9 @@ func (m *MatchedFilter) runCoresPaired(renderBuffer *DownsampledRenderBuffer, y 
 	x := renderBuffer.Buffer
 	var fa, fb dlyLaneFilter
 	first := -1
-	for n := range m.filters {
+	for n := 0; n < m.numFilters; n++ {
 		if m.detectPreEcho && n == m.lastDetectedBestLagFilter {
-			m.runCore(m.xStartIndex(renderBuffer, n), x2SumThreshold, smoothing, x, y, m.filters[n],
+			m.runCore(m.xStartIndex(renderBuffer, n), x2SumThreshold, smoothing, x, y, m.filter(n),
 				&updated[n], &errorSums[n], true)
 			continue
 		}
@@ -1300,15 +1336,15 @@ func (m *MatchedFilter) runCoresPaired(renderBuffer *DownsampledRenderBuffer, y 
 			first = n
 			continue
 		}
-		fa = dlyLaneFilter{h: m.filters[first], xStart: m.xStartIndex(renderBuffer, first)}
-		fb = dlyLaneFilter{h: m.filters[n], xStart: m.xStartIndex(renderBuffer, n)}
+		fa = dlyLaneFilter{h: m.filter(first), xStart: m.xStartIndex(renderBuffer, first)}
+		fb = dlyLaneFilter{h: m.filter(n), xStart: m.xStartIndex(renderBuffer, n)}
 		dlyCoreLanes(4, &fa, &fb, x2SumThreshold, smoothing, x, y)
 		errorSums[first], updated[first] = fa.errorSum, fa.updated
 		errorSums[n], updated[n] = fb.errorSum, fb.updated
 		first = -1
 	}
 	if first >= 0 {
-		m.runCore(m.xStartIndex(renderBuffer, first), x2SumThreshold, smoothing, x, y, m.filters[first],
+		m.runCore(m.xStartIndex(renderBuffer, first), x2SumThreshold, smoothing, x, y, m.filter(first),
 			&updated[first], &errorSums[first], false)
 	}
 }
@@ -1322,7 +1358,7 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 		smoothing = m.smoothingSlow
 	}
 
-	x2SumThreshold := float32(float32(len(m.filters[0]))*m.excitationLimit) * m.excitationLimit
+	x2SumThreshold := float32(float32(m.filterSize)*m.excitationLimit) * m.excitationLimit
 
 	// Compute anchor for the matched filter error.
 	var errorSumAnchor float32
@@ -1349,11 +1385,11 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 	var pairedErrorSums [dlyMaxPairedFilters]float32
 	var pairedUpdated [dlyMaxPairedFilters]bool
 	// The NEON lane has two-filter kernels.
-	paired := m.optimization == OptNeon && dlyPairNeon && len(m.filters) <= dlyMaxPairedFilters
+	paired := m.optimization == OptNeon && dlyPairNeon && m.numFilters <= dlyMaxPairedFilters
 	if paired {
 		m.runCoresPaired(renderBuffer, y, x2SumThreshold, smoothing, &pairedErrorSums, &pairedUpdated)
 	}
-	for n := range m.filters {
+	for n := 0; n < m.numFilters; n++ {
 		var errorSum float32
 		filtersUpdated := false
 		if paired {
@@ -1361,7 +1397,7 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 		} else {
 			computePreEcho := m.detectPreEcho && n == m.lastDetectedBestLagFilter
 			m.runCore(m.xStartIndex(renderBuffer, n), x2SumThreshold, smoothing, renderBuffer.Buffer, y,
-				m.filters[n], &filtersUpdated, &errorSum, computePreEcho)
+				m.filter(n), &filtersUpdated, &errorSum, computePreEcho)
 		}
 
 		// The lag estimate of a filter is the distance to the portion of the
@@ -1375,10 +1411,10 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 		if filtersUpdated && errorSum < float32(m.matchingFilterThreshold*errorSumAnchor) &&
 			errorSum < winnerErrorSum {
 			if peakFilter != n {
-				peak, peakFilter = MaxSquarePeakIndex(m.filters[n]), n
+				peak, peakFilter = MaxSquarePeakIndex(m.filter(n)), n
 			}
 			lagEstimate := peak
-			if lagEstimate > 2 && lagEstimate < len(m.filters[n])-10 {
+			if lagEstimate > 2 && lagEstimate < m.filterSize-10 {
 				// Find the best estimate.
 				lag := lagEstimate + alignmentShift
 				winnerErrorSum = errorSum
@@ -1389,7 +1425,7 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 				m.winnerLag = lag
 				if n > 0 {
 					if previousPeakFilter != n-1 {
-						previousPeak, previousPeakFilter = MaxSquarePeakIndex(m.filters[n-1]), n-1
+						previousPeak, previousPeakFilter = MaxSquarePeakIndex(m.filter(n-1)), n-1
 					}
 					if previousPeak+alignmentShift-m.filterIntraLagShift == lag {
 						winnerIndex = n - 1
@@ -1408,12 +1444,12 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 		if m.detectPreEcho && m.lastDetectedBestLagFilter == winnerIndex {
 			const energyThreshold = 1.0
 			if errorSumAnchor > energyThreshold {
-				dlyUpdateAccumulatedError(m.instantaneousAccumulatedError, m.accumulatedError[winnerIndex],
+				dlyUpdateAccumulatedError(m.instantaneousAccumulatedError(), m.accumulatedError(winnerIndex),
 					1/errorSumAnchor)
 				m.numberPreEchoUpdates++
 			}
 			if m.numberPreEchoUpdates >= 50 {
-				m.reportedLagEstimate.PreEchoLag = dlyComputePreEchoLag(m.accumulatedError[winnerIndex],
+				m.reportedLagEstimate.PreEchoLag = dlyComputePreEchoLag(m.accumulatedError(winnerIndex),
 					m.winnerLag, winnerIndex*m.filterIntraLagShift)
 			} else {
 				m.reportedLagEstimate.PreEchoLag = m.winnerLag

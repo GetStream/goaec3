@@ -160,8 +160,17 @@ func (s *ec3Signals) next(amp float64) float32 {
 	return float32(amp * env * (math.Sin(s.phase) + 0.3*s.rng.NormFloat64()))
 }
 
+// ec3MakeFrame returns a [numBands][numChannels][SplitBandSize] frame for the
+// EchoCanceller3 methods that take the caller's frames.
 func ec3MakeFrame(numBands, numChannels int) [][][]float32 {
-	return ec3NewFrame(numBands, numChannels, SplitBandSize)
+	frame := make([][][]float32, numBands)
+	for band := range frame {
+		frame[band] = make([][]float32, numChannels)
+		for ch := range frame[band] {
+			frame[band][ch] = make([]float32, SplitBandSize)
+		}
+	}
+	return frame
 }
 
 // TestEc3PassthroughFraming runs EchoCanceller3 in external-delay mode
@@ -236,18 +245,18 @@ func TestEc3SaturationDetection(t *testing.T) {
 func TestEc3RenderTransferQueue(t *testing.T) {
 	var q ec3RenderTransferQueue
 	q.init(3, 1, 1)
-	in := ec3NewFrame(1, 1, SplitBandSize)
-	out := ec3NewFrame(1, 1, SplitBandSize)
+	in := NewFrame(1, 1)
+	out := NewFrame(1, 1)
 	for i := 0; i < 4; i++ {
-		in[0][0][0] = float32(i)
+		in.View(0, 0)[0] = float32(i)
 		ok := q.Insert(in)
 		if ok != (i < 3) {
 			t.Fatalf("insert %d: %v", i, ok)
 		}
 	}
 	for i := 0; i < 3; i++ {
-		if !q.Remove(out) || out[0][0][0] != float32(i) {
-			t.Fatalf("remove %d: %v", i, out[0][0][0])
+		if !q.Remove(out) || out.View(0, 0)[0] != float32(i) {
+			t.Fatalf("remove %d: %v", i, out.View(0, 0)[0])
 		}
 	}
 	if q.Remove(out) {
@@ -266,8 +275,8 @@ func TestEc3RenderTransferQueueGrowth(t *testing.T) {
 	} {
 		var q ec3RenderTransferQueue
 		q.init(c.maxFrames, c.numBands, c.numChannels)
-		in := ec3NewFrame(c.numBands, c.numChannels, SplitBandSize)
-		out := ec3NewFrame(c.numBands, c.numChannels, SplitBandSize)
+		in := NewFrame(c.numBands, c.numChannels)
+		out := NewFrame(c.numBands, c.numChannels)
 		var fifo []float32
 		next, deepest := float32(0), 0
 		for step := 0; step < 4000; step++ {
@@ -277,10 +286,11 @@ func TestEc3RenderTransferQueueGrowth(t *testing.T) {
 			}
 			for range burst {
 				next++
-				for band := range in {
-					for ch := range in[band] {
-						for k := range in[band][ch] {
-							in[band][ch][k] = next + float32(band*1000+ch*100) + float32(k)/1024
+				for band := 0; band < c.numBands; band++ {
+					for ch := 0; ch < c.numChannels; ch++ {
+						x := in.View(band, ch)
+						for k := range x {
+							x[k] = next + float32(band*1000+ch*100) + float32(k)/1024
 						}
 					}
 				}
@@ -310,11 +320,12 @@ func TestEc3RenderTransferQueueGrowth(t *testing.T) {
 				}
 				want := fifo[0]
 				fifo = fifo[1:]
-				for band := range out {
-					for ch := range out[band] {
-						for k := range out[band][ch] {
-							if v := want + float32(band*1000+ch*100) + float32(k)/1024; out[band][ch][k] != v {
-								t.Fatalf("%+v step %d: out[%d][%d][%d] = %v, want %v", c, step, band, ch, k, out[band][ch][k], v)
+				for band := 0; band < c.numBands; band++ {
+					for ch := 0; ch < c.numChannels; ch++ {
+						x := out.View(band, ch)
+						for k := range x {
+							if v := want + float32(band*1000+ch*100) + float32(k)/1024; x[k] != v {
+								t.Fatalf("%+v step %d: out[%d][%d][%d] = %v, want %v", c, step, band, ch, k, x[k], v)
 							}
 						}
 					}
@@ -327,8 +338,8 @@ func TestEc3RenderTransferQueueGrowth(t *testing.T) {
 func TestEc3RenderTransferQueueAllocationFree(t *testing.T) {
 	var q ec3RenderTransferQueue
 	q.init(RenderTransferQueueSizeFrames, 3, 2)
-	in := ec3NewFrame(3, 2, SplitBandSize)
-	out := ec3NewFrame(3, 2, SplitBandSize)
+	in := NewFrame(3, 2)
+	out := NewFrame(3, 2)
 	// Warm up past the deepest burst of the measured loop.
 	for range 8 {
 		q.Insert(in)
@@ -403,28 +414,56 @@ func TestEc3StereoDetectionSwitch(t *testing.T) {
 }
 
 func TestEc3RenderDownmix(t *testing.T) {
-	frame := ec3MakeFrame(2, 3)
-	for b := range frame {
-		for ch := range frame[b] {
-			for k := range frame[b][ch] {
-				frame[b][ch][k] = float32(ch+1) + float32(k)
+	frame := NewFrame(2, 3)
+	fill := func() {
+		for b := 0; b < 2; b++ {
+			for ch := 0; ch < 3; ch++ {
+				x := frame.View(b, ch)
+				for k := range x {
+					x[k] = float32(ch+1) + float32(k)
+				}
 			}
 		}
 	}
-	view := ec3NewSubFrameView(2, 1)
-	ec3FillRenderSubFrameView(true, frame, 1, view)
-	for b := range view {
-		for k, v := range view[b][0] {
+	fill()
+	ec3DownmixRenderSubFrame(true, frame, 1, 1)
+	// A one-channel blocker reads the downmix in channel 0.
+	blocker := NewFrameBlocker(2, 1)
+	block := NewBlock(2, 1)
+	blocker.InsertSubFrameAndExtractBlock(frame, 1, &block)
+	for b := 0; b < 2; b++ {
+		for k, v := range frame.SubFrame(b, 0, 1) {
 			x := float32(80 + k)
 			want := ((x + 1) + (x + 2) + (x + 3)) * (float32(1) / 3)
 			if v != want {
 				t.Fatalf("band %d k %d: %v want %v", b, k, v, want)
 			}
+			if k < BlockSize && block.View(b, 0)[k] != want {
+				t.Fatalf("band %d k %d: block holds %v want %v", b, k, block.View(b, 0)[k], want)
+			}
+		}
+		// The other channels and the first subframe are untouched.
+		for ch := 0; ch < 3; ch++ {
+			for k, v := range frame.View(b, ch) {
+				if (ch > 0 || k < SubFrameLength) && v != float32(ch+1)+float32(k) {
+					t.Fatalf("downmix touched band %d channel %d sample %d", b, ch, k)
+				}
+			}
 		}
 	}
-	// The first subframe is untouched.
-	if frame[0][0][0] != 1 {
-		t.Fatal("downmix touched the other subframe")
+	// Without a proper downmix, or when the AEC runs on every channel, the
+	// frame is left as it is.
+	fill()
+	ec3DownmixRenderSubFrame(false, frame, 1, 1)
+	ec3DownmixRenderSubFrame(true, frame, 1, 3)
+	for b := 0; b < 2; b++ {
+		for ch := 0; ch < 3; ch++ {
+			for k, v := range frame.View(b, ch) {
+				if v != float32(ch+1)+float32(k) {
+					t.Fatalf("frame changed at band %d channel %d sample %d", b, ch, k)
+				}
+			}
+		}
 	}
 }
 

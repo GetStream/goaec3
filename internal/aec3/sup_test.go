@@ -26,7 +26,7 @@ func TestSupAllocs(t *testing.T) {
 	sn.Subband2 = SubbandRegion{Low: 20, High: 40}
 	snd := NewSubbandNearendDetector(&sn, numCh)
 	mccd := NewMultiChannelContentDetector(true, 2, 0, 300, 2)
-	frame := [][][]float32{{make([]float32, 160), make([]float32, 160)}}
+	frame := NewFrame(1, 2)
 	var dets []NearendDetector = []NearendDetector{dn, snd}
 
 	if a := testing.AllocsPerRun(200, func() {

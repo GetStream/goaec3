@@ -643,21 +643,14 @@ func TestDlyFrameBlockerBlockFramerParity(t *testing.T) {
 			cBlocker := NewDlyFrameBlocker(bands, ch)
 			gFramer := aec3.NewBlockFramer(bands, ch)
 			cFramer := NewDlyBlockFramer(bands, ch)
-			sub := make([][][]float32, bands)
-			outSub := make([][][]float32, bands)
-			for b := range sub {
-				sub[b] = make([][]float32, ch)
-				outSub[b] = make([][]float32, ch)
-				for c := range sub[b] {
-					sub[b][c] = make([]float32, aec3.SubFrameLength)
-					outSub[b][c] = make([]float32, aec3.SubFrameLength)
-				}
-			}
-			flat := func(s [][][]float32) []float32 {
+			// The Go side reads and writes subframe k%2 of a frame.
+			frame := aec3.NewFrame(bands, ch)
+			outFrame := aec3.NewFrame(bands, ch)
+			flat := func(f aec3.Frame, subFrameIndex int) []float32 {
 				var o []float32
-				for b := range s {
-					for c := range s[b] {
-						o = append(o, s[b][c]...)
+				for b := 0; b < bands; b++ {
+					for c := 0; c < ch; c++ {
+						o = append(o, f.SubFrame(b, c, subFrameIndex)...)
 					}
 				}
 				return o
@@ -675,21 +668,17 @@ func TestDlyFrameBlockerBlockFramerParity(t *testing.T) {
 			cBlock := make([]float32, bands*ch*aec3.BlockSize)
 			cSub := make([]float32, bands*ch*aec3.SubFrameLength)
 			for k := 0; k < 200; k++ {
-				for b := range sub {
-					for c := range sub[b] {
-						for i := range sub[b][c] {
-							sub[b][c][i] = float32(rng.NormFloat64() * 1000)
-						}
-					}
+				for i, x := 0, frame.Samples(); i < len(x); i++ {
+					x[i] = float32(rng.NormFloat64() * 1000)
 				}
-				gBlocker.InsertSubFrameAndExtractBlock(sub, &gBlock)
-				cBlocker.InsertSubFrameAndExtractBlock(flat(sub), cBlock)
+				gBlocker.InsertSubFrameAndExtractBlock(frame, k%2, &gBlock)
+				cBlocker.InsertSubFrameAndExtractBlock(flat(frame, k%2), cBlock)
 				if i, ok := dlyEqualBits(flatBlock(&gBlock), cBlock); !ok {
 					t.Fatalf("bands %d ch %d k %d: blocker[%d] mismatch", bands, ch, k, i)
 				}
-				gFramer.InsertBlockAndExtractSubFrame(&gBlock, outSub)
+				gFramer.InsertBlockAndExtractSubFrame(&gBlock, outFrame, k%2)
 				cFramer.InsertBlockAndExtractSubFrame(cBlock, cSub)
-				if i, ok := dlyEqualBits(flat(outSub), cSub); !ok {
+				if i, ok := dlyEqualBits(flat(outFrame, k%2), cSub); !ok {
 					t.Fatalf("bands %d ch %d k %d: framer[%d] mismatch", bands, ch, k, i)
 				}
 				if gBlocker.IsBlockAvailable() != cBlocker.IsBlockAvailable() {
@@ -719,29 +708,24 @@ func TestDlyBlockDelayBufferParity(t *testing.T) {
 				bands := rate / 16000
 				g := aec3.NewBlockDelayBuffer(ch, bands, 160, delay)
 				c := NewDlyBlockDelayBuffer(ch, rate, delay)
-				frame := make([][][]float32, bands)
-				for b := range frame {
-					frame[b] = make([][]float32, ch)
-					for k := range frame[b] {
-						frame[b][k] = make([]float32, 160)
-					}
-				}
+				frame := aec3.NewFrame(bands, ch)
 				flatC := make([]float32, bands*ch*160)
 				for k := 0; k < 30; k++ {
-					for b := range frame {
-						for c := range frame[b] {
-							for i := range frame[b][c] {
+					for b := 0; b < bands; b++ {
+						for c := 0; c < ch; c++ {
+							x := frame.View(b, c)
+							for i := range x {
 								v := float32(rng.NormFloat64() * 1000)
-								frame[b][c][i] = v
+								x[i] = v
 								flatC[(b*ch+c)*160+i] = v
 							}
 						}
 					}
 					g.DelaySignal(frame)
 					c.DelaySignal(flatC)
-					for b := range frame {
-						for cc := range frame[b] {
-							if i, ok := dlyEqualBits(frame[b][cc], flatC[(b*ch+cc)*160:(b*ch+cc+1)*160]); !ok {
+					for b := 0; b < bands; b++ {
+						for cc := 0; cc < ch; cc++ {
+							if i, ok := dlyEqualBits(frame.View(b, cc), flatC[(b*ch+cc)*160:(b*ch+cc+1)*160]); !ok {
 								t.Fatalf("rate %d ch %d delay %d frame %d band %d ch %d [%d] mismatch", rate, ch, delay, k, b, cc, i)
 							}
 						}

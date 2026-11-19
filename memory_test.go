@@ -41,17 +41,23 @@ func footprint(t testing.TB, rate, ch int) (bytes, objects uint64) {
 	return bytes, objects
 }
 
+// footprintObjectLimits bounds the heap objects per canceller of each
+// footprintCases entry.
+var footprintObjectLimits = []uint64{100, 105, 126}
+
 // TestNewFootprint reports the live heap per canceller and bounds the number
-// of heap objects, which sets the GC mark cost of many live cancellers.
+// of heap objects, which sets the cost of a GC cycle with many live
+// cancellers: an object costs about ten times as much as a pointer to an
+// object that is already marked.
 func TestNewFootprint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
 	}
-	for _, c := range footprintCases {
+	for i, c := range footprintCases {
 		bytes, objects := footprint(t, c.rate, c.ch)
 		t.Logf("%s: %d B, %d objects per canceller", c.name, bytes, objects)
-		if objects > 250 {
-			t.Errorf("%s: %d heap objects per canceller, want at most 250", c.name, objects)
+		if objects > footprintObjectLimits[i] {
+			t.Errorf("%s: %d heap objects per canceller, want at most %d", c.name, objects, footprintObjectLimits[i])
 		}
 	}
 }
@@ -127,11 +133,11 @@ func hasPointers(t reflect.Type) bool {
 }
 
 // TestPointerSlots bounds the pointers the garbage collector follows per
-// canceller. The render rings and the adaptive filter coefficients are
-// pointer-free arrays with computed views, so the count does not grow with
-// the buffer sizes.
+// canceller. The frames, the framing buffers, the render rings, the matched
+// filters and the adaptive filter coefficients are pointer-free arrays with
+// computed views, so the count does not grow with the buffer sizes.
 func TestPointerSlots(t *testing.T) {
-	limits := []int{200, 240, 280}
+	limits := []int{130, 136, 153}
 	for i, c := range footprintCases {
 		ec, err := New(DefaultConfig(), c.rate, c.ch, c.ch)
 		if err != nil {

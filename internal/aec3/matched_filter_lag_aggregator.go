@@ -63,13 +63,26 @@ type dlyPreEchoLagAggregator struct {
 	numberUpdates      int
 }
 
+// dlyPreEchoHistogramSize returns the number of bins of the pre-echo
+// histogram.
+func dlyPreEchoHistogramSize(maxFilterLag, downSamplingFactor int) int {
+	return ((maxFilterLag + 1) * downSamplingFactor) >> BlockSizeLog2
+}
+
 func newDlyPreEchoLagAggregator(maxFilterLag, downSamplingFactor int) *dlyPreEchoLagAggregator {
-	a := &dlyPreEchoLagAggregator{
+	a := &dlyPreEchoLagAggregator{}
+	a.init(downSamplingFactor, make([]int32, dlyPreEchoHistogramSize(maxFilterLag, downSamplingFactor)))
+	return a
+}
+
+// init sets up the aggregator over histogram, which holds
+// dlyPreEchoHistogramSize zeros.
+func (a *dlyPreEchoLagAggregator) init(downSamplingFactor int, histogram []int32) {
+	*a = dlyPreEchoLagAggregator{
 		blockSizeLog2: dlyGetDownSamplingBlockSizeLog2(downSamplingFactor),
-		histogram:     make([]int32, ((maxFilterLag+1)*downSamplingFactor)>>BlockSizeLog2),
+		histogram:     histogram,
 	}
 	a.Reset()
-	return a
 }
 
 func (a *dlyPreEchoLagAggregator) Reset() {
@@ -124,9 +137,13 @@ type dlyHighestPeakAggregator struct {
 }
 
 func (a *dlyHighestPeakAggregator) init(maxFilterLag int) {
-	a.histogram = make([]int32, maxFilterLag+1)
-	a.histogramMax.best = 0
-	a.candidate = -1
+	a.initOver(make([]int32, maxFilterLag+1))
+}
+
+// initOver sets up the aggregator over histogram, which holds maxFilterLag+1
+// zeros.
+func (a *dlyHighestPeakAggregator) initOver(histogram []int32) {
+	*a = dlyHighestPeakAggregator{histogram: histogram, candidate: -1}
 }
 
 // Reset clears the histogram; the candidate keeps its value until the next
@@ -157,7 +174,8 @@ type MatchedFilterLagAggregator struct {
 	thresholdsConverged       int
 	headroom                  int
 	highestPeakAggregator     dlyHighestPeakAggregator
-	preEchoLagAggregator      *dlyPreEchoLagAggregator
+	hasPreEchoLagAggregator   bool
+	preEchoLagAggregator      dlyPreEchoLagAggregator
 }
 
 // NewMatchedFilterLagAggregator mirrors the C++ constructor.
@@ -173,16 +191,23 @@ func (a *MatchedFilterLagAggregator) init(maxFilterLag int, d *DelayConfig) {
 		thresholdsConverged: d.DelaySelectionThresholds.Converged,
 		headroom:            d.DelayHeadroomSamples / d.DownSamplingFactor,
 	}
-	a.highestPeakAggregator.init(maxFilterLag)
+	// The two histograms share one array.
+	n, nPreEcho := maxFilterLag+1, 0
 	if d.DetectPreEcho {
-		a.preEchoLagAggregator = newDlyPreEchoLagAggregator(maxFilterLag, d.DownSamplingFactor)
+		nPreEcho = dlyPreEchoHistogramSize(maxFilterLag, d.DownSamplingFactor)
+	}
+	histograms := make([]int32, n+nPreEcho)
+	a.highestPeakAggregator.initOver(histograms[:n:n])
+	if d.DetectPreEcho {
+		a.hasPreEchoLagAggregator = true
+		a.preEchoLagAggregator.init(d.DownSamplingFactor, histograms[n:])
 	}
 }
 
 // Reset resets the aggregator.
 func (a *MatchedFilterLagAggregator) Reset(hardReset bool) {
 	a.highestPeakAggregator.Reset()
-	if a.preEchoLagAggregator != nil {
+	if a.hasPreEchoLagAggregator {
 		a.preEchoLagAggregator.Reset()
 	}
 	if hardReset {
@@ -192,7 +217,7 @@ func (a *MatchedFilterLagAggregator) Reset(hardReset bool) {
 
 // Aggregate aggregates the provided lag estimate (present when ok is true).
 func (a *MatchedFilterLagAggregator) Aggregate(lagEstimate MatchedFilterLagEstimate, ok bool) (DelayEstimate, bool) {
-	if ok && a.preEchoLagAggregator != nil {
+	if ok && a.hasPreEchoLagAggregator {
 		a.preEchoLagAggregator.Aggregate(max(0, lagEstimate.PreEchoLag-a.headroom))
 	}
 
@@ -208,7 +233,7 @@ func (a *MatchedFilterLagAggregator) Aggregate(lagEstimate MatchedFilterLagEstim
 				quality = DelayQualityRefined
 			}
 			reportedDelay := candidate
-			if a.preEchoLagAggregator != nil {
+			if a.hasPreEchoLagAggregator {
 				reportedDelay = a.preEchoLagAggregator.preEchoCandidate
 			}
 			return DelayEstimate{Quality: quality, Delay: reportedDelay}, true

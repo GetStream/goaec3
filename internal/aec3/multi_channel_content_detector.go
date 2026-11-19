@@ -2,12 +2,12 @@ package aec3
 
 const supNumFramesPerSecond = 100
 
-func supHasStereoContent(frame [][][]float32, detectionThreshold float32) bool {
-	if len(frame[0]) < 2 {
+func supHasStereoContent(frame Frame, detectionThreshold float32) bool {
+	if frame.NumChannels() < 2 {
 		return false
 	}
-	for band := range frame {
-		l, r := frame[band][0], frame[band][1]
+	for band := 0; band < frame.NumBands(); band++ {
+		l, r := frame.View(band, 0), frame.View(band, 1)
 		for k := range l {
 			d := l[k] - r[k]
 			if d < 0 {
@@ -42,7 +42,16 @@ type MultiChannelContentDetector struct {
 func NewMultiChannelContentDetector(detectStereoContent bool, numRenderInputChannels int,
 	detectionThreshold float32, stereoDetectionTimeoutThresholdSeconds int,
 	stereoDetectionHysteresisSeconds float32) *MultiChannelContentDetector {
-	d := &MultiChannelContentDetector{
+	d := &MultiChannelContentDetector{}
+	d.init(detectStereoContent, numRenderInputChannels, detectionThreshold,
+		stereoDetectionTimeoutThresholdSeconds, stereoDetectionHysteresisSeconds)
+	return d
+}
+
+func (d *MultiChannelContentDetector) init(detectStereoContent bool, numRenderInputChannels int,
+	detectionThreshold float32, stereoDetectionTimeoutThresholdSeconds int,
+	stereoDetectionHysteresisSeconds float32) {
+	*d = MultiChannelContentDetector{
 		detectStereoContent:                   detectStereoContent,
 		detectionThreshold:                    detectionThreshold,
 		stereoDetectionHysteresisFrames:       int(stereoDetectionHysteresisSeconds * supNumFramesPerSecond),
@@ -52,14 +61,13 @@ func NewMultiChannelContentDetector(detectStereoContent bool, numRenderInputChan
 		d.hasDetectionTimeout = true
 		d.detectionTimeoutThresholdFrames = stereoDetectionTimeoutThresholdSeconds * supNumFramesPerSecond
 	}
-	return d
 }
 
 // UpdateDetection compares the left and right channels in the render frame
 // ([band][channel][sample]) to determine whether the signal is a proper
 // multichannel signal. It returns whether the persistent multichannel state
 // changed.
-func (d *MultiChannelContentDetector) UpdateDetection(frame [][][]float32) bool {
+func (d *MultiChannelContentDetector) UpdateDetection(frame Frame) bool {
 	if !d.detectStereoContent {
 		return false
 	}

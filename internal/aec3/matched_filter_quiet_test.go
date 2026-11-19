@@ -106,18 +106,20 @@ func (s *dlyQuietScene) block(mode int, excitationLimit float32) []float32 {
 // instantaneousAccumulatedError and scratchMemory are scratch (see the
 // quiet-render skip) and are not compared.
 func dlyQuietStateDiff(a, b *MatchedFilter) string {
-	for n := range a.filters {
-		for k := range a.filters[n] {
-			if math.Float32bits(a.filters[n][k]) != math.Float32bits(b.filters[n][k]) {
-				return fmt.Sprintf("filters[%d][%d]: %v vs %v", n, k, a.filters[n][k], b.filters[n][k])
+	for n := 0; n < a.numFilters; n++ {
+		fa, fb := a.filter(n), b.filter(n)
+		for k := range fa {
+			if math.Float32bits(fa[k]) != math.Float32bits(fb[k]) {
+				return fmt.Sprintf("filters[%d][%d]: %v vs %v", n, k, fa[k], fb[k])
 			}
 		}
-	}
-	for n := range a.accumulatedError {
-		for k := range a.accumulatedError[n] {
-			if math.Float32bits(a.accumulatedError[n][k]) != math.Float32bits(b.accumulatedError[n][k]) {
-				return fmt.Sprintf("accumulatedError[%d][%d]: %v vs %v", n, k, a.accumulatedError[n][k],
-					b.accumulatedError[n][k])
+		if !a.detectPreEcho {
+			continue
+		}
+		ea, eb := a.accumulatedError(n), b.accumulatedError(n)
+		for k := range ea {
+			if math.Float32bits(ea[k]) != math.Float32bits(eb[k]) {
+				return fmt.Sprintf("accumulatedError[%d][%d]: %v vs %v", n, k, ea[k], eb[k])
 			}
 		}
 	}
@@ -192,11 +194,10 @@ func dlyQuietRun(c dlyQuietCase, seed int64, numBlocks int, modes []int, tamper 
 			st.skipped++
 			// The scratch buffers of a skipped block are stale; poison them
 			// so that any later read would spread into the compared state.
-			for k := range skip.instantaneousAccumulatedError {
-				skip.instantaneousAccumulatedError[k] = float32(math.NaN())
-			}
-			for k := range skip.scratchMemory {
-				skip.scratchMemory[k] = float32(math.NaN())
+			for _, scratch := range [][]float32{skip.instantaneousAccumulatedError(), skip.scratchMemory()} {
+				for k := range scratch {
+					scratch[k] = float32(math.NaN())
+				}
 			}
 		} else {
 			st.ran++

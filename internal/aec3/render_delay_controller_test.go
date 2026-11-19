@@ -50,18 +50,13 @@ func TestDlyFramingAllocationFree(t *testing.T) {
 	blocker := NewFrameBlocker(3, 2)
 	framer := NewBlockFramer(3, 2)
 	delay := NewBlockDelayBuffer(2, 3, 160, 17)
-	sub := make([][][]float32, 3)
-	frame := make([][][]float32, 3)
-	for b := range sub {
-		sub[b] = [][]float32{make([]float32, SubFrameLength), make([]float32, SubFrameLength)}
-		frame[b] = [][]float32{make([]float32, 160), make([]float32, 160)}
-	}
+	frame := NewFrame(3, 2)
 	block := NewBlock(3, 2)
 	step := func() {
 		delay.DelaySignal(frame)
 		for i := 0; i < 2; i++ {
-			blocker.InsertSubFrameAndExtractBlock(sub, &block)
-			framer.InsertBlockAndExtractSubFrame(&block, sub)
+			blocker.InsertSubFrameAndExtractBlock(frame, i, &block)
+			framer.InsertBlockAndExtractSubFrame(&block, frame, i)
 		}
 		if blocker.IsBlockAvailable() {
 			blocker.ExtractBlock(&block)

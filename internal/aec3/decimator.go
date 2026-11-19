@@ -22,14 +22,18 @@ var dlyHighPassFilter = [1]BiQuadCoefficients{
 	{B: [3]float32{0.757076375, -1.51415275, 0.757076375}, A: [2]float32{-1.45424359, 0.574061915}},
 }
 
-// Decimator decimates a block of samples (decimator.h).
+// Decimator provides decimation by 4 or 8 for the purposes of delay
+// estimation (decimator.h). The sections of its two cascaded biquad filters
+// are stored in the Decimator itself: the anti-aliasing sections followed by
+// the noise reduction ones.
 type Decimator struct {
-	downSamplingFactor   int
-	antiAliasingFilter   CascadedBiQuadFilter
-	noiseReductionFilter CascadedBiQuadFilter
+	downSamplingFactor int
+	numAntiAliasing    int
+	numNoiseReduction  int
+	sections           [len(dlyBandPassFilterDs8) + len(dlyHighPassFilter)]BiQuad
 }
 
-// NewDecimator returns a decimator for a down-sampling factor of 4 or 8.
+// NewDecimator returns a decimator for downSamplingFactor 4 or 8.
 func NewDecimator(downSamplingFactor int) *Decimator {
 	d := &Decimator{}
 	d.init(downSamplingFactor)
@@ -40,33 +44,49 @@ func (d *Decimator) init(downSamplingFactor int) {
 	if downSamplingFactor != 4 && downSamplingFactor != 8 {
 		panic("aec3: Decimator requires a down-sampling factor of 4 or 8")
 	}
-	d.downSamplingFactor = downSamplingFactor
+	*d = Decimator{downSamplingFactor: downSamplingFactor}
+	var antiAliasing, noiseReduction []BiQuadCoefficients
 	if downSamplingFactor == 4 {
-		d.antiAliasingFilter.init(dlyLowPassFilterDs4[:])
-		d.noiseReductionFilter.init(dlyHighPassFilter[:])
+		antiAliasing, noiseReduction = dlyLowPassFilterDs4[:], dlyHighPassFilter[:]
 	} else {
-		d.antiAliasingFilter.init(dlyBandPassFilterDs8[:])
-		d.noiseReductionFilter.init(nil)
+		antiAliasing = dlyBandPassFilterDs8[:]
+	}
+	d.numAntiAliasing, d.numNoiseReduction = len(antiAliasing), len(noiseReduction)
+	for i, c := range antiAliasing {
+		d.sections[i] = BiQuad{Coefficients: c}
+	}
+	for i, c := range noiseReduction {
+		d.sections[d.numAntiAliasing+i] = BiQuad{Coefficients: c}
 	}
 }
 
-// Decimate downsamples the BlockSize samples of in into out, which holds
-// BlockSize/downSamplingFactor samples.
+// antiAliasing returns the sections of the anti-aliasing filter.
+func (d *Decimator) antiAliasing() []BiQuad { return d.sections[:d.numAntiAliasing] }
+
+// noiseReduction returns the sections of the noise reduction filter.
+func (d *Decimator) noiseReduction() []BiQuad {
+	return d.sections[d.numAntiAliasing : d.numAntiAliasing+d.numNoiseReduction]
+}
+
+// Decimate downsamples the BlockSize samples of in into
+// BlockSize/downSamplingFactor samples of out.
 func (d *Decimator) Decimate(in, out []float32) {
 	in = in[:BlockSize]
 	out = out[:BlockSize/d.downSamplingFactor]
 	var x [BlockSize]float32
 
-	if aa, nr := d.antiAliasingFilter.biquads, d.noiseReductionFilter.biquads; len(aa) == 3 && len(nr) == 1 {
-		// Both filters in one pass over the samples (see
-		// dlyApplyBiQuadCascade).
+	if aa, nr := d.antiAliasing(), d.noiseReduction(); len(aa) == 3 && len(nr) == 1 {
+		// Limits the frequency content of the signal to avoid aliasing and
+		// reduces the impact of near-end noise, in one pass over the block.
 		dlyApplyBiQuad4(in, x[:], &aa[0], &aa[1], &aa[2], &nr[0])
 	} else {
 		// Limit the frequency content of the signal to avoid aliasing.
-		d.antiAliasingFilter.Process(in, x[:])
+		dlyApplyBiQuadCascade(in, x[:], aa)
 
 		// Reduce the impact of near-end noise.
-		d.noiseReductionFilter.ProcessInPlace(x[:])
+		if len(nr) > 0 {
+			dlyApplyBiQuadCascade(x[:], x[:], nr)
+		}
 	}
 
 	// Downsample the signal.

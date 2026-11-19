@@ -19,17 +19,16 @@ type RenderDelayBuffer struct {
 	renderLinearAmplitudeGain                  float32
 	downSamplingFactor                         int
 	subBlockSize                               int
-	blocks                                     *BlockBuffer
-	spectra                                    *SpectrumBuffer
-	ffts                                       *FftBuffer
+	blocks                                     BlockBuffer
+	spectra                                    SpectrumBuffer
+	ffts                                       FftBuffer
 	delay                                      int
 	hasDelay                                   bool
-	echoRemoverBuffer                          *RenderBuffer
-	lowRate                                    *DownsampledRenderBuffer
+	echoRemoverBuffer                          RenderBuffer // over blocks, spectra and ffts
+	lowRate                                    DownsampledRenderBuffer
 	renderMixer                                AlignmentMixer
 	renderDecimator                            Decimator
 	fft                                        Aec3Fft
-	renderDs                                   []float32
 	bufferHeadroom                             int
 	lastCallWasRender                          bool
 	numApiCallsInARow                          int
@@ -49,7 +48,15 @@ type RenderDelayBuffer struct {
 // The result keeps a reference to config, which must not change while it
 // is in use (the C++ copies it).
 func NewRenderDelayBuffer(config *EchoCanceller3Config, sampleRateHz, numRenderChannels int) *RenderDelayBuffer {
-	r := &RenderDelayBuffer{
+	r := &RenderDelayBuffer{}
+	r.init(config, sampleRateHz, numRenderChannels)
+	return r
+}
+
+// init sets up r in place: its render buffer points at its own rings, so a
+// RenderDelayBuffer must not be copied.
+func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, numRenderChannels int) {
+	*r = RenderDelayBuffer{
 		optimization:              DetectOptimization(),
 		config:                    config,
 		renderLinearAmplitudeGain: Exp10f(config.RenderLevels.RenderPowerGainDb / 20),
@@ -61,20 +68,18 @@ func NewRenderDelayBuffer(config *EchoCanceller3Config, sampleRateHz, numRenderC
 		r.subBlockSize = BlockSize / r.downSamplingFactor
 	}
 	size := GetRenderDelayBufferSize(r.downSamplingFactor, config.Delay.NumFilters, config.Filter.Refined.LengthBlocks)
-	r.blocks = NewBlockBuffer(size, NumBandsForRate(sampleRateHz), numRenderChannels)
-	r.spectra = NewSpectrumBuffer(size, numRenderChannels)
-	r.ffts = NewFftBuffer(size, numRenderChannels)
+	r.blocks = *NewBlockBuffer(size, NumBandsForRate(sampleRateHz), numRenderChannels)
+	r.spectra = *NewSpectrumBuffer(size, numRenderChannels)
+	r.ffts = *NewFftBuffer(size, numRenderChannels)
 	r.delay, r.hasDelay = config.Delay.DefaultDelay, true
-	r.echoRemoverBuffer = NewRenderBuffer(r.blocks, r.spectra, r.ffts)
-	r.lowRate = NewDownsampledRenderBuffer(GetDownSampledBufferSize(r.downSamplingFactor, config.Delay.NumFilters))
+	r.echoRemoverBuffer = *NewRenderBuffer(&r.blocks, &r.spectra, &r.ffts)
+	r.lowRate = *NewDownsampledRenderBuffer(GetDownSampledBufferSize(r.downSamplingFactor, config.Delay.NumFilters))
 	m := &config.Delay.RenderAlignmentMixing
 	r.renderMixer.init(numRenderChannels, m.Downmix, m.AdaptiveSelection, m.ActivityPowerThreshold,
 		m.PreferFirstTwoChannels)
 	r.renderDecimator.init(r.downSamplingFactor)
-	r.renderDs = make([]float32, r.subBlockSize)
 	r.bufferHeadroom = config.Filter.Refined.LengthBlocks
 	r.Reset()
-	return r
 }
 
 // Reset resets the buffer alignment and clears the reported delays.
@@ -260,14 +265,14 @@ func (r *RenderDelayBuffer) Delay() int { return r.computeDelay() }
 func (r *RenderDelayBuffer) MaxDelay() int { return r.blocks.Size - 1 - r.bufferHeadroom }
 
 // GetRenderBuffer returns the render buffer for the echo remover.
-func (r *RenderDelayBuffer) GetRenderBuffer() *RenderBuffer { return r.echoRemoverBuffer }
+func (r *RenderDelayBuffer) GetRenderBuffer() *RenderBuffer { return &r.echoRemoverBuffer }
 
 // GetDownsampledRenderBuffer returns the downsampled render buffer.
-func (r *RenderDelayBuffer) GetDownsampledRenderBuffer() *DownsampledRenderBuffer { return r.lowRate }
+func (r *RenderDelayBuffer) GetDownsampledRenderBuffer() *DownsampledRenderBuffer { return &r.lowRate }
 
 // BufferLatency returns the number of unread sub-blocks in the buffer.
 func (r *RenderDelayBuffer) BufferLatency() int {
-	l := r.lowRate
+	l := &r.lowRate
 	latencySamples := (len(l.Buffer) + l.Read - l.Write) % len(l.Buffer)
 	return latencySamples / r.subBlockSize
 }
@@ -299,11 +304,12 @@ func (r *RenderDelayBuffer) applyTotalDelay(delay int) {
 
 // insertBlock inserts a block into the render buffers.
 func (r *RenderDelayBuffer) insertBlock(block *Block, previousWrite int) {
-	b := r.blocks
-	lr := r.lowRate
-	ds := r.renderDs
-	f := r.ffts
-	s := r.spectra
+	b := &r.blocks
+	lr := &r.lowRate
+	var renderDs [BlockSize]float32
+	ds := renderDs[:r.subBlockSize]
+	f := &r.ffts
+	s := &r.spectra
 	dst := b.At(b.Write)
 	numBands := dst.NumBands()
 	numRenderChannels := dst.NumChannels()

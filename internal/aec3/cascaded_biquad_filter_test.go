@@ -21,8 +21,8 @@ func refCascade(x, y []float32, biquads []BiQuad) {
 
 func refDecimate(d *Decimator, in, out []float32) {
 	var x [BlockSize]float32
-	refCascade(in[:BlockSize], x[:], d.antiAliasingFilter.biquads)
-	refCascade(x[:], x[:], d.noiseReductionFilter.biquads)
+	refCascade(in[:BlockSize], x[:], d.antiAliasing())
+	refCascade(x[:], x[:], d.noiseReduction())
 	for j, k := 0, 0; j < BlockSize/d.downSamplingFactor; j, k = j+1, k+d.downSamplingFactor {
 		out[j] = x[k]
 	}
@@ -125,10 +125,10 @@ func TestDecimatorMatchesSectionBySection(t *testing.T) {
 			var in [BlockSize]float32
 			biquadTestSignal(rng, in[:])
 			if block%500 == 499 {
-				got.antiAliasingFilter.Reset()
-				got.noiseReductionFilter.Reset()
-				want.antiAliasingFilter.Reset()
-				want.noiseReductionFilter.Reset()
+				for k := range got.sections {
+					got.sections[k].Reset()
+					want.sections[k].Reset()
+				}
 			}
 			outGot := make([]float32, BlockSize/factor)
 			outWant := make([]float32, BlockSize/factor)

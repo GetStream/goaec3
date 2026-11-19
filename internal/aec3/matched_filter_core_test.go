@@ -347,7 +347,11 @@ func TestDlyMatchedFilterAccErrCoresMatchReference(t *testing.T) {
 				scratch := dlyRandSlice(rng, scratchSize, 1)
 				var updA bool
 				esA := es0
-				mf := &MatchedFilter{optimization: opt, instantaneousAccumulatedError: accA, scratchMemory: scratch}
+				// A filter bank without filters: the storage holds the
+				// instantaneous accumulated error and the scratch.
+				mf := &MatchedFilter{optimization: opt, detectPreEcho: true, filterSize: hSize,
+					accumulatedSize: len(accA), scratchSize: len(scratch), storage: append(accA, scratch...)}
+				accA = mf.instantaneousAccumulatedError()
 				mf.runCore(c.xs, c.thr, 0.7, c.x, c.y, hA, &updA, &esA, true)
 				dlyRequireBits(t, "h", hA, hWant)
 				dlyRequireBits(t, "accumulated error", accA, accWant)

@@ -74,54 +74,77 @@ var (
 	ErrLinearOutputDisabled = errors.New("goaec3: linear output requires Filter.ExportLinearAecOutput")
 )
 
-// ec3SideBuffers holds the FloatS16 full-band and split-band copies of one
-// signal direction.
-type ec3SideBuffers struct {
-	splitter *bands.BandSplitter
-	full     [][]float32   // [channel][frameLength]
-	split    [][][]float32 // [band][channel][SplitBandSize]
+// ec3Side converts one signal direction between the caller's full-band
+// frames and the split-band frame of the canceller. At 32 and 48 kHz it holds
+// the FloatS16 full-band copy of the frame and the band-splitting filter
+// states, each in one pointer-free array; at 16 kHz the single band is the
+// full-band signal and it holds nothing.
+type ec3Side struct {
+	numChannels int
+	numBands    int
+	frameLength int
+	full        []float32 // [channel][frameLength]
+	filter      bands.SplittingFilter
 }
 
-func ec3NewSideBuffers(sampleRateHz, numChannels int) ec3SideBuffers {
-	s := ec3SideBuffers{splitter: bands.NewBandSplitter(sampleRateHz, numChannels)}
-	frameLength := sampleRateHz / 100
-	numBands := s.splitter.NumBands()
-	// One backing array for the samples and one for the slice headers.
-	splitLength := aec3.SplitBandSize
-	if numBands == 1 {
-		splitLength = 0 // At 16 kHz the single band is the full-band signal.
+func (s *ec3Side) init(sampleRateHz, numChannels int) {
+	s.numChannels = numChannels
+	s.frameLength = sampleRateHz / 100
+	s.numBands = s.frameLength / aec3.SplitBandSize
+	if s.numBands > 1 {
+		s.full = make([]float32, numChannels*s.frameLength)
+		s.filter.Init(numChannels, s.numBands)
 	}
-	data := make([]float32, numChannels*(frameLength+numBands*splitLength))
-	views := make([][]float32, numChannels*(1+numBands))
-	s.full = views[:numChannels:numChannels]
-	for ch := range s.full {
-		s.full[ch] = data[ch*frameLength : (ch+1)*frameLength : (ch+1)*frameLength]
-	}
-	data, views = data[numChannels*frameLength:], views[numChannels:]
-	s.split = make([][][]float32, numBands)
-	for band := range s.split {
-		s.split[band] = views[band*numChannels : (band+1)*numChannels : (band+1)*numChannels]
-		for ch := range s.split[band] {
-			if numBands == 1 {
-				s.split[band][ch] = s.full[ch]
-			} else {
-				i := (band*numChannels + ch) * splitLength
-				s.split[band][ch] = data[i : i+splitLength : i+splitLength]
-			}
+}
+
+// channel returns the full-band FloatS16 samples of one channel.
+func (s *ec3Side) channel(ch int) []float32 {
+	n := s.frameLength
+	return s.full[ch*n : (ch+1)*n : (ch+1)*n]
+}
+
+// split converts frame to FloatS16 and splits it into the bands of dst.
+func (s *ec3Side) split(frame [][]float32, dst aec3.Frame) {
+	if s.numBands == 1 {
+		for ch, x := range frame {
+			bands.FloatToFloatS16Slice(x, dst.View(0, ch))
 		}
+		return
 	}
-	return s
+	for ch, x := range frame {
+		full := s.channel(ch)
+		bands.FloatToFloatS16Slice(x, full)
+	}
+	s.analysis(dst)
 }
 
-func (s *ec3SideBuffers) splitIntoFrequencyBands() {
-	if s.splitter.NumBands() > 1 {
-		s.splitter.SplitIntoFrequencyBands(s.full, s.split)
+// analysis splits the full-band copy into the bands of dst.
+func (s *ec3Side) analysis(dst aec3.Frame) {
+	for ch := 0; ch < s.numChannels; ch++ {
+		var b2 []float32
+		if s.numBands == 3 {
+			b2 = dst.View(2, ch)
+		}
+		s.filter.AnalysisChannel(ch, s.channel(ch), dst.View(0, ch), dst.View(1, ch), b2)
 	}
 }
 
-func (s *ec3SideBuffers) mergeFrequencyBands() {
-	if s.splitter.NumBands() > 1 {
-		s.splitter.MergeFrequencyBands(s.split, s.full)
+// merge merges the bands of src and converts the result to frame.
+func (s *ec3Side) merge(src aec3.Frame, frame [][]float32) {
+	if s.numBands == 1 {
+		for ch, x := range frame {
+			bands.FloatS16ToFloatSlice(src.View(0, ch), x)
+		}
+		return
+	}
+	for ch, x := range frame {
+		var b2 []float32
+		if s.numBands == 3 {
+			b2 = src.View(2, ch)
+		}
+		full := s.channel(ch)
+		s.filter.SynthesisChannel(ch, src.View(0, ch), src.View(1, ch), b2, full)
+		bands.FloatS16ToFloatSlice(full, x)
 	}
 }
 
@@ -143,8 +166,12 @@ func ec3CheckFrame(frame [][]float32, numChannels, frameLength int) error {
 // AnalyzeRender may be called concurrently with the capture-side methods
 // (ProcessCapture, ProcessCaptureWithLinearOutput, SetAudioBufferDelay,
 // SetCaptureOutputUsage, Metrics). Calls on each side must be serialized.
+//
+// The canceller is one heap object that embeds the AEC3 state by value; its
+// sample buffers are pointer-free arrays, so the garbage collector follows
+// few pointers per canceller.
 type EchoCanceller struct {
-	ec                 *aec3.EchoCanceller3
+	ec                 aec3.EchoCanceller3
 	sampleRateHz       int
 	frameLength        int
 	numRenderChannels  int
@@ -152,9 +179,8 @@ type EchoCanceller struct {
 	exportLinearOutput bool
 	echoPathGainChange atomic.Bool
 
-	render  ec3SideBuffers
-	capture ec3SideBuffers
-	linear  [][]float32 // [channel][LinearOutputFrameSize]
+	render  ec3Side
+	capture ec3Side
 }
 
 // New creates an echo canceller for sampleRateHz (16000, 32000 or 48000)
@@ -196,22 +222,15 @@ func newEchoCanceller(cfg, multichannelCfg *Config, sampleRateHz, numRenderChann
 		}
 	}
 	e := &EchoCanceller{
-		ec:                 aec3.NewEchoCanceller3(cfg, multichannelCfg, sampleRateHz, numRenderChannels, numCaptureChannels),
 		sampleRateHz:       sampleRateHz,
 		frameLength:        sampleRateHz / 100,
 		numRenderChannels:  numRenderChannels,
 		numCaptureChannels: numCaptureChannels,
 		exportLinearOutput: cfg.Filter.ExportLinearAecOutput,
-		render:             ec3NewSideBuffers(sampleRateHz, numRenderChannels),
-		capture:            ec3NewSideBuffers(sampleRateHz, numCaptureChannels),
 	}
-	if e.exportLinearOutput {
-		e.linear = make([][]float32, numCaptureChannels)
-		data := make([]float32, numCaptureChannels*LinearOutputFrameSize)
-		for ch := range e.linear {
-			e.linear[ch] = data[ch*LinearOutputFrameSize : (ch+1)*LinearOutputFrameSize : (ch+1)*LinearOutputFrameSize]
-		}
-	}
+	e.ec.Init(cfg, multichannelCfg, sampleRateHz, numRenderChannels, numCaptureChannels)
+	e.render.init(sampleRateHz, numRenderChannels)
+	e.capture.init(sampleRateHz, numCaptureChannels)
 	return e, nil
 }
 
@@ -233,11 +252,8 @@ func (e *EchoCanceller) AnalyzeRender(render [][]float32) error {
 	if err := ec3CheckFrame(render, e.numRenderChannels, e.frameLength); err != nil {
 		return err
 	}
-	for ch, x := range render {
-		bands.FloatToFloatS16Slice(x, e.render.full[ch])
-	}
-	e.render.splitIntoFrequencyBands()
-	e.ec.AnalyzeRender(e.render.split)
+	e.render.split(render, e.ec.RenderFrame())
+	e.ec.AnalyzeRenderFrame()
 	return nil
 }
 
@@ -253,12 +269,7 @@ func (e *EchoCanceller) ProcessCapture(capture [][]float32) error {
 	if err := ec3CheckFrame(capture, e.numCaptureChannels, e.frameLength); err != nil {
 		return err
 	}
-	var linear [][]float32
-	if e.exportLinearOutput {
-		// The linear output framer must see every frame.
-		linear = e.linear
-	}
-	e.processCapture(capture, linear)
+	e.processCapture(capture)
 	return nil
 }
 
@@ -277,9 +288,10 @@ func (e *EchoCanceller) ProcessCaptureWithLinearOutput(capture, linearOutput [][
 	if err := ec3CheckFrame(linearOutput, e.numCaptureChannels, LinearOutputFrameSize); err != nil {
 		return err
 	}
-	e.processCapture(capture, e.linear)
-	for ch, x := range e.linear {
-		bands.FloatS16ToFloatSlice(x, linearOutput[ch])
+	e.processCapture(capture)
+	linear := e.ec.LinearOutputFrame()
+	for ch, x := range linearOutput {
+		bands.FloatS16ToFloatSlice(linear.View(0, ch), x)
 	}
 	return nil
 }
@@ -325,18 +337,25 @@ func ec3CheckCompatible(a, b *Config) error {
 	return nil
 }
 
-func (e *EchoCanceller) processCapture(capture, linear [][]float32) {
-	for ch, x := range capture {
-		bands.FloatToFloatS16Slice(x, e.capture.full[ch])
+func (e *EchoCanceller) processCapture(capture [][]float32) {
+	frame := e.ec.CaptureFrame()
+	if e.capture.numBands == 1 {
+		for ch, x := range capture {
+			bands.FloatToFloatS16Slice(x, frame.View(0, ch))
+		}
+		e.ec.AnalyzeCaptureSamples(frame.Samples())
+	} else {
+		for ch, x := range capture {
+			bands.FloatToFloatS16Slice(x, e.capture.channel(ch))
+		}
+		e.ec.AnalyzeCaptureSamples(e.capture.full)
+		e.capture.analysis(frame)
 	}
-	e.ec.AnalyzeCapture(e.capture.full)
-	e.capture.splitIntoFrequencyBands()
 	levelChange := e.echoPathGainChange.Swap(false)
-	e.ec.ProcessCapture(e.capture.split, linear, levelChange)
-	e.capture.mergeFrequencyBands()
-	for ch, x := range e.capture.full {
-		bands.FloatS16ToFloatSlice(x, capture[ch])
-	}
+	// With Filter.ExportLinearAecOutput the linear output framer must see
+	// every frame.
+	e.ec.ProcessCaptureFrame(e.exportLinearOutput, levelChange)
+	e.capture.merge(frame, capture)
 }
 
 // NotifyEchoPathGainChange flags a change of the echo path gain, such as an

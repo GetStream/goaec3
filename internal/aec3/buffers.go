@@ -43,25 +43,6 @@ func (r *ringIndex) DecReadIndex()               { r.Read = r.DecIndex(r.Read) }
 // and hand out slots as views computed from the slot index, so a ring is one
 // heap object that the garbage collector does not scan.
 
-// newFlat3 returns [n0][n1] slices of length length and capacity capacity,
-// all in one backing array.
-func newFlat3(n0, n1, length, capacity int) [][][]float32 {
-	var data []float32
-	if capacity > 0 {
-		data = make([]float32, n0*n1*capacity)
-	}
-	views := make([][]float32, n0*n1)
-	v := make([][][]float32, n0)
-	for i := range v {
-		v[i] = views[i*n1 : (i+1)*n1 : (i+1)*n1]
-		for j := range v[i] {
-			k := (i*n1 + j) * capacity
-			v[i][j] = data[k : k+length : k+capacity]
-		}
-	}
-	return v
-}
-
 // BlockBuffer is a ring of Blocks (block_buffer.h). The slots share one
 // pointer-free backing array; At returns a view of one slot.
 type BlockBuffer struct {

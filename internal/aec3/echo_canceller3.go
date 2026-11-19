@@ -36,19 +36,76 @@ func ec3DetectSaturation(y []float32) bool {
 	return false
 }
 
+// Frame is a 10 ms frame of split-band audio, [band][channel][SplitBandSize]
+// in FloatS16 scale, stored contiguously in one pointer-free backing array:
+// what AudioBuffer::split_bands exposes. View and SubFrame return views
+// computed from the band and channel.
+type Frame struct {
+	numBands    int
+	numChannels int
+	data        []float32
+}
+
+// NewFrame returns a zero frame of numBands bands and numChannels channels.
+func NewFrame(numBands, numChannels int) Frame {
+	return ec3FrameOver(numBands, numChannels, make([]float32, numBands*numChannels*SplitBandSize))
+}
+
+// ec3FrameOver returns a frame that keeps its samples in storage.
+func ec3FrameOver(numBands, numChannels int, storage []float32) Frame {
+	n := numBands * numChannels * SplitBandSize
+	return Frame{numBands: numBands, numChannels: numChannels, data: storage[:n:n]}
+}
+
+func (f Frame) NumBands() int    { return f.numBands }
+func (f Frame) NumChannels() int { return f.numChannels }
+
+// Samples returns all samples of the frame, [band][channel][SplitBandSize].
+func (f Frame) Samples() []float32 { return f.data }
+
+// View returns the SplitBandSize samples of one band and channel.
+func (f Frame) View(band, channel int) []float32 {
+	i := (band*f.numChannels + channel) * SplitBandSize
+	return f.data[i : i+SplitBandSize : i+SplitBandSize]
+}
+
+// SubFrame returns the SubFrameLength samples of subframe subFrameIndex (0
+// or 1) of one band and channel.
+func (f Frame) SubFrame(band, channel, subFrameIndex int) []float32 {
+	i := (band*f.numChannels+channel)*SplitBandSize + subFrameIndex*SubFrameLength
+	return f.data[i : i+SubFrameLength : i+SubFrameLength]
+}
+
+// CopyFrom copies frame[band][channel] into f.
+func (f Frame) CopyFrom(frame [][][]float32) {
+	for band := 0; band < f.numBands; band++ {
+		for channel := 0; channel < f.numChannels; channel++ {
+			copy(f.View(band, channel), frame[band][channel][:SplitBandSize])
+		}
+	}
+}
+
+// CopyTo copies f into frame[band][channel].
+func (f Frame) CopyTo(frame [][][]float32) {
+	for band := 0; band < f.numBands; band++ {
+		for channel := 0; channel < f.numChannels; channel++ {
+			copy(frame[band][channel][:SplitBandSize], f.View(band, channel))
+		}
+	}
+}
+
 // ec3RenderTransferQueue is the SwapQueue that moves 10 ms render frames
-// ([band][channel][SplitBandSize]) from AnalyzeRender to the capture side.
-// Insert copies the caller's frame into the queue and Remove copies the
-// oldest queued frame out; Insert fails (and drops the frame) when maxFrames
-// frames are queued, Remove fails when the queue is empty. The frames live
-// in one flat buffer that starts at ec3RenderTransferQueueInitialFrames
-// frames and doubles, up to maxFrames, when a render burst fills it, so the
-// queue holds as many frames as the deepest burst so far. It is safe for one
-// inserting and one removing goroutine.
+// from AnalyzeRender to the capture side. Insert copies the caller's frame
+// into the queue and Remove copies the oldest queued frame out; Insert fails
+// (and drops the frame) when maxFrames frames are queued, Remove fails when
+// the queue is empty. The frames live in one flat buffer that starts at
+// ec3RenderTransferQueueInitialFrames frames and doubles, up to maxFrames,
+// when a render burst fills it, so the queue holds as many frames as the
+// deepest burst so far. It is safe for one inserting and one removing
+// goroutine.
 type ec3RenderTransferQueue struct {
 	mu             sync.Mutex
-	numBands       int
-	numChannels    int
+	frameSize      int // samples per frame
 	maxFrames      int
 	buffer         []float32 // [frame][band][channel][SplitBandSize]
 	nextWriteIndex int
@@ -60,30 +117,22 @@ type ec3RenderTransferQueue struct {
 // and capture alternate in steady state, so one frame is queued at a time.
 const ec3RenderTransferQueueInitialFrames = 4
 
-// ec3NewFrame returns a [numBands][numChannels][frameLength] frame whose
-// samples share one backing array.
-func ec3NewFrame(numBands, numChannels, frameLength int) [][][]float32 {
-	return newFlat3(numBands, numChannels, frameLength, frameLength)
-}
-
 func (q *ec3RenderTransferQueue) init(maxFrames, numBands, numChannels int) {
-	q.numBands, q.numChannels, q.maxFrames = numBands, numChannels, maxFrames
-	q.buffer = make([]float32, min(maxFrames, ec3RenderTransferQueueInitialFrames)*q.frameSize())
+	q.frameSize, q.maxFrames = numBands*numChannels*SplitBandSize, maxFrames
+	q.buffer = make([]float32, min(maxFrames, ec3RenderTransferQueueInitialFrames)*q.frameSize)
 }
 
-func (q *ec3RenderTransferQueue) frameSize() int { return q.numBands * q.numChannels * SplitBandSize }
-
-func (q *ec3RenderTransferQueue) capacity() int { return len(q.buffer) / q.frameSize() }
+func (q *ec3RenderTransferQueue) capacity() int { return len(q.buffer) / q.frameSize }
 
 func (q *ec3RenderTransferQueue) slot(index int) []float32 {
-	n := q.frameSize()
+	n := q.frameSize
 	return q.buffer[index*n : (index+1)*n : (index+1)*n]
 }
 
 // grow doubles the capacity (up to maxFrames), keeping the queued frames in
 // order at the start of the new buffer.
 func (q *ec3RenderTransferQueue) grow() {
-	n := q.frameSize()
+	n := q.frameSize
 	capacity := q.capacity()
 	buffer := make([]float32, min(q.maxFrames, 2*capacity)*n)
 	for i := 0; i < q.numElements; i++ {
@@ -94,7 +143,7 @@ func (q *ec3RenderTransferQueue) grow() {
 	q.nextWriteIndex = q.numElements
 }
 
-func (q *ec3RenderTransferQueue) Insert(input [][][]float32) bool {
+func (q *ec3RenderTransferQueue) Insert(input Frame) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.numElements == q.capacity() {
@@ -103,12 +152,7 @@ func (q *ec3RenderTransferQueue) Insert(input [][][]float32) bool {
 		}
 		q.grow()
 	}
-	dst := q.slot(q.nextWriteIndex)
-	for band := range input {
-		for ch := range input[band] {
-			copy(dst[(band*q.numChannels+ch)*SplitBandSize:][:SplitBandSize], input[band][ch])
-		}
-	}
+	copy(q.slot(q.nextWriteIndex), input.data)
 	q.numElements++
 	q.nextWriteIndex++
 	if q.nextWriteIndex == q.capacity() {
@@ -117,18 +161,13 @@ func (q *ec3RenderTransferQueue) Insert(input [][][]float32) bool {
 	return true
 }
 
-func (q *ec3RenderTransferQueue) Remove(output [][][]float32) bool {
+func (q *ec3RenderTransferQueue) Remove(output Frame) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.numElements == 0 {
 		return false
 	}
-	src := q.slot(q.nextReadIndex)
-	for band := range output {
-		for ch := range output[band] {
-			copy(output[band][ch], src[(band*q.numChannels+ch)*SplitBandSize:][:SplitBandSize])
-		}
-	}
+	copy(output.data, q.slot(q.nextReadIndex))
 	q.numElements--
 	q.nextReadIndex++
 	if q.nextReadIndex == q.capacity() {
@@ -137,47 +176,32 @@ func (q *ec3RenderTransferQueue) Remove(output [][][]float32) bool {
 	return true
 }
 
-// ec3RenderWriter is EchoCanceller3::RenderWriter: it copies the split-band
-// render signal into the transfer queue, optionally high-pass filtering the
-// lowest band.
+// ec3RenderWriter is EchoCanceller3::RenderWriter: it holds the split-band
+// render frame that goes into the transfer queue, optionally high-pass
+// filtering its lowest band first.
 type ec3RenderWriter struct {
-	numBands              int
-	numChannels           int
-	highPassFilter        *HighPassFilter
-	renderQueueInputFrame [][][]float32
-	renderTransferQueue   *ec3RenderTransferQueue
+	hasHighPassFilter     bool
+	highPassFilter        HighPassFilter
+	renderQueueInputFrame Frame
 }
 
-func ec3NewRenderWriter(config *EchoCanceller3Config, renderTransferQueue *ec3RenderTransferQueue,
-	numBands, numChannels int) *ec3RenderWriter {
-	w := &ec3RenderWriter{
-		numBands:              numBands,
-		numChannels:           numChannels,
-		renderQueueInputFrame: ec3NewFrame(numBands, numChannels, SplitBandSize),
-		renderTransferQueue:   renderTransferQueue,
-	}
+func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numBands, numChannels int) {
+	*w = ec3RenderWriter{renderQueueInputFrame: NewFrame(numBands, numChannels)}
 	if config.Filter.HighPassFilterEchoReference {
-		w.highPassFilter = NewHighPassFilter(16000, numChannels)
+		w.hasHighPassFilter = true
+		w.highPassFilter.init(16000, numChannels)
 	}
-	return w
 }
 
-func (w *ec3RenderWriter) Insert(input [][][]float32) {
-	if w.numBands != len(input) {
-		return
-	}
-
-	// CopyBufferIntoFrame.
-	for band := 0; band < w.numBands; band++ {
-		for channel := 0; channel < w.numChannels; channel++ {
-			copy(w.renderQueueInputFrame[band][channel], input[band][channel][:SplitBandSize])
+// Insert moves renderQueueInputFrame into the transfer queue.
+func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue) {
+	if w.hasHighPassFilter {
+		for channel := 0; channel < w.renderQueueInputFrame.numChannels; channel++ {
+			w.highPassFilter.ProcessChannel(channel, w.renderQueueInputFrame.View(0, channel))
 		}
 	}
-	if w.highPassFilter != nil {
-		w.highPassFilter.Process(w.renderQueueInputFrame[0])
-	}
 
-	_ = w.renderTransferQueue.Insert(w.renderQueueInputFrame)
+	_ = renderTransferQueue.Insert(w.renderQueueInputFrame)
 }
 
 // EchoCanceller3 is the main AEC3 class (echo_canceller3.h). It receives
@@ -190,10 +214,20 @@ func (w *ec3RenderWriter) Insert(input [][][]float32) {
 // AudioBuffer::split_bands exposes; at 16 kHz the single band is the
 // full-band signal.
 //
-// AnalyzeRender may be called concurrently with the other methods; the
-// other methods must not be called concurrently with each other.
+// The canceller owns the frames it works on: the caller fills RenderFrame
+// and calls AnalyzeRenderFrame, and fills CaptureFrame and calls
+// ProcessCaptureFrame, which processes it in place. AnalyzeRender and
+// ProcessCapture do the same for frames of the caller, which they copy.
+//
+// The render-side methods (RenderFrame, AnalyzeRenderFrame, AnalyzeRender)
+// may be called concurrently with the other methods; the other methods must
+// not be called concurrently with each other.
+//
+// The frames, blocks and framing buffers of the capture side are views of
+// one pointer-free array and the framing components are held by value, so
+// the garbage collector follows few pointers per canceller.
 type EchoCanceller3 struct {
-	renderWriter *ec3RenderWriter
+	renderWriter ec3RenderWriter
 
 	config                      EchoCanceller3Config
 	sampleRateHz                int
@@ -201,27 +235,24 @@ type EchoCanceller3 struct {
 	numRenderInputChannels      int
 	numRenderChannelsToAec      int
 	numCaptureChannels          int
-	configSelector              *ConfigSelector
-	multichannelContentDetector *MultiChannelContentDetector
-	linearOutputFramer          *BlockFramer
-	outputFramer                *BlockFramer
-	captureBlocker              *FrameBlocker
-	renderBlocker               *FrameBlocker
+	configSelector              ConfigSelector
+	multichannelContentDetector MultiChannelContentDetector
+	hasLinearOutput             bool
+	linearOutputFramer          BlockFramer
+	outputFramer                BlockFramer
+	captureBlocker              FrameBlocker
+	renderBlocker               FrameBlocker
 	renderTransferQueue         ec3RenderTransferQueue
 	blockProcessor              *BlockProcessor
-	renderQueueOutputFrame      [][][]float32
+	renderQueueOutputFrame      Frame
+	captureFrame                Frame
+	linearOutputFrame           Frame // [1][channel][SplitBandSize]
 	saturatedMicrophoneSignal   bool
 	renderBlock                 Block
-	linearOutputBlock           *Block
+	linearOutputBlock           Block
 	captureBlock                Block
-	renderSubFrameView          [][][]float32
-	linearOutputSubFrameView    [][][]float32
-	captureSubFrameView         [][][]float32
-	blockDelayBuffer            *BlockDelayBuffer
-}
-
-func ec3NewSubFrameView(numBands, numChannels int) [][][]float32 {
-	return newFlat3(numBands, numChannels, 0, 0)
+	hasBlockDelayBuffer         bool
+	blockDelayBuffer            BlockDelayBuffer
 }
 
 // NewEchoCanceller3 creates an echo canceller. multichannelConfig is the
@@ -229,47 +260,79 @@ func ec3NewSubFrameView(numBands, numChannels int) [][][]float32 {
 // (nil corresponds to std::nullopt).
 func NewEchoCanceller3(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
 	numRenderChannels, numCaptureChannels int) *EchoCanceller3 {
+	e := &EchoCanceller3{}
+	e.Init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels)
+	return e
+}
+
+// Init sets up e, which must be the zero value, as NewEchoCanceller3 does. It
+// serves an EchoCanceller3 embedded by value; e must not be copied
+// afterwards.
+func (e *EchoCanceller3) Init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
+	numRenderChannels, numCaptureChannels int) {
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate for EchoCanceller3")
 	}
-	e := &EchoCanceller3{
-		config:                 AdjustConfig(config),
-		sampleRateHz:           sampleRateHz,
-		numBands:               NumBandsForRate(sampleRateHz),
-		numRenderInputChannels: numRenderChannels,
-		numCaptureChannels:     numCaptureChannels,
-	}
-	e.configSelector = NewConfigSelector(&e.config, multichannelConfig, e.numRenderInputChannels)
+	e.config = AdjustConfig(config)
+	e.sampleRateHz = sampleRateHz
+	e.numBands = NumBandsForRate(sampleRateHz)
+	e.numRenderInputChannels = numRenderChannels
+	e.numCaptureChannels = numCaptureChannels
+	e.configSelector.init(&e.config, multichannelConfig, e.numRenderInputChannels)
 	active := e.configSelector.ActiveConfig()
-	e.multichannelContentDetector = NewMultiChannelContentDetector(
+	e.multichannelContentDetector.init(
 		active.MultiChannel.DetectStereoContent, e.numRenderInputChannels,
 		active.MultiChannel.StereoDetectionThreshold,
 		active.MultiChannel.StereoDetectionTimeoutThresholdSeconds,
 		active.MultiChannel.StereoDetectionHysteresisSeconds)
-	e.outputFramer = NewBlockFramer(e.numBands, e.numCaptureChannels)
-	e.captureBlocker = NewFrameBlocker(e.numBands, e.numCaptureChannels)
+	e.hasLinearOutput = active.Filter.ExportLinearAecOutput
+
+	// One backing array for every capture-side sample buffer.
+	renderViews := e.numBands * e.numRenderInputChannels
+	captureViews := e.numBands * e.numCaptureChannels
+	n := renderViews*(SplitBandSize+2*BlockSize) + captureViews*(SplitBandSize+3*BlockSize)
+	if e.hasLinearOutput {
+		n += e.numCaptureChannels * (SplitBandSize + 2*BlockSize)
+	}
+	storage := make([]float32, n)
+	take := func(n int) []float32 {
+		s := storage[:n:n]
+		storage = storage[n:]
+		return s
+	}
+
+	e.outputFramer.init(e.numBands, e.numCaptureChannels, take(captureViews*BlockSize))
+	e.captureBlocker.init(e.numBands, e.numCaptureChannels, take(captureViews*BlockSize))
 	e.renderTransferQueue.init(RenderTransferQueueSizeFrames, e.numBands, e.numRenderInputChannels)
-	e.renderQueueOutputFrame = ec3NewFrame(e.numBands, e.numRenderInputChannels, SplitBandSize)
-	e.renderBlock = NewBlock(e.numBands, e.numRenderInputChannels)
-	e.captureBlock = NewBlock(e.numBands, e.numCaptureChannels)
-	e.captureSubFrameView = ec3NewSubFrameView(e.numBands, e.numCaptureChannels)
+	e.renderQueueOutputFrame = ec3FrameOver(e.numBands, e.numRenderInputChannels, take(renderViews*SplitBandSize))
+	e.captureFrame = ec3FrameOver(e.numBands, e.numCaptureChannels, take(captureViews*SplitBandSize))
+	e.renderBlock = ec3BlockOver(e.numBands, e.numRenderInputChannels, take(renderViews*BlockSize))
+	e.captureBlock = ec3BlockOver(e.numBands, e.numCaptureChannels, take(captureViews*BlockSize))
+	// The render blocker serves numRenderChannelsToAec channels, at most
+	// all of them.
+	e.renderBlocker.init(e.numBands, e.numRenderInputChannels, take(renderViews*BlockSize))
 
 	if active.Delay.FixedCaptureDelaySamples > 0 {
-		e.blockDelayBuffer = NewBlockDelayBuffer(e.numCaptureChannels, e.numBands, SplitBandSize,
+		e.hasBlockDelayBuffer = true
+		e.blockDelayBuffer.init(e.numCaptureChannels, e.numBands, SplitBandSize,
 			e.config.Delay.FixedCaptureDelaySamples)
 	}
 
-	e.renderWriter = ec3NewRenderWriter(active, &e.renderTransferQueue, e.numBands, e.numRenderInputChannels)
+	e.renderWriter.init(active, e.numBands, e.numRenderInputChannels)
 
-	if active.Filter.ExportLinearAecOutput {
-		e.linearOutputFramer = NewBlockFramer(1, e.numCaptureChannels)
-		b := NewBlock(1, e.numCaptureChannels)
-		e.linearOutputBlock = &b
-		e.linearOutputSubFrameView = ec3NewSubFrameView(1, e.numCaptureChannels)
+	if e.hasLinearOutput {
+		e.linearOutputFramer.init(1, e.numCaptureChannels, take(e.numCaptureChannels*BlockSize))
+		e.linearOutputBlock = ec3BlockOver(1, e.numCaptureChannels, take(e.numCaptureChannels*BlockSize))
+		e.linearOutputFrame = ec3FrameOver(1, e.numCaptureChannels, take(e.numCaptureChannels*SplitBandSize))
 	}
 
 	e.initialize()
-	return e
+}
+
+// ec3BlockOver returns a block that keeps its samples in storage.
+func ec3BlockOver(numBands, numChannels int, storage []float32) Block {
+	n := numBands * numChannels * BlockSize
+	return Block{numBands: numBands, numChannels: numChannels, data: storage[:n:n]}
 }
 
 // initialize (re-)initializes the selected subset of the fields, at creation
@@ -284,12 +347,11 @@ func (e *EchoCanceller3) initialize() {
 
 	e.renderBlock.SetNumChannels(e.numRenderChannelsToAec)
 
-	e.renderBlocker = NewFrameBlocker(e.numBands, e.numRenderChannelsToAec)
+	// An empty blocker over the same storage.
+	e.renderBlocker.init(e.numBands, e.numRenderChannelsToAec, e.renderBlocker.buffer[:cap(e.renderBlocker.buffer)])
 
 	e.blockProcessor = NewBlockProcessor(e.configSelector.ActiveConfig(), e.sampleRateHz,
 		e.numRenderChannelsToAec, e.numCaptureChannels)
-
-	e.renderSubFrameView = ec3NewSubFrameView(e.numBands, e.numRenderChannelsToAec)
 }
 
 // SetBlockProcessorForTesting replaces the internal block processor.
@@ -308,13 +370,27 @@ func (e *EchoCanceller3) GetActiveConfigForTesting() *EchoCanceller3Config {
 	return e.configSelector.ActiveConfig()
 }
 
+// RenderFrame returns the split-band render frame that AnalyzeRenderFrame
+// consumes. The caller fills every band and channel before each call.
+func (e *EchoCanceller3) RenderFrame() Frame { return e.renderWriter.renderQueueInputFrame }
+
+// AnalyzeRenderFrame analyzes and stores an internal copy of RenderFrame,
+// whose contents are unspecified afterwards.
+func (e *EchoCanceller3) AnalyzeRenderFrame() {
+	e.renderWriter.Insert(&e.renderTransferQueue)
+}
+
 // AnalyzeRender analyzes and stores an internal copy of the split-band
 // render signal ([band][channel][SplitBandSize]).
 func (e *EchoCanceller3) AnalyzeRender(render [][][]float32) {
 	if len(render) > 0 && len(render[0]) != e.numRenderInputChannels {
 		panic("aec3: EchoCanceller3.AnalyzeRender channel count mismatch")
 	}
-	e.renderWriter.Insert(render)
+	if e.numBands != len(render) {
+		return
+	}
+	e.renderWriter.renderQueueInputFrame.CopyFrom(render)
+	e.AnalyzeRenderFrame()
 }
 
 // AnalyzeCapture analyzes the full-band capture signal ([channel][samples])
@@ -329,6 +405,21 @@ func (e *EchoCanceller3) AnalyzeCapture(capture [][]float32) {
 	}
 }
 
+// AnalyzeCaptureSamples is AnalyzeCapture for a full-band capture signal
+// whose channels are stored one after the other.
+func (e *EchoCanceller3) AnalyzeCaptureSamples(capture []float32) {
+	e.saturatedMicrophoneSignal = ec3DetectSaturation(capture)
+}
+
+// CaptureFrame returns the split-band capture frame that ProcessCaptureFrame
+// processes in place.
+func (e *EchoCanceller3) CaptureFrame() Frame { return e.captureFrame }
+
+// LinearOutputFrame returns the frame ([1][channel][SplitBandSize], 16 kHz)
+// that receives the linear filter output. It is the zero Frame without
+// Filter.ExportLinearAecOutput.
+func (e *EchoCanceller3) LinearOutputFrame() Frame { return e.linearOutputFrame }
+
 // ProcessCapture removes the echo from the split-band capture signal
 // ([band][channel][SplitBandSize]) in place. linearOutput, when non-nil,
 // receives the linear filter output ([channel][SplitBandSize], 16 kHz); it
@@ -338,99 +429,90 @@ func (e *EchoCanceller3) ProcessCapture(capture [][][]float32, linearOutput [][]
 	if len(capture) != e.numBands || len(capture[0]) != e.numCaptureChannels {
 		panic("aec3: EchoCanceller3.ProcessCapture capture shape mismatch")
 	}
-	if linearOutput != nil && e.linearOutputFramer == nil {
+	e.captureFrame.CopyFrom(capture)
+	e.ProcessCaptureFrame(linearOutput != nil, levelChange)
+	e.captureFrame.CopyTo(capture)
+	if linearOutput != nil {
+		for channel := range linearOutput {
+			copy(linearOutput[channel][:SplitBandSize], e.linearOutputFrame.View(0, channel))
+		}
+	}
+}
+
+// ProcessCaptureFrame removes the echo from CaptureFrame in place. With
+// linearOutput, LinearOutputFrame receives the linear filter output; that
+// requires Filter.ExportLinearAecOutput, and linearOutput must then be set on
+// every call. levelChange flags an echo path gain change.
+func (e *EchoCanceller3) ProcessCaptureFrame(linearOutput, levelChange bool) {
+	if linearOutput && !e.hasLinearOutput {
 		panic("aec3: linear AEC output requested without Filter.ExportLinearAecOutput")
 	}
 
 	// Optionally delay the capture signal.
 	if e.configSelector.ActiveConfig().Delay.FixedCaptureDelaySamples > 0 {
-		if e.blockDelayBuffer == nil {
+		if !e.hasBlockDelayBuffer {
 			panic("aec3: fixed capture delay enabled by a config switch")
 		}
-		e.blockDelayBuffer.DelaySignal(capture)
+		e.blockDelayBuffer.DelaySignal(e.captureFrame)
 	}
 
 	e.emptyRenderQueue()
 
-	e.processCaptureFrameContent(linearOutput, capture, levelChange,
+	e.processCaptureFrameContent(linearOutput, levelChange,
 		e.multichannelContentDetector.IsTemporaryMultiChannelContentDetected(), 0)
-	e.processCaptureFrameContent(linearOutput, capture, levelChange,
+	e.processCaptureFrameContent(linearOutput, levelChange,
 		e.multichannelContentDetector.IsTemporaryMultiChannelContentDetected(), 1)
 	e.processRemainingCaptureFrameContent(levelChange,
 		e.multichannelContentDetector.IsTemporaryMultiChannelContentDetected())
 }
 
-// fillSubFrameView points view[band][channel] at subframe subFrameIndex of
-// frame[band][channel].
-func ec3FillSubFrameView(frame [][][]float32, subFrameIndex int, view [][][]float32) {
-	start := subFrameIndex * SubFrameLength
-	for band := range view {
-		for channel := range view[band] {
-			view[band][channel] = frame[band][channel][start : start+SubFrameLength : start+SubFrameLength]
-		}
-	}
-}
-
-func ec3FillLinearSubFrameView(frame [][]float32, subFrameIndex int, view [][][]float32) {
-	start := subFrameIndex * SubFrameLength
-	for channel := range view[0] {
-		view[0][channel] = frame[channel][start : start+SubFrameLength : start+SubFrameLength]
-	}
-}
-
-// ec3FillRenderSubFrameView is the FillSubFrameView overload for the render
-// frame: when the AEC runs on fewer channels than the frame has, it selects
-// channel 0, after averaging all channels into it when a proper downmix is
-// needed.
-func ec3FillRenderSubFrameView(properDownmixNeeded bool, frame [][][]float32, subFrameIndex int,
-	view [][][]float32) {
-	frameNumChannels := len(frame[0])
-	subFrameNumChannels := len(view[0])
-	start := subFrameIndex * SubFrameLength
-	if frameNumChannels > subFrameNumChannels {
-		if properDownmixNeeded {
-			// When a proper downmix is needed (which is the case when proper
-			// stereo is present in the echo reference signal but the echo
-			// canceller does the processing in mono) downmix the echo
-			// reference by averaging the channel content (otherwise
-			// downmixing is done by selecting channel 0).
-			for band := range frame {
-				dst := frame[band][0][start : start+SubFrameLength]
-				for ch := 1; ch < frameNumChannels; ch++ {
-					src := frame[band][ch][start : start+SubFrameLength]
-					for k := range dst {
-						dst[k] += src[k]
-					}
-				}
-				oneByNumChannels := float32(1.0) / float32(frameNumChannels)
+// ec3DownmixRenderSubFrame prepares subframe subFrameIndex of the render
+// frame for an AEC that runs on numChannelsToAec channels (the
+// FillSubFrameView overload for the render frame): when that is fewer than
+// the frame has, the AEC reads channel 0, after all channels are averaged
+// into it when a proper downmix is needed.
+func ec3DownmixRenderSubFrame(properDownmixNeeded bool, frame Frame, subFrameIndex, numChannelsToAec int) {
+	frameNumChannels := frame.numChannels
+	if frameNumChannels > numChannelsToAec && properDownmixNeeded {
+		// When a proper downmix is needed (which is the case when proper
+		// stereo is present in the echo reference signal but the echo
+		// canceller does the processing in mono) downmix the echo
+		// reference by averaging the channel content (otherwise
+		// downmixing is done by selecting channel 0).
+		for band := 0; band < frame.numBands; band++ {
+			dst := frame.SubFrame(band, 0, subFrameIndex)
+			for ch := 1; ch < frameNumChannels; ch++ {
+				src := frame.SubFrame(band, ch, subFrameIndex)
 				for k := range dst {
-					dst[k] *= oneByNumChannels
+					dst[k] += src[k]
 				}
 			}
+			oneByNumChannels := float32(1.0) / float32(frameNumChannels)
+			for k := range dst {
+				dst[k] *= oneByNumChannels
+			}
 		}
-		for band := range frame {
-			view[band][0] = frame[band][0][start : start+SubFrameLength : start+SubFrameLength]
-		}
-	} else {
-		ec3FillSubFrameView(frame, subFrameIndex, view)
 	}
 }
 
-func (e *EchoCanceller3) processCaptureFrameContent(linearOutput [][]float32, capture [][][]float32,
-	levelChange, aecReferenceIsDownmixedStereo bool, subFrameIndex int) {
-	ec3FillSubFrameView(capture, subFrameIndex, e.captureSubFrameView)
-
-	if linearOutput != nil {
-		ec3FillLinearSubFrameView(linearOutput, subFrameIndex, e.linearOutputSubFrameView)
+// linearBlock returns the block that receives the linear filter output, nil
+// without Filter.ExportLinearAecOutput.
+func (e *EchoCanceller3) linearBlock() *Block {
+	if !e.hasLinearOutput {
+		return nil
 	}
+	return &e.linearOutputBlock
+}
 
-	e.captureBlocker.InsertSubFrameAndExtractBlock(e.captureSubFrameView, &e.captureBlock)
+func (e *EchoCanceller3) processCaptureFrameContent(linearOutput, levelChange, aecReferenceIsDownmixedStereo bool,
+	subFrameIndex int) {
+	e.captureBlocker.InsertSubFrameAndExtractBlock(e.captureFrame, subFrameIndex, &e.captureBlock)
 	e.blockProcessor.ProcessCapture(levelChange || aecReferenceIsDownmixedStereo,
-		e.saturatedMicrophoneSignal, e.linearOutputBlock, &e.captureBlock)
-	e.outputFramer.InsertBlockAndExtractSubFrame(&e.captureBlock, e.captureSubFrameView)
+		e.saturatedMicrophoneSignal, e.linearBlock(), &e.captureBlock)
+	e.outputFramer.InsertBlockAndExtractSubFrame(&e.captureBlock, e.captureFrame, subFrameIndex)
 
-	if linearOutput != nil {
-		e.linearOutputFramer.InsertBlockAndExtractSubFrame(e.linearOutputBlock, e.linearOutputSubFrameView)
+	if linearOutput {
+		e.linearOutputFramer.InsertBlockAndExtractSubFrame(&e.linearOutputBlock, e.linearOutputFrame, subFrameIndex)
 	}
 }
 
@@ -441,17 +523,17 @@ func (e *EchoCanceller3) processRemainingCaptureFrameContent(levelChange, aecRef
 
 	e.captureBlocker.ExtractBlock(&e.captureBlock)
 	e.blockProcessor.ProcessCapture(levelChange || aecReferenceIsDownmixedStereo,
-		e.saturatedMicrophoneSignal, e.linearOutputBlock, &e.captureBlock)
+		e.saturatedMicrophoneSignal, e.linearBlock(), &e.captureBlock)
 	e.outputFramer.InsertBlock(&e.captureBlock)
 
-	if e.linearOutputFramer != nil {
-		e.linearOutputFramer.InsertBlock(e.linearOutputBlock)
+	if e.hasLinearOutput {
+		e.linearOutputFramer.InsertBlock(&e.linearOutputBlock)
 	}
 }
 
 func (e *EchoCanceller3) bufferRenderFrameContent(properDownmixNeeded bool, subFrameIndex int) {
-	ec3FillRenderSubFrameView(properDownmixNeeded, e.renderQueueOutputFrame, subFrameIndex, e.renderSubFrameView)
-	e.renderBlocker.InsertSubFrameAndExtractBlock(e.renderSubFrameView, &e.renderBlock)
+	ec3DownmixRenderSubFrame(properDownmixNeeded, e.renderQueueOutputFrame, subFrameIndex, e.numRenderChannelsToAec)
+	e.renderBlocker.InsertSubFrameAndExtractBlock(e.renderQueueOutputFrame, subFrameIndex, &e.renderBlock)
 	e.blockProcessor.BufferRender(&e.renderBlock)
 }
 

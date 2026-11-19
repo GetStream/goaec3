@@ -33,14 +33,34 @@ type BlockProcessor struct {
 // sample_rate_hz, num_render_channels, num_capture_channels).
 func NewBlockProcessor(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int) *BlockProcessor {
-	renderBuffer := NewRenderDelayBuffer(config, sampleRateHz, numRenderChannels)
-	var delayController *RenderDelayController
-	if !config.Delay.UseExternalDelayEstimator {
-		delayController = NewRenderDelayController(config, sampleRateHz, numCaptureChannels)
+	// The processor, its render delay buffer and its delay controller are
+	// one heap object.
+	if !ValidFullBandRate(sampleRateHz) {
+		panic("aec3: invalid sample rate for BlockProcessor")
 	}
-	echoRemover := NewEchoRemover(config, sampleRateHz, numRenderChannels, numCaptureChannels)
-	return NewBlockProcessorWithComponents(config, sampleRateHz, numRenderChannels, numCaptureChannels,
-		renderBuffer, delayController, echoRemover)
+	if config.Delay.UseExternalDelayEstimator {
+		s := &struct {
+			processor    BlockProcessor
+			renderBuffer RenderDelayBuffer
+		}{}
+		s.renderBuffer.init(config, sampleRateHz, numRenderChannels)
+		s.processor = BlockProcessor{config: config, sampleRateHz: sampleRateHz, renderBuffer: &s.renderBuffer,
+			echoRemover: NewEchoRemover(config, sampleRateHz, numRenderChannels, numCaptureChannels),
+			renderEvent: BufferingEventNone}
+		return &s.processor
+	}
+	s := &struct {
+		processor       BlockProcessor
+		renderBuffer    RenderDelayBuffer
+		delayController RenderDelayController
+	}{}
+	s.renderBuffer.init(config, sampleRateHz, numRenderChannels)
+	s.delayController.init(config, sampleRateHz, numCaptureChannels)
+	s.processor = BlockProcessor{config: config, sampleRateHz: sampleRateHz, renderBuffer: &s.renderBuffer,
+		delayController: &s.delayController,
+		echoRemover:     NewEchoRemover(config, sampleRateHz, numRenderChannels, numCaptureChannels),
+		renderEvent:     BufferingEventNone}
+	return &s.processor
 }
 
 // NewBlockProcessorWithComponents mirrors the BlockProcessor::Create
