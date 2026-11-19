@@ -133,9 +133,17 @@ func AdaptPartitionsSse2(renderBuffer *RenderBuffer, G *FftData, numPartitions i
 func afirAdaptPartitionsSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, G *FftData, numPartitions int, H FirCoefficients) {
 	data := renderBuffer.GetFftBuffer()
 	numRenderChannels := data.NumChannels()
-	if afirHasTermKernels && numPartitions*numRenderChannels <= afirMaxTerms {
+	if n := numPartitions * numRenderChannels; afirHasTermKernels && n <= afirMaxTerms {
+		// The pair lists live on the stack and are zeroed per call, so
+		// short filters take short lists.
+		if n <= afirFewTerms {
+			var xs, hs [afirFewTerms]*FftData
+			afirTerms(data, renderBuffer.Position(), H, xs[:n], hs[:n])
+			afirAdaptTerms(xs[:n], hs[:n], G)
+			return
+		}
 		var xs, hs [afirMaxTerms]*FftData
-		n := afirTerms(data, renderBuffer.Position(), numPartitions, H, &xs, &hs)
+		afirTerms(data, renderBuffer.Position(), H, xs[:n], hs[:n])
 		afirAdaptTerms(xs[:n], hs[:n], G)
 		return
 	}
@@ -216,9 +224,17 @@ func ApplyFilterSse2(renderBuffer *RenderBuffer, numPartitions int, H FirCoeffic
 func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPartitions int, H FirCoefficients, S *FftData) {
 	data := renderBuffer.GetFftBuffer()
 	numRenderChannels := data.NumChannels()
-	if afirHasTermKernels && numPartitions*numRenderChannels <= afirMaxTerms {
+	if n := numPartitions * numRenderChannels; afirHasTermKernels && n <= afirMaxTerms {
+		// The pair lists live on the stack and are zeroed per call, so
+		// short filters take short lists.
+		if n <= afirFewTerms {
+			var xs, hs [afirFewTerms]*FftData
+			afirTerms(data, renderBuffer.Position(), H, xs[:n], hs[:n])
+			afirApplyTerms(xs[:n], hs[:n], S)
+			return
+		}
 		var xs, hs [afirMaxTerms]*FftData
-		n := afirTerms(data, renderBuffer.Position(), numPartitions, H, &xs, &hs)
+		afirTerms(data, renderBuffer.Position(), H, xs[:n], hs[:n])
 		afirApplyTerms(xs[:n], hs[:n], S)
 		return
 	}
@@ -263,16 +279,20 @@ func afirApplyFilterSimd(opt Aec3Optimization, renderBuffer *RenderBuffer, numPa
 // take from stack arrays; larger filters run the per-partition loops.
 const afirMaxTerms = 64
 
+// afirFewTerms bounds the short pair lists: the default filters of one
+// render channel have 13 partitions.
+const afirFewTerms = 16
+
 // afirTerms lists the (X, H) operand pairs of ApplyFilter/AdaptPartitions in
 // the C++ accumulation order: partition-major, channel-minor, with the render
 // ring index running from the read position and wrapping to 0 exactly as
-// the lim1/lim2 loops do. It returns the number of pairs.
-func afirTerms(data *FftBuffer, position, numPartitions int, H FirCoefficients, xs, hs *[afirMaxTerms]*FftData) int {
+// the lim1/lim2 loops do. It fills xs and hs, one pair per element of xs.
+func afirTerms(data *FftBuffer, position int, H FirCoefficients, xs, hs []*FftData) {
 	nc := data.numChannels
-	n := numPartitions * nc
 	x := data.data
-	h := H.data[:n]
-	if H.numChannels != nc || n > afirMaxTerms {
+	h := H.data[:len(xs)]
+	hs = hs[:len(xs)]
+	if H.numChannels != nc {
 		panic("aec3: filter and render buffer shapes differ")
 	}
 	// Both arrays are partition-major, so the pairs are consecutive elements;
@@ -285,7 +305,6 @@ func afirTerms(data *FftBuffer, position, numPartitions int, H FirCoefficients, 
 		xs[t], hs[t] = &x[xi], &h[t]
 		xi++
 	}
-	return n
 }
 
 // afirApplyTermsGo is the term kernel reference: S = sum over the pairs of
