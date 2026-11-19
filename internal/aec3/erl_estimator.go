@@ -16,11 +16,16 @@ type ErlEstimator struct {
 }
 
 func NewErlEstimator(startupPhaseLengthBlocks int) *ErlEstimator {
-	e := &ErlEstimator{startupPhaseLengthBlocks: startupPhaseLengthBlocks, erlTimeDomain: stMaxErl}
+	e := &ErlEstimator{}
+	e.init(startupPhaseLengthBlocks)
+	return e
+}
+
+func (e *ErlEstimator) init(startupPhaseLengthBlocks int) {
+	*e = ErlEstimator{startupPhaseLengthBlocks: startupPhaseLengthBlocks, erlTimeDomain: stMaxErl}
 	for k := range e.erl {
 		e.erl[k] = stMaxErl
 	}
-	return e
 }
 
 func (e *ErlEstimator) Reset() { e.blocksSinceReset = 0 }

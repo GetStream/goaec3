@@ -43,12 +43,12 @@ func footprint(t testing.TB, rate, ch int) (bytes, objects uint64) {
 
 // footprintObjectLimits bounds the heap objects per canceller of each
 // footprintCases entry.
-var footprintObjectLimits = []uint64{100, 105, 126}
+var footprintObjectLimits = []uint64{65, 71, 84}
 
 // TestNewFootprint reports the live heap per canceller and bounds the number
-// of heap objects, which sets the cost of a GC cycle with many live
-// cancellers: an object costs about ten times as much as a pointer to an
-// object that is already marked.
+// of heap objects, which sets most of the mark cost of a GC cycle with many
+// live cancellers: marking an object costs several times as much as following
+// another pointer into an object that is already marked.
 func TestNewFootprint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
@@ -135,9 +135,11 @@ func hasPointers(t reflect.Type) bool {
 // TestPointerSlots bounds the pointers the garbage collector follows per
 // canceller. The frames, the framing buffers, the render rings, the matched
 // filters and the adaptive filter coefficients are pointer-free arrays with
-// computed views, so the count does not grow with the buffer sizes.
+// computed views, so the count does not grow with the buffer sizes. Many of
+// the remaining pointers are slices of a component over arrays of its own
+// struct (see channelSlice in internal/aec3), which lead to no other object.
 func TestPointerSlots(t *testing.T) {
-	limits := []int{130, 136, 153}
+	limits := []int{124, 130, 150}
 	for i, c := range footprintCases {
 		ec, err := New(DefaultConfig(), c.rate, c.ch, c.ch)
 		if err != nil {
@@ -220,7 +222,9 @@ func BenchmarkNew(b *testing.B) {
 	}
 }
 
-// BenchmarkGCMark measures one full GC cycle with 1000 live cancellers.
+// BenchmarkGCMark measures one full GC cycle with 1000 live cancellers. With
+// -cpu 1 the time is close to the mark work; with more Ps it is mostly the
+// coordination of the mark workers.
 func BenchmarkGCMark(b *testing.B) {
 	for _, c := range footprintCases {
 		b.Run(fmt.Sprintf("%s_x1000", c.name), func(b *testing.B) {

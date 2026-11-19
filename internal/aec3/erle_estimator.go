@@ -4,23 +4,28 @@ package aec3
 // (when erle.num_sections > 1) signal dependent ERLE estimators.
 type ErleEstimator struct {
 	startupPhaseLengthBlocks     int
-	fullbandErleEstimator        *FullBandErleEstimator
-	subbandErleEstimator         *SubbandErleEstimator
+	fullbandErleEstimator        FullBandErleEstimator
+	subbandErleEstimator         SubbandErleEstimator
 	signalDependentErleEstimator *SignalDependentErleEstimator
 	blocksSinceReset             int
 }
 
 func NewErleEstimator(startupPhaseLengthBlocks int, config *EchoCanceller3Config, numCaptureChannels int) *ErleEstimator {
-	e := &ErleEstimator{
-		startupPhaseLengthBlocks: startupPhaseLengthBlocks,
-		fullbandErleEstimator:    NewFullBandErleEstimator(config, numCaptureChannels),
-		subbandErleEstimator:     NewSubbandErleEstimator(config, numCaptureChannels),
-	}
+	e := &ErleEstimator{}
+	e.init(startupPhaseLengthBlocks, config, numCaptureChannels)
+	return e
+}
+
+// init sets up e in place; e must not be copied afterwards (see
+// channelSlice).
+func (e *ErleEstimator) init(startupPhaseLengthBlocks int, config *EchoCanceller3Config, numCaptureChannels int) {
+	*e = ErleEstimator{startupPhaseLengthBlocks: startupPhaseLengthBlocks}
+	e.fullbandErleEstimator.init(config, numCaptureChannels)
+	e.subbandErleEstimator.init(config, numCaptureChannels)
 	if config.Erle.NumSections > 1 {
 		e.signalDependentErleEstimator = NewSignalDependentErleEstimator(config, numCaptureChannels)
 	}
 	e.Reset(true)
-	return e
 }
 
 // Reset resets the estimators; delayChange also restarts the startup phase.

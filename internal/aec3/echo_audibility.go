@@ -12,9 +12,14 @@ type EchoAudibility struct {
 }
 
 func NewEchoAudibility(useRenderStationarityAtInit bool) *EchoAudibility {
-	e := &EchoAudibility{useRenderStationarityAtInit: useRenderStationarityAtInit}
-	e.reset()
+	e := &EchoAudibility{}
+	e.init(useRenderStationarityAtInit)
 	return e
+}
+
+func (e *EchoAudibility) init(useRenderStationarityAtInit bool) {
+	*e = EchoAudibility{useRenderStationarityAtInit: useRenderStationarityAtInit}
+	e.reset()
 }
 
 // Update feeds new render data to the audibility estimator.

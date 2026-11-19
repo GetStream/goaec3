@@ -21,26 +21,49 @@ type SubbandErleEstimator struct {
 	erleDuringOnsets     [][FftLengthBy2Plus1]float32
 	comingOnset          [][FftLengthBy2Plus1]bool
 	holdCounters         [][FftLengthBy2Plus1]int
+
+	// The per-channel state above for up to inlineChannels channels.
+	inline struct {
+		accumY2              [inlineChannels][FftLengthBy2Plus1]float32
+		accumE2              [inlineChannels][FftLengthBy2Plus1]float32
+		accumLowRenderEnergy [inlineChannels][FftLengthBy2Plus1]bool
+		accumNumPoints       [inlineChannels]int
+		erle                 [inlineChannels][FftLengthBy2Plus1]float32
+		erleOnsetCompensated [inlineChannels][FftLengthBy2Plus1]float32
+		erleUnbounded        [inlineChannels][FftLengthBy2Plus1]float32
+		erleDuringOnsets     [inlineChannels][FftLengthBy2Plus1]float32
+		comingOnset          [inlineChannels][FftLengthBy2Plus1]bool
+		holdCounters         [inlineChannels][FftLengthBy2Plus1]int
+	}
 }
 
 // NewSubbandErleEstimator builds the estimator with field trials at their
 // defaults (WebRTC-Aec3MinErleDuringOnsetsKillSwitch disabled).
 func NewSubbandErleEstimator(config *EchoCanceller3Config, numCaptureChannels int) *SubbandErleEstimator {
-	s := &SubbandErleEstimator{
+	s := &SubbandErleEstimator{}
+	s.init(config, numCaptureChannels)
+	return s
+}
+
+// init sets up s in place; s must not be copied afterwards (see
+// channelSlice).
+func (s *SubbandErleEstimator) init(config *EchoCanceller3Config, numCaptureChannels int) {
+	*s = SubbandErleEstimator{
 		useOnsetDetection:      config.Erle.OnsetDetection,
 		minErle:                config.Erle.Min,
 		useMinErleDuringOnsets: true,
-		accumY2:                make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		accumE2:                make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		accumLowRenderEnergy:   make([][FftLengthBy2Plus1]bool, numCaptureChannels),
-		accumNumPoints:         make([]int, numCaptureChannels),
-		erle:                   make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		erleOnsetCompensated:   make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		erleUnbounded:          make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		erleDuringOnsets:       make([][FftLengthBy2Plus1]float32, numCaptureChannels),
-		comingOnset:            make([][FftLengthBy2Plus1]bool, numCaptureChannels),
-		holdCounters:           make([][FftLengthBy2Plus1]int, numCaptureChannels),
 	}
+	n := numCaptureChannels
+	s.accumY2 = channelSlice(s.inline.accumY2[:], n)
+	s.accumE2 = channelSlice(s.inline.accumE2[:], n)
+	s.accumLowRenderEnergy = channelSlice(s.inline.accumLowRenderEnergy[:], n)
+	s.accumNumPoints = channelSlice(s.inline.accumNumPoints[:], n)
+	s.erle = channelSlice(s.inline.erle[:], n)
+	s.erleOnsetCompensated = channelSlice(s.inline.erleOnsetCompensated[:], n)
+	s.erleUnbounded = channelSlice(s.inline.erleUnbounded[:], n)
+	s.erleDuringOnsets = channelSlice(s.inline.erleDuringOnsets[:], n)
+	s.comingOnset = channelSlice(s.inline.comingOnset[:], n)
+	s.holdCounters = channelSlice(s.inline.holdCounters[:], n)
 	for k := range s.maxErle {
 		if k < FftLengthBy2/2 {
 			s.maxErle[k] = config.Erle.MaxL
@@ -49,7 +72,6 @@ func NewSubbandErleEstimator(config *EchoCanceller3Config, numCaptureChannels in
 		}
 	}
 	s.Reset()
-	return s
 }
 
 func (s *SubbandErleEstimator) Reset() {

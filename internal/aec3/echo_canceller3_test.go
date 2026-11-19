@@ -563,3 +563,37 @@ func TestEc3AllocationFree(t *testing.T) {
 		}
 	}
 }
+
+// TestChannelSlice checks that per-channel state of up to the inline number
+// of channels lives in the given array and is allocated beyond.
+func TestChannelSlice(t *testing.T) {
+	var inline [inlineChannels]int
+	for n := 0; n <= inlineChannels+2; n++ {
+		s := channelSlice(inline[:], n)
+		if len(s) != n || cap(s) != n {
+			t.Fatalf("%d channels: len %d cap %d", n, len(s), cap(s))
+		}
+		if n == 0 {
+			continue
+		}
+		s[0] = 7
+		if wantInline := n <= inlineChannels; (inline[0] == 7) != wantInline {
+			t.Fatalf("%d channels: inline %v, want %v", n, inline[0] == 7, wantInline)
+		}
+		inline[0] = 0
+	}
+}
+
+// TestAecStateObjects checks that an AecState of up to inlineChannels capture
+// channels is one object apart from the three buffers that depend on the
+// filter length or come with the subtractor output analyzer.
+func TestAecStateObjects(t *testing.T) {
+	cfg := DefaultEchoCanceller3Config()
+	for ch := 1; ch <= inlineChannels; ch++ {
+		var a *AecState
+		if n := testing.AllocsPerRun(10, func() { a = NewAecState(&cfg, ch) }); n > 4 {
+			t.Errorf("%d channels: NewAecState allocates %v objects, want at most 4", ch, n)
+		}
+		_ = a
+	}
+}

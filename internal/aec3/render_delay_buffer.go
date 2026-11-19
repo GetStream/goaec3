@@ -68,12 +68,18 @@ func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, num
 		r.subBlockSize = BlockSize / r.downSamplingFactor
 	}
 	size := GetRenderDelayBufferSize(r.downSamplingFactor, config.Delay.NumFilters, config.Filter.Refined.LengthBlocks)
-	r.blocks = *NewBlockBuffer(size, NumBandsForRate(sampleRateHz), numRenderChannels)
+	// The block ring and the decimated render ring share one array.
+	numBands := NumBandsForRate(sampleRateHz)
+	blockSamples := size * numBands * numRenderChannels * BlockSize
+	lowRateSize := GetDownSampledBufferSize(r.downSamplingFactor, config.Delay.NumFilters)
+	samples := make([]float32, blockSamples+lowRateSize)
+	r.blocks = BlockBuffer{ringIndex: ringIndex{Size: size}, numBands: numBands, numChannels: numRenderChannels,
+		data: samples[:blockSamples:blockSamples]}
 	r.spectra = *NewSpectrumBuffer(size, numRenderChannels)
 	r.ffts = *NewFftBuffer(size, numRenderChannels)
 	r.delay, r.hasDelay = config.Delay.DefaultDelay, true
 	r.echoRemoverBuffer = *NewRenderBuffer(&r.blocks, &r.spectra, &r.ffts)
-	r.lowRate = *NewDownsampledRenderBuffer(GetDownSampledBufferSize(r.downSamplingFactor, config.Delay.NumFilters))
+	r.lowRate = DownsampledRenderBuffer{ringIndex: ringIndex{Size: lowRateSize}, Buffer: samples[blockSamples:]}
 	m := &config.Delay.RenderAlignmentMixing
 	r.renderMixer.init(numRenderChannels, m.Downmix, m.AdaptiveSelection, m.ActivityPowerThreshold,
 		m.PreferFirstTwoChannels)

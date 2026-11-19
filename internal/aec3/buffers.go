@@ -43,6 +43,23 @@ func (r *ringIndex) DecReadIndex()               { r.Read = r.DecIndex(r.Read) }
 // and hand out slots as views computed from the slot index, so a ring is one
 // heap object that the garbage collector does not scan.
 
+// inlineChannels is the number of capture channels whose per-channel state a
+// component keeps in arrays of its own struct. With more channels the state
+// is allocated.
+const inlineChannels = 2
+
+// channelSlice returns n per-channel elements: inline[:n] when they fit and
+// a new array otherwise. inline is an array of the struct that keeps the
+// result, so that the state of a component lives in the heap object of the
+// component, and a struct that holds such a slice must not be copied once it
+// is set up (the copy would share the state of the original).
+func channelSlice[T any](inline []T, n int) []T {
+	if n <= len(inline) {
+		return inline[:n:n]
+	}
+	return make([]T, n)
+}
+
 // BlockBuffer is a ring of Blocks (block_buffer.h). The slots share one
 // pointer-free backing array; At returns a view of one slot.
 type BlockBuffer struct {

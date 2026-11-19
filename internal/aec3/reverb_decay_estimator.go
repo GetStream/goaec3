@@ -100,9 +100,16 @@ type earlyReverbLengthEstimator struct {
 	nSections           int
 }
 
-func newEarlyReverbLengthEstimator(maxBlocks int) earlyReverbLengthEstimator {
-	n := maxBlocks - stBlocksPerSection
-	return earlyReverbLengthEstimator{numeratorsSmooth: make([]float32, n), numerators: make([]float32, n)}
+// stEarlyReverbNumSections returns the length of the numerators of an
+// earlyReverbLengthEstimator for maxBlocks blocks.
+func stEarlyReverbNumSections(maxBlocks int) int { return maxBlocks - stBlocksPerSection }
+
+// newEarlyReverbLengthEstimator returns an estimator for maxBlocks blocks
+// that keeps its numerators in storage: 2*stEarlyReverbNumSections(maxBlocks)
+// zeros.
+func newEarlyReverbLengthEstimator(maxBlocks int, storage []float32) earlyReverbLengthEstimator {
+	n := stEarlyReverbNumSections(maxBlocks)
+	return earlyReverbLengthEstimator{numeratorsSmooth: storage[:n:n], numerators: storage[n : 2*n : 2*n]}
 }
 
 func (e *earlyReverbLengthEstimator) Reset() {
@@ -191,15 +198,31 @@ type ReverbDecayEstimator struct {
 }
 
 func NewReverbDecayEstimator(config *EchoCanceller3Config) *ReverbDecayEstimator {
+	r := &ReverbDecayEstimator{}
+	r.init(config, make([]float32, stReverbDecayStorageSize(config)))
+	return r
+}
+
+// stReverbDecayStorageSize returns the number of samples a
+// ReverbDecayEstimator keeps for config: the previous gains and the early
+// reverb numerators.
+func stReverbDecayStorageSize(config *EchoCanceller3Config) int {
 	lb := config.Filter.Refined.LengthBlocks
-	return &ReverbDecayEstimator{
+	return lb + 2*stEarlyReverbNumSections(lb-stEarlyReverbMinSizeBlocks)
+}
+
+// init sets up r over storage, which holds stReverbDecayStorageSize(config)
+// zeros.
+func (r *ReverbDecayEstimator) init(config *EchoCanceller3Config, storage []float32) {
+	lb := config.Filter.Refined.LengthBlocks
+	*r = ReverbDecayEstimator{
 		filterLengthBlocks:       lb,
 		filterLengthCoefficients: GetTimeDomainLength(lb),
 		useAdaptiveEchoDecay:     config.EpStrength.DefaultLen < 0,
-		earlyReverbEstimator:     newEarlyReverbLengthEstimator(lb - stEarlyReverbMinSizeBlocks),
+		earlyReverbEstimator:     newEarlyReverbLengthEstimator(lb-stEarlyReverbMinSizeBlocks, storage[lb:]),
 		lateReverbStart:          stEarlyReverbMinSizeBlocks,
 		lateReverbEnd:            stEarlyReverbMinSizeBlocks,
-		previousGains:            make([]float32, lb),
+		previousGains:            storage[:lb:lb],
 		decay:                    float32(math.Abs(float64(config.EpStrength.DefaultLen))),
 		mildDecay:                float32(math.Abs(float64(config.EpStrength.NearendLen))),
 	}

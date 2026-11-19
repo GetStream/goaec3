@@ -130,19 +130,37 @@ type FilterAnalyzer struct {
 	filterAnalysisStates []stFilterAnalysisState
 	filterDelaysBlocks   []int
 	minFilterDelayBlocks int
+
+	// The per-channel state above for up to inlineChannels channels; the
+	// high-pass filtered impulse responses of all channels share one array.
+	inline struct {
+		hHighpass            [inlineChannels][]float32
+		filterAnalysisStates [inlineChannels]stFilterAnalysisState
+		filterDelaysBlocks   [inlineChannels]int
+	}
 }
 
 func NewFilterAnalyzer(config *EchoCanceller3Config, numCaptureChannels int) *FilterAnalyzer {
-	f := &FilterAnalyzer{
-		boundedErl:           config.EpStrength.BoundedErl,
-		defaultGain:          config.EpStrength.DefaultGain,
-		hHighpass:            make([][]float32, numCaptureChannels),
-		filterAnalysisStates: make([]stFilterAnalysisState, numCaptureChannels),
-		filterDelaysBlocks:   make([]int, numCaptureChannels),
+	f := &FilterAnalyzer{}
+	f.init(config, numCaptureChannels)
+	return f
+}
+
+// init sets up f in place; f must not be copied afterwards (see
+// channelSlice).
+func (f *FilterAnalyzer) init(config *EchoCanceller3Config, numCaptureChannels int) {
+	*f = FilterAnalyzer{
+		boundedErl:  config.EpStrength.BoundedErl,
+		defaultGain: config.EpStrength.DefaultGain,
 	}
+	f.hHighpass = channelSlice(f.inline.hHighpass[:], numCaptureChannels)
+	f.filterAnalysisStates = channelSlice(f.inline.filterAnalysisStates[:], numCaptureChannels)
+	f.filterDelaysBlocks = channelSlice(f.inline.filterDelaysBlocks[:], numCaptureChannels)
 	activeRenderLimit := config.RenderLevels.ActiveRenderLimit
+	n := GetTimeDomainLength(config.Filter.Refined.LengthBlocks)
+	hHighpass := make([]float32, numCaptureChannels*n)
 	for ch := 0; ch < numCaptureChannels; ch++ {
-		f.hHighpass[ch] = make([]float32, GetTimeDomainLength(config.Filter.Refined.LengthBlocks))
+		f.hHighpass[ch] = hHighpass[ch*n : (ch+1)*n : (ch+1)*n]
 		st := &f.filterAnalysisStates[ch]
 		st.filterLengthBlocks = config.Filter.RefinedInitial.LengthBlocks
 		st.consistentFilterDetector.activeRenderThreshold = activeRenderLimit * activeRenderLimit * FftLengthBy2
@@ -150,7 +168,6 @@ func NewFilterAnalyzer(config *EchoCanceller3Config, numCaptureChannels int) *Fi
 		st.Reset(config.EpStrength.DefaultGain)
 	}
 	f.Reset()
-	return f
 }
 
 func (f *FilterAnalyzer) Reset() {

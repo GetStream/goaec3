@@ -32,6 +32,7 @@ type AlignmentMixer struct {
 	selectionVariant          AlignmentMixerMixingVariant
 	strongBlockCounters       [2]int
 	cumulativeEnergies        []float32
+	inlineEnergies            [inlineChannels]float32 // cumulativeEnergies of up to inlineChannels channels
 	selectedChannel           int
 	blockCounter              int
 }
@@ -50,6 +51,8 @@ func NewAlignmentMixerWithParams(numChannels int, downmix, adaptiveSelection boo
 	return m
 }
 
+// init sets up m in place; m must not be copied afterwards (see
+// channelSlice).
 func (m *AlignmentMixer) init(numChannels int, downmix, adaptiveSelection bool, activityPowerThreshold float32,
 	preferFirstTwoChannels bool) {
 	*m = AlignmentMixer{
@@ -60,7 +63,7 @@ func (m *AlignmentMixer) init(numChannels int, downmix, adaptiveSelection bool, 
 		selectionVariant:          dlyChooseMixingVariant(downmix, adaptiveSelection, numChannels),
 	}
 	if m.selectionVariant == MixingVariantAdaptive {
-		m.cumulativeEnergies = make([]float32, numChannels)
+		m.cumulativeEnergies = channelSlice(m.inlineEnergies[:], numChannels)
 	}
 }
 

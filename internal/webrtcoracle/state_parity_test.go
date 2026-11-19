@@ -396,7 +396,7 @@ func stErleInputs(rng *rand.Rand, nch int, t int) (*[stK]float32, [][stK]float32
 
 func TestStateFullBandErleEstimator(t *testing.T) {
 	for name, cfg := range stTestConfigs() {
-		for _, nch := range []int{1, 2} {
+		for _, nch := range []int{1, 2, 3} {
 			t.Run(fmt.Sprintf("%s/%dch", name, nch), func(t *testing.T) {
 				rng := rand.New(rand.NewSource(6))
 				g := aec3.NewFullBandErleEstimator(&cfg, nch)
@@ -421,7 +421,7 @@ func TestStateFullBandErleEstimator(t *testing.T) {
 
 func TestStateSubbandErleEstimator(t *testing.T) {
 	for name, cfg := range stTestConfigs() {
-		for _, nch := range []int{1, 2} {
+		for _, nch := range []int{1, 2, 3} {
 			t.Run(fmt.Sprintf("%s/%dch", name, nch), func(t *testing.T) {
 				rng := rand.New(rand.NewSource(7))
 				g := aec3.NewSubbandErleEstimator(&cfg, nch)
@@ -484,7 +484,7 @@ func TestStateSignalDependentErleEstimator(t *testing.T) {
 
 func TestStateErleEstimator(t *testing.T) {
 	for name, cfg := range stTestConfigs() {
-		for _, nch := range [][2]int{{1, 1}, {2, 2}} {
+		for _, nch := range [][2]int{{1, 1}, {2, 2}, {2, 3}} {
 			t.Run(fmt.Sprintf("%s/%dx%d", name, nch[0], nch[1]), func(t *testing.T) {
 				rng := rand.New(rand.NewSource(9))
 				lb := cfg.Filter.Refined.LengthBlocks
@@ -585,7 +585,7 @@ func TestStateEchoAudibility(t *testing.T) {
 
 func TestStateFilterAnalyzer(t *testing.T) {
 	for name, cfg := range stTestConfigs() {
-		for _, nch := range [][2]int{{1, 1}, {2, 2}} {
+		for _, nch := range [][2]int{{1, 1}, {2, 2}, {2, 3}} {
 			t.Run(fmt.Sprintf("%s/%dx%d", name, nch[0], nch[1]), func(t *testing.T) {
 				rng := rand.New(rand.NewSource(12))
 				lb := cfg.Filter.Refined.LengthBlocks
@@ -867,7 +867,7 @@ func stTrackCoverage(o StAecStateOut) {
 
 func TestStateAecStateEndToEnd(t *testing.T) {
 	for name, cfg := range stTestConfigs() {
-		for _, ch := range [][2]int{{1, 1}, {2, 2}, {1, 2}} {
+		for _, ch := range [][2]int{{1, 1}, {2, 2}, {1, 2}, {2, 3}} {
 			for _, hmm := range []bool{false, true} {
 				if hmm && ch != [2]int{1, 1} {
 					continue

@@ -136,9 +136,24 @@ Steady-state processing is allocation-free. Lock new hot paths with a
 render transfer queue: it starts small and grows to the deepest render burst
 so far (up to `RenderTransferQueueSizeFrames`), so a render burst deeper than
 any before grows the queue once; allocation tests warm up past the deepest
-burst they measure. Keep per-instance state in few heap objects (one backing
-array per ring or per multi-dimensional buffer); `TestNewFootprint` bounds
-the objects per canceller.
+burst they measure.
+
+## Garbage collector footprint
+
+A canceller is long-lived state the garbage collector marks on every cycle;
+the cost is mostly the number of heap objects, then the pointers it follows.
+`TestNewFootprint` bounds the objects per canceller and `TestPointerSlots`
+the pointers; `BenchmarkGCMark -cpu 1` times a cycle with 1000 cancellers.
+
+- Multi-dimensional buffers are one pointer-free array with views computed
+  from the indices (`Frame.View`, `Block.View`, the rings' `At`, the matched
+  filter's `filter(n)`), not slices of slices.
+- Components are held by value in their parent and set up in place by an
+  `init` method; `NewX` allocates one and calls it.
+- Per-channel state of up to `inlineChannels` capture channels lives in
+  arrays of the component's own struct (`channelSlice`); buffers whose size
+  depends on the config share one allocation per component. A struct set up
+  this way must not be copied afterwards.
 
 ## Build and test
 

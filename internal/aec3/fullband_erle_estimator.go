@@ -99,17 +99,33 @@ type FullBandErleEstimator struct {
 	erleTimeDomainLog2            []float32
 	instantaneousErle             []stErleInstantaneous
 	linearFiltersQualities        []LinearFilterQuality
+
+	// The per-channel state above for up to inlineChannels channels.
+	inline struct {
+		holdCountersInstantaneousErle [inlineChannels]int
+		erleTimeDomainLog2            [inlineChannels]float32
+		instantaneousErle             [inlineChannels]stErleInstantaneous
+		linearFiltersQualities        [inlineChannels]LinearFilterQuality
+	}
 }
 
 func NewFullBandErleEstimator(config *EchoCanceller3Config, numCaptureChannels int) *FullBandErleEstimator {
-	f := &FullBandErleEstimator{
-		minErleLog2:                   FastApproxLog2f(config.Erle.Min + stErleEpsilon),
-		maxErleLfLog2:                 FastApproxLog2f(config.Erle.MaxL + stErleEpsilon),
-		holdCountersInstantaneousErle: make([]int, numCaptureChannels),
-		erleTimeDomainLog2:            make([]float32, numCaptureChannels),
-		instantaneousErle:             make([]stErleInstantaneous, numCaptureChannels),
-		linearFiltersQualities:        make([]LinearFilterQuality, numCaptureChannels),
+	f := &FullBandErleEstimator{}
+	f.init(config, numCaptureChannels)
+	return f
+}
+
+// init sets up f in place; f must not be copied afterwards (see
+// channelSlice).
+func (f *FullBandErleEstimator) init(config *EchoCanceller3Config, numCaptureChannels int) {
+	*f = FullBandErleEstimator{
+		minErleLog2:   FastApproxLog2f(config.Erle.Min + stErleEpsilon),
+		maxErleLfLog2: FastApproxLog2f(config.Erle.MaxL + stErleEpsilon),
 	}
+	f.holdCountersInstantaneousErle = channelSlice(f.inline.holdCountersInstantaneousErle[:], numCaptureChannels)
+	f.erleTimeDomainLog2 = channelSlice(f.inline.erleTimeDomainLog2[:], numCaptureChannels)
+	f.instantaneousErle = channelSlice(f.inline.instantaneousErle[:], numCaptureChannels)
+	f.linearFiltersQualities = channelSlice(f.inline.linearFiltersQualities[:], numCaptureChannels)
 	for ch := range f.instantaneousErle {
 		f.instantaneousErle[ch] = stErleInstantaneous{
 			clampInstQualityToZero: config.Erle.ClampQualityEstimateToZero,
@@ -118,7 +134,6 @@ func NewFullBandErleEstimator(config *EchoCanceller3Config, numCaptureChannels i
 		f.instantaneousErle[ch].Reset()
 	}
 	f.Reset()
-	return f
 }
 
 func (f *FullBandErleEstimator) Reset() {
