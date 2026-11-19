@@ -56,7 +56,8 @@ func ec3QuietSchedule() []ec3QuietSegment {
 // TestEc3QuietRenderParity runs EchoCanceller3 end to end over
 // ec3QuietSchedule and requires bit-exact output, linear output and metrics
 // on every frame, and that the scenario both takes the matched filter's
-// quiet-render skip and runs the filters.
+// quiet-render skip and runs the filters, and both skips adaptations of the
+// subtractor's filters under a zero gain and runs them.
 func TestEc3QuietRenderParity(t *testing.T) {
 	type tc struct {
 		name    string
@@ -173,6 +174,13 @@ func TestEc3QuietRenderParity(t *testing.T) {
 			t.Logf("%d of %d blocks took the quiet-render skip", skips, blocks)
 			if skips < c.minSkip || blocks-skips < 300 {
 				t.Errorf("%d of %d blocks skipped: the scenario must both skip and run the filters", skips, blocks)
+			}
+			// Two filters per capture channel adapt in every block.
+			adaptations := 2 * c.nc * blocks
+			zeroGain := int(g.ec.ZeroGainSkipsForTesting())
+			t.Logf("%d of %d filter adaptations took the zero-gain skip", zeroGain, adaptations)
+			if zeroGain < adaptations/10 || adaptations-zeroGain < adaptations/10 {
+				t.Errorf("%d of %d adaptations skipped: the scenario must both skip and run them", zeroGain, adaptations)
 			}
 		})
 	}

@@ -196,6 +196,17 @@ func (s *Subtractor) init(config *EchoCanceller3Config, numRenderChannels, numCa
 	}
 }
 
+// ZeroGainSkipsForTesting returns the number of filter adaptations skipped
+// because the gain was zero, over all filters.
+func (s *Subtractor) ZeroGainSkipsForTesting() uint64 {
+	var n uint64
+	channels := s.channelStates()
+	for ch := range channels {
+		n += channels[ch].refinedFilter.zeroGainSkips + channels[ch].coarseFilter.zeroGainSkips
+	}
+	return n
+}
+
 // channelStates returns the state of every capture channel.
 func (s *Subtractor) channelStates() []subChannel {
 	if s.more != nil {
@@ -350,7 +361,7 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 		// copies it, so the constraint waits for the coarse filter's and
 		// the transforms of the two run as pairs; the frequency response
 		// follows them.
-		sc.refinedFilter.adaptAndUpdateSize(renderBuffer, G)
+		sc.refinedFilter.adaptAndUpdateSizeKnownRender(renderBuffer, G, X2Refined, refinedSize)
 		refinedConstrained := false
 
 		// Update the coarse filter.
@@ -374,13 +385,13 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 			sc.coarseFilterResetHangover = s.config.Filter.CoarseResetHangoverBlocks
 		}
 
-		sc.coarseFilter.adaptAndUpdateSize(renderBuffer, G)
+		sc.coarseFilter.adaptAndUpdateSizeKnownRender(renderBuffer, G, X2Coarse, coarseSize)
 		if refinedConstrained {
 			sc.coarseFilter.constrain()
 		} else {
 			afirConstrainPair(&s.fft, &sc.refinedFilter, &impulseResponses[ch], &sc.coarseFilter)
 		}
-		sc.refinedFilter.ComputeFrequencyResponse(&frequencyResponses[ch])
+		sc.refinedFilter.updateFrequencyResponse(&frequencyResponses[ch])
 
 		// SafeClamp(a, -32768.f, 32767.f); see kernClamp.
 		kernClamp(eRefined[:], -32768, 32767)

@@ -14,6 +14,8 @@ package aec3
 // assembly. ComputeFrequencyResponse_Avx2 is the one lane that differs
 // numerically (it uses _mm256_fmadd_ps).
 
+import "math"
+
 // ComputeFrequencyResponse is aec3::ComputeFrequencyResponse (scalar).
 func ComputeFrequencyResponse(numPartitions int, H FirCoefficients, H2 [][FftLengthBy2Plus1]float32) {
 	for i := range H2 {
@@ -479,6 +481,106 @@ type AdaptiveFirFilter struct {
 	sizeChangeCounter             int
 	H                             FirCoefficients
 	partitionToConstrain          int
+
+	// Bookkeeping of the zero-gain skip (adaptAndUpdateSizeKnownRender) and
+	// of updateFrequencyResponse, for filters of at most
+	// afirTrackedPartitions partitions (tracked).
+	//
+	// negZero holds every partition that may hold a coefficient equal to
+	// -0: a partition outside it holds none. h2Stale holds every partition
+	// written since updateFrequencyResponse last computed its response.
+	tracked       bool
+	skipDisabled  bool // tests: always adapt, always compute every response
+	negZero       afirPartitionSet
+	h2Stale       afirPartitionSet
+	zeroGainSkips uint64 // adaptations skipped, for tests
+}
+
+// afirTrackedPartitions bounds the filter sizes the zero-gain skip handles.
+const afirTrackedPartitions = 256
+
+// afirPartitionSet is a set of partitions in [0, afirTrackedPartitions).
+type afirPartitionSet [afirTrackedPartitions / 64]uint64
+
+func (s *afirPartitionSet) add(p int)      { s[uint(p)>>6&3] |= 1 << (uint(p) & 63) }
+func (s *afirPartitionSet) remove(p int)   { s[uint(p)>>6&3] &^= 1 << (uint(p) & 63) }
+func (s *afirPartitionSet) has(p int) bool { return s[uint(p)>>6&3]>>(uint(p)&63)&1 != 0 }
+
+// afirBelowMask returns the elements of [0, n) that lie in word w.
+func afirBelowMask(w, n int) uint64 {
+	switch lo := w * 64; {
+	case n >= lo+64:
+		return ^uint64(0)
+	case n > lo:
+		return 1<<uint(n-lo) - 1
+	}
+	return 0
+}
+
+// addBelow adds [0, n).
+func (s *afirPartitionSet) addBelow(n int) {
+	for w := range s {
+		s[w] |= afirBelowMask(w, n)
+	}
+}
+
+// removeBelow removes [0, n).
+func (s *afirPartitionSet) removeBelow(n int) {
+	for w := range s {
+		s[w] &^= afirBelowMask(w, n)
+	}
+}
+
+// anyBelow reports whether the set meets [0, n).
+func (s *afirPartitionSet) anyBelow(n int) bool {
+	var acc uint64
+	for w := range s {
+		acc |= s[w] & afirBelowMask(w, n)
+	}
+	return acc != 0
+}
+
+// allBelow reports whether the set contains [0, n).
+func (s *afirPartitionSet) allBelow(n int) bool {
+	var acc uint64
+	for w := range s {
+		acc |= afirBelowMask(w, n) &^ s[w]
+	}
+	return acc == 0
+}
+
+// afirGainIsZero reports whether every element of g is +0 or -0.
+func afirGainIsZero(g *FftData) bool {
+	var acc uint32
+	for k := range g.Re {
+		acc |= math.Float32bits(g.Re[k]) | math.Float32bits(g.Im[k])
+	}
+	return acc<<1 == 0
+}
+
+// afirAllFinite reports whether no element of x is an infinity or a NaN.
+func afirAllFinite(x *[FftLengthBy2Plus1]float32) bool {
+	const exponent = 0x7f800000
+	for _, v := range x {
+		if math.Float32bits(v)&exponent == exponent {
+			return false
+		}
+	}
+	return true
+}
+
+// afirHoldsNegZero reports whether a coefficient of h is -0.
+func afirHoldsNegZero(h []FftData) bool {
+	const negZero = 0x80000000
+	for ch := range h {
+		c := &h[ch]
+		for k := range c.Re {
+			if math.Float32bits(c.Re[k]) == negZero || math.Float32bits(c.Im[k]) == negZero {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func NewAdaptiveFirFilter(maxSizePartitions, initialSizePartitions, sizeChangeDurationBlocks, numRenderChannels int, optimization Aec3Optimization) *AdaptiveFirFilter {
@@ -504,14 +606,39 @@ func (f *AdaptiveFirFilter) init(maxSizePartitions, initialSizePartitions, sizeC
 		H:                        FirCoefficients{numChannels: numRenderChannels, data: storage[:n:n]},
 	}
 	f.oneBySizeChangeDurationBlocks = 1 / float32(f.sizeChangeDurationBlocks)
-	afirZeroFilter(0, f.maxSizePartitions, f.H)
+	f.tracked = maxSizePartitions <= afirTrackedPartitions
+	f.zeroPartitions(0, f.maxSizePartitions)
 	f.SetSizePartitions(f.currentSizePartitions, true)
 }
 
 // HandleEchoPathChange clears the partitions beyond the current size.
 func (f *AdaptiveFirFilter) HandleEchoPathChange() {
-	afirZeroFilter(f.currentSizePartitions, f.maxSizePartitions, f.H)
+	f.zeroPartitions(f.currentSizePartitions, f.maxSizePartitions)
 }
+
+// zeroPartitions clears the partitions [from, to): they hold +0 only.
+func (f *AdaptiveFirFilter) zeroPartitions(from, to int) {
+	afirZeroFilter(from, to, f.H)
+	if f.tracked {
+		for p := from; p < to; p++ {
+			f.negZero.remove(p)
+			f.h2Stale.add(p)
+		}
+	}
+}
+
+// partitionWritten records that partition p was written with values that
+// may include -0.
+func (f *AdaptiveFirFilter) partitionWritten(p int) {
+	if f.tracked {
+		f.negZero.add(p)
+		f.h2Stale.add(p)
+	}
+}
+
+// ZeroGainSkipsForTesting returns the number of adaptations skipped because
+// the gain was zero.
+func (f *AdaptiveFirFilter) ZeroGainSkipsForTesting() uint64 { return f.zeroGainSkips }
 
 // SizePartitions returns the current filter size.
 func (f *AdaptiveFirFilter) SizePartitions() int { return f.currentSizePartitions }
@@ -529,7 +656,7 @@ func (f *AdaptiveFirFilter) SetSizePartitions(size int, immediateEffect bool) {
 		oldSizePartitions := f.currentSizePartitions
 		f.currentSizePartitions = f.targetSizePartitions
 		f.oldTargetSizePartitions = f.targetSizePartitions
-		afirZeroFilter(oldSizePartitions, f.currentSizePartitions, f.H)
+		f.zeroPartitions(oldSizePartitions, f.currentSizePartitions)
 		f.partitionToConstrain = afirMinSizeMinus1(f.partitionToConstrain, f.currentSizePartitions)
 		f.sizeChangeCounter = 0
 	} else {
@@ -552,7 +679,7 @@ func (f *AdaptiveFirFilter) updateSize() {
 		f.currentSizePartitions = f.targetSizePartitions
 		f.oldTargetSizePartitions = f.targetSizePartitions
 	}
-	afirZeroFilter(oldSizePartitions, f.currentSizePartitions, f.H)
+	f.zeroPartitions(oldSizePartitions, f.currentSizePartitions)
 }
 
 // Filter produces the filter output S.
@@ -589,16 +716,47 @@ func (f *AdaptiveFirFilter) AdaptWithImpulseResponse(renderBuffer *RenderBuffer,
 // be at least MaxFilterSizePartitions()) and fills it.
 func (f *AdaptiveFirFilter) ComputeFrequencyResponse(H2 *[][FftLengthBy2Plus1]float32) {
 	afirResize(H2, f.currentSizePartitions)
+	f.frequencyResponse(f.currentSizePartitions, f.H, *H2)
+}
+
+// frequencyResponse fills H2 with the response of the first numPartitions
+// partitions of H in the filter's lane.
+func (f *AdaptiveFirFilter) frequencyResponse(numPartitions int, H FirCoefficients, H2 [][FftLengthBy2Plus1]float32) {
 	switch f.optimization {
 	case OptSse2:
-		ComputeFrequencyResponseSse2(f.currentSizePartitions, f.H, *H2)
+		ComputeFrequencyResponseSse2(numPartitions, H, H2)
 	case OptAvx2:
-		ComputeFrequencyResponseAvx2(f.currentSizePartitions, f.H, *H2)
+		ComputeFrequencyResponseAvx2(numPartitions, H, H2)
 	case OptNeon:
-		ComputeFrequencyResponseNeon(f.currentSizePartitions, f.H, *H2)
+		ComputeFrequencyResponseNeon(numPartitions, H, H2)
 	default:
-		ComputeFrequencyResponse(f.currentSizePartitions, f.H, *H2)
+		ComputeFrequencyResponse(numPartitions, H, H2)
 	}
+}
+
+// updateFrequencyResponse is ComputeFrequencyResponse for a response array
+// that this method alone writes, call after call: the response of a
+// partition depends on that partition only, so the partitions that were not
+// written since the last call keep their response.
+//
+// h2Stale covers every write: adaptation that ran (all partitions),
+// constraining, scaling, SetFilter, and clearing. A partition that enters
+// the filter when it grows is cleared, so the element afirResize zeroes for
+// it is stale as well.
+func (f *AdaptiveFirFilter) updateFrequencyResponse(H2 *[][FftLengthBy2Plus1]float32) {
+	n := f.currentSizePartitions
+	if !f.tracked || f.skipDisabled || f.h2Stale.allBelow(n) {
+		f.ComputeFrequencyResponse(H2)
+		f.h2Stale.removeBelow(n)
+		return
+	}
+	afirResize(H2, n)
+	for p := 0; p < n; p++ {
+		if f.h2Stale.has(p) {
+			f.frequencyResponse(1, FirCoefficients{numChannels: f.H.numChannels, data: f.H.At(p)}, (*H2)[p:p+1])
+		}
+	}
+	f.h2Stale.removeBelow(n)
 }
 
 // afirResize mirrors std::vector::resize: grown elements are zero.
@@ -617,7 +775,46 @@ func afirResize[T any](v *[]T, n int) {
 }
 
 func (f *AdaptiveFirFilter) adaptAndUpdateSize(renderBuffer *RenderBuffer, G *FftData) {
+	f.adaptAndUpdateSizeKnownRender(renderBuffer, G, nil, 0)
+}
+
+// adaptAndUpdateSizeKnownRender is adaptAndUpdateSize for a caller that has
+// X2, the sum of the render spectra of the first x2Partitions partitions
+// (RenderBuffer.SpectralSum; nil when it has none). It skips the adaptation
+// when that provably leaves every coefficient as it is:
+//
+//   - Every lane adapts a coefficient h with products of render and gain
+//     values that it adds to or subtracts from h (fused or not). With a
+//     gain that is +0 or -0 everywhere and finite render values, every such
+//     product is a zero, and so is every sum or difference of them.
+//   - h plus or minus a zero is h, bit for bit, for every h except -0
+//     (-0 + +0 = +0). A NaN h keeps its payload: coefficients come out of
+//     arithmetic, so they are quiet NaNs.
+//   - The render values are finite when X2 is: a spectrum bin is
+//     re*re + im*im (or the fused form), which is an infinity or a NaN when
+//     re or im is, and the sum of such non-negative terms then stays one.
+//     X2 covers the partitions of the adaptation when the size after
+//     updateSize is at most x2Partitions and the spectrum ring holds the
+//     spectra of the FFT ring (RenderBuffer.SpectraMatchFfts).
+//   - Additions never produce -0 from an h that is not -0, so a partition
+//     gets a -0 only where it is written otherwise; those writes put it in
+//     negZero. The partitions in negZero that do hold a -0 are adapted as
+//     usual.
+func (f *AdaptiveFirFilter) adaptAndUpdateSizeKnownRender(renderBuffer *RenderBuffer, G *FftData,
+	X2 *[FftLengthBy2Plus1]float32, x2Partitions int) {
 	f.updateSize()
+	n := f.currentSizePartitions
+	if f.tracked && !f.skipDisabled && X2 != nil && n <= x2Partitions && afirGainIsZero(G) &&
+		renderBuffer.SpectraMatchFfts() && afirAllFinite(X2) {
+		f.zeroGainSkips++
+		if f.negZero.anyBelow(n) {
+			f.adaptNegZeroPartitions(renderBuffer, G, n)
+		}
+		return
+	}
+	if f.tracked {
+		f.h2Stale.addBelow(n)
+	}
 	switch f.optimization {
 	case OptSse2:
 		AdaptPartitionsSse2(renderBuffer, G, f.currentSizePartitions, f.H)
@@ -627,6 +824,36 @@ func (f *AdaptiveFirFilter) adaptAndUpdateSize(renderBuffer *RenderBuffer, G *Ff
 		AdaptPartitionsNeon(renderBuffer, G, f.currentSizePartitions, f.H)
 	default:
 		AdaptPartitions(renderBuffer, G, f.currentSizePartitions, f.H)
+	}
+}
+
+// adaptNegZeroPartitions adapts the partitions below n that hold a -0 and
+// takes the ones that hold none out of negZero.
+func (f *AdaptiveFirFilter) adaptNegZeroPartitions(renderBuffer *RenderBuffer, G *FftData, n int) {
+	data := renderBuffer.GetFftBuffer()
+	for p := 0; p < n; p++ {
+		if !f.negZero.has(p) {
+			continue
+		}
+		h := f.H.At(p)
+		if afirHoldsNegZero(h) {
+			// Partition p meets the render FFT p slots after the read
+			// position.
+			x := data.At((renderBuffer.Position() + p) % data.Size)
+			for ch := range h {
+				if f.optimization == OptNone {
+					afirAdaptAllGo(&x[ch], G, &h[ch])
+				} else {
+					afirAdaptBlock(f.optimization, &x[ch], G, &h[ch])
+					afirAdaptBinsGo(&x[ch], G, &h[ch], FftLengthBy2, FftLengthBy2Plus1)
+				}
+			}
+			f.h2Stale.add(p)
+			if afirHoldsNegZero(h) {
+				continue
+			}
+		}
+		f.negZero.remove(p)
 	}
 }
 
@@ -656,6 +883,7 @@ func (f *AdaptiveFirFilter) constrainAndUpdateImpulseResponse(impulseResponse *[
 		}
 		f.fft.Fft(&h, hp)
 	}
+	f.partitionWritten(f.partitionToConstrain)
 	f.partitionToConstrain = afirNextPartition(f.partitionToConstrain, f.currentSizePartitions)
 }
 
@@ -688,6 +916,8 @@ func afirConstrainPair(fft *aec3FftPair, refined *AdaptiveFirFilter, impulseResp
 		}
 		fft.Fft(hr, hc, hpr, hpc)
 	}
+	refined.partitionWritten(refined.partitionToConstrain)
+	coarse.partitionWritten(coarse.partitionToConstrain)
 	refined.partitionToConstrain = afirNextPartition(refined.partitionToConstrain, refined.currentSizePartitions)
 	coarse.partitionToConstrain = afirNextPartition(coarse.partitionToConstrain, coarse.currentSizePartitions)
 }
@@ -712,6 +942,7 @@ func (f *AdaptiveFirFilter) constrain() {
 		clear(h[FftLengthBy2:])
 		f.fft.Fft(&h, hp)
 	}
+	f.partitionWritten(f.partitionToConstrain)
 	f.partitionToConstrain = afirNextPartition(f.partitionToConstrain, f.currentSizePartitions)
 }
 
@@ -726,6 +957,10 @@ func (f *AdaptiveFirFilter) ScaleFilter(factor float32) {
 			hp.Im[i] *= factor
 		}
 	}
+	if f.tracked {
+		f.negZero.addBelow(f.maxSizePartitions)
+		f.h2Stale.addBelow(f.maxSizePartitions)
+	}
 }
 
 // SetFilter copies the first min(SizePartitions(), numPartitions) partitions
@@ -738,5 +973,6 @@ func (f *AdaptiveFirFilter) SetFilter(numPartitions int, H FirCoefficients) {
 			dst[ch].Re = src[ch].Re
 			dst[ch].Im = src[ch].Im
 		}
+		f.partitionWritten(p)
 	}
 }

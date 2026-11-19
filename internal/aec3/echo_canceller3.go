@@ -369,6 +369,12 @@ func (e *EchoCanceller3) processor() *BlockProcessor {
 }
 
 // SetBlockProcessorForTesting replaces the internal block processor.
+// ZeroGainSkipsForTesting returns the number of filter adaptations skipped
+// because the gain was zero (BlockProcessor.ZeroGainSkipsForTesting).
+func (e *EchoCanceller3) ZeroGainSkipsForTesting() uint64 {
+	return e.blockProcessor.ZeroGainSkipsForTesting()
+}
+
 func (e *EchoCanceller3) SetBlockProcessorForTesting(blockProcessor *BlockProcessor) {
 	e.blockProcessorForTesting = blockProcessor
 }

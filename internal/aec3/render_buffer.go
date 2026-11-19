@@ -6,6 +6,18 @@ type RenderBuffer struct {
 	spectrumBuffer *SpectrumBuffer
 	fftBuffer      *FftBuffer
 	renderActivity bool
+	// spectraMatchFfts: see SpectraMatchFfts. Set by the owner of the rings.
+	spectraMatchFfts bool
+}
+
+// SpectraMatchFfts reports whether every slot of the spectrum ring holds
+// FftData.Spectrum of the same slot of the FFT ring, with the two rings of
+// one size and read from the same position: the spectra SpectralSum adds
+// are then those of the FFTs the filters use. RenderDelayBuffer keeps its
+// rings that way; a RenderBuffer over other rings reports false.
+func (r *RenderBuffer) SpectraMatchFfts() bool {
+	return r.spectraMatchFfts && r.spectrumBuffer.Size == r.fftBuffer.Size &&
+		r.spectrumBuffer.Read == r.fftBuffer.Read
 }
 
 func NewRenderBuffer(blockBuffer *BlockBuffer, spectrumBuffer *SpectrumBuffer, fftBuffer *FftBuffer) *RenderBuffer {

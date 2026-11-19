@@ -112,6 +112,13 @@ func (p *BlockProcessor) delayController() *RenderDelayController {
 	return &p.ownDelayController
 }
 
+// ZeroGainSkipsForTesting returns the number of filter adaptations the
+// processor's own echo remover skipped because the gain was zero. Tests use
+// it to check that a scenario reaches the skip.
+func (p *BlockProcessor) ZeroGainSkipsForTesting() uint64 {
+	return p.ownEchoRemover.subtractor.ZeroGainSkipsForTesting()
+}
+
 // ProcessCapture processes a block of capture data. linearOutput is nil
 // when the linear filter output is not exported.
 func (p *BlockProcessor) ProcessCapture(echoPathGainChange, captureSignalSaturation bool,

@@ -81,6 +81,9 @@ func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, num
 	r.ffts = *NewFftBuffer(size, numRenderChannels)
 	r.delay, r.hasDelay = config.Delay.DefaultDelay, true
 	r.echoRemoverBuffer = *NewRenderBuffer(&r.blocks, &r.spectra, &r.ffts)
+	// insertBlock writes the FFT and its spectrum to the same slot, and the
+	// indices of the two rings move together.
+	r.echoRemoverBuffer.spectraMatchFfts = true
 	r.lowRate = DownsampledRenderBuffer{ringIndex: ringIndex{Size: lowRateSize}, Buffer: samples[blockSamples:]}
 	m := &config.Delay.RenderAlignmentMixing
 	r.renderMixer.init(numRenderChannels, m.Downmix, m.AdaptiveSelection, m.ActivityPowerThreshold,
