@@ -567,6 +567,15 @@ func TestDlyAvx2RefFlaggedSums(t *testing.T) {
 			want[k%16] = fmaf(h[k], x[k], want[k%16])
 		}
 		dlyRequireBits(t, "dot", got[:], want[:])
+		// The Wide references read the render samples widened.
+		xw := make([]float64, n)
+		xaw := make([]float64, n)
+		for k := range xw {
+			xw[k], xaw[k] = float64(x[k]), float64(xa[k])
+		}
+		got = acc0
+		dlyDotSAvx2Wide(h, xw, &got)
+		dlyRequireBits(t, "dot wide", got[:], want[:])
 
 		// Squares: ties at the tie elements when their lane's sum is on the
 		// grid.
@@ -577,6 +586,9 @@ func TestDlyAvx2RefFlaggedSums(t *testing.T) {
 			want[k%16] = fmaf(x[k], x[k], want[k%16])
 		}
 		dlyRequireBits(t, "sq", got[:], want[:])
+		got = acc0
+		dlySqAvx2Wide(xw, &got)
+		dlyRequireBits(t, "sq wide", got[:], want[:])
 
 		// Update.
 		hA := append([]float32(nil), h...)
@@ -598,6 +610,11 @@ func TestDlyAvx2RefFlaggedSums(t *testing.T) {
 		}
 		dlyRequireBits(t, "axpyDot h", hA, hW)
 		dlyRequireBits(t, "axpyDot", got[:], want[:])
+		got = acc0
+		hA = append(hA[:0], h...)
+		dlyAxpyFmaDotSAvx2Wide(hA, xaw, xw, alpha, &got)
+		dlyRequireBits(t, "axpyDot wide h", hA, hW)
+		dlyRequireBits(t, "axpyDot wide", got[:], want[:])
 
 		// Accumulated error, with and without the update: the error of a
 		// group is a tie when its sum is zero and y is the tie's root.
@@ -643,5 +660,59 @@ func TestDlyAvx2RefFlaggedSums(t *testing.T) {
 	}
 	if flagged < trials {
 		t.Fatalf("only %d flagged sums in %d trials", flagged, trials)
+	}
+}
+
+// TestDlyMatchedFilterWideUpdateMatchesNarrow drives two AVX2-lane matched
+// filters side by side, one with room for the widened render samples and
+// one without, and compares their state after every block. The builds that
+// do not widen the samples run the same path twice.
+func TestDlyMatchedFilterWideUpdateMatchesNarrow(t *testing.T) {
+	numBlocks := 1500
+	if testing.Short() {
+		numBlocks = 300
+	}
+	for _, factor := range []int{4, 8} {
+		for _, preEcho := range []bool{false, true} {
+			limit := float32(150)
+			if factor == 8 {
+				limit = 20
+			}
+			sub := BlockSize / factor
+			newFilter := func() *MatchedFilter {
+				return NewMatchedFilter(OptAvx2, sub, MatchedFilterWindowSizeSubBlocks, 5,
+					MatchedFilterAlignmentShiftSizeSubBlocks, limit, 0.7, 0.3, 0.2, preEcho)
+			}
+			wide, narrow := newFilter(), newFilter()
+			room := new(dlyWide)
+			s := newDlyQuietScene(int64(700+factor), factor, 5, math.Float32frombits(wide.quietLimitBits))
+			reported := 0
+			for blk := 0; blk < numBlocks; blk++ {
+				mode := dlyQuietLoud
+				if blk%400 > 300 {
+					mode = dlyQuietBarelyAbove
+				}
+				y := s.block(mode, limit)
+				if s.rng.Intn(40) == 0 {
+					y[s.rng.Intn(len(y))] = 32700
+				}
+				slow := s.rng.Intn(3) == 0
+				wide.UpdateWide(s.buf, y, slow, room)
+				narrow.Update(s.buf, y, slow)
+				if d := dlyQuietStateDiff(wide, narrow); d != "" {
+					t.Fatalf("ds%d preEcho %v block %d: %s", factor, preEcho, blk, d)
+				}
+				if narrow.hasReportedLagEstimate {
+					reported++
+				}
+				if s.rng.Intn(500) == 0 {
+					wide.Reset(false)
+					narrow.Reset(false)
+				}
+			}
+			if reported < numBlocks/10 {
+				t.Errorf("ds%d preEcho %v: only %d lag reports", factor, preEcho, reported)
+			}
+		}
 	}
 }

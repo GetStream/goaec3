@@ -362,6 +362,38 @@ func dlyX2WrappedSq(g int, x []float32, hSize, lo, r int, scratch []float32, out
 	}
 }
 
+// dlyX2SumsWide is dlyX2Sums of the AVX2 lane's main core on the widened
+// samples xw.
+func dlyX2SumsWide(xw []float64, n, r int, out *[dlyX2Run]float32) {
+	var lanes [dlyX2Run + 15]float32
+	last := r - 1
+	for o := 0; ; o += 16 {
+		o = min(o, last)
+		var acc [16]float32
+		dlySqAvx2Wide(xw[o:o+n], &acc)
+		copy(lanes[o:o+16], acc[:])
+		if o == last {
+			break
+		}
+	}
+	dlyX2Reduce(16, false, &lanes, r, out)
+}
+
+// dlyX2WrappedWide is dlyX2WrappedRef of the AVX2 lane with the whole
+// groups read from the widened samples xw.
+func dlyX2WrappedWide(x []float32, xw []float64, hSize, lo, r int, out *[dlyX2Run]float32) {
+	for t := 0; t < r; t++ {
+		a := lo + t
+		chunk1 := min(hSize, len(x)-a)
+		v1 := chunk1 &^ 15
+		v2 := (hSize - chunk1) &^ 15
+		var q [16]float32
+		dlySqAvx2Wide(xw[a:a+v1], &q)
+		dlySqAvx2Wide(xw[:v2], &q)
+		out[t] = dlyReduceX2(16, false, &q, dlyX2Tails(16, x, hSize, a))
+	}
+}
+
 // dlyX2Lanes2Ref is dlyX2Lanes for two stretches of the same length.
 func dlyX2Lanes2Ref(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
 	dlyX2Lanes(g, xA, n, lanesA)
@@ -613,6 +645,10 @@ type dlyLaneFilter struct {
 	// sq, when not nil, is scratch for the x*x sums of the unfused lanes
 	// from a table of squares (dlyX2SqScratch(len(h)) values).
 	sq []float32
+	// xw, when not nil, holds the render samples widened to float64
+	// (xw[k] = float64(x[k]) for all of x); the AVX2 lane then reads its
+	// whole groups from it (the Wide references).
+	xw []float64
 	// skipIdle lets the core leave out the h*x sums of a call in which no
 	// sample updates the filter (see the idle-filter skip); errorSum is then
 	// not computed, and wasIdle reports it.
@@ -689,7 +725,9 @@ func (f *dlyLaneFilter) x2Of(g int, x []float32, left int) float32 {
 	hSize, xSize, xs := len(f.h), len(x), f.xStart
 	if xs+hSize <= xSize && hSize&(g-1) == 0 {
 		if lo, r, ok := f.x2TableRun(g, x, left); ok {
-			if f.sq != nil && g == 4 {
+			if f.xw != nil {
+				dlyX2SumsWide(f.xw[lo:], hSize, r, &f.x2)
+			} else if f.sq != nil && g == 4 {
 				// Eight chains of additions against four of products and
 				// additions; the SSE2 lane has eight chains either way.
 				dlyX2SumsSq(g, x[lo:], hSize, r, f.sq, &f.x2)
@@ -703,7 +741,9 @@ func (f *dlyLaneFilter) x2Of(g int, x []float32, left int) float32 {
 	if xs < f.x2Lo || xs >= f.x2Hi {
 		r := min(left, xs+1, dlyX2Run)
 		lo := xs + 1 - r
-		if f.sq != nil && hSize+r-1 <= xSize {
+		if f.xw != nil {
+			dlyX2WrappedWide(x, f.xw, hSize, lo, r, &f.x2)
+		} else if f.sq != nil && hSize+r-1 <= xSize {
 			dlyX2WrappedSq(g, x, hSize, lo, r, f.sq, &f.x2)
 		} else {
 			dlyX2Wrapped(g, x, hSize, lo, r, &f.x2)
@@ -785,6 +825,20 @@ func (f *dlyLaneFilter) prepare(g int, x []float32, left int) {
 // stretches.
 func (f *dlyLaneFilter) run(g int, x []float32) {
 	h := f.h
+	if xw := f.xw; xw != nil {
+		dlyZeroAcc(&f.acc)
+		for i := 0; i < f.np; i++ {
+			p := &f.pieces[i]
+			hk, xb := h[p.k:p.k+p.n], xw[p.xb:p.xb+p.n]
+			if p.upd {
+				dlyAxpyFmaDotSAvx2Wide(hk, xw[p.xa:p.xa+p.n], xb, f.pend.alpha, &f.acc)
+			} else {
+				dlyDotSAvx2Wide(hk, xb, &f.acc)
+			}
+		}
+		f.s = dlyReduceS(16, &f.acc, f.sTail)
+		return
+	}
 	if p := &f.pieces[0]; f.np == 1 && p.n == len(h) {
 		// One stretch over all of h and no tails: the Sum kernels start from
 		// zero accumulators and reduce in registers.
@@ -1021,6 +1075,17 @@ func dlyCoreDirect(g int, fa, fb *dlyLaneFilter, pair bool, x2SumThreshold, smoo
 // filter.
 func (f *dlyLaneFilter) directSum(g int, x []float32) {
 	h := f.h
+	if xw := f.xw; xw != nil {
+		dlyZeroAcc(&f.acc)
+		xb := xw[f.xStart : f.xStart+len(h)]
+		if f.pend.active {
+			dlyAxpyFmaDotSAvx2Wide(h, xw[f.pendStart:f.pendStart+len(h)], xb, f.pend.alpha, &f.acc)
+		} else {
+			dlyDotSAvx2Wide(h, xb, &f.acc)
+		}
+		f.s = dlyReduceS(16, &f.acc, 0)
+		return
+	}
 	xb := x[f.xStart : f.xStart+len(h)]
 	if f.pend.active {
 		f.s = dlyAxpyDotSSum(g, h, x[f.pendStart:f.pendStart+len(h)], xb, f.pend.alpha)
@@ -1044,16 +1109,21 @@ func dlyCoreLane(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y
 // their x*x sums from a table of squares.
 func dlyCoreLaneSq(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, sq, y, h []float32,
 	filtersUpdated *bool, errorSum *float32) {
-	dlyCoreLaneSkip(g, xStartIndex, x2SumThreshold, smoothing, x, sq, y, h, filtersUpdated, errorSum, false)
+	dlyCoreLaneSkip(g, xStartIndex, x2SumThreshold, smoothing, x, nil, sq, y, h, filtersUpdated, errorSum, false)
 }
 
 // dlyCoreLaneSkip is dlyCoreLaneSq that, with skipIdle, leaves errorSum as
-// it is when no sample updates the filter, and reports that.
-func dlyCoreLaneSkip(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, sq, y, h []float32,
-	filtersUpdated *bool, errorSum *float32, skipIdle bool) bool {
+// it is when no sample updates the filter, and reports that. With xw, which
+// holds all of x widened to float64, the AVX2 lane (g = 16) reads the render
+// samples of its whole groups in float64.
+func dlyCoreLaneSkip(g int, xStartIndex int, x2SumThreshold, smoothing float32, x []float32, xw []float64,
+	sq, y, h []float32, filtersUpdated *bool, errorSum *float32, skipIdle bool) bool {
 	var f dlyLaneFilter
 	f.h, f.xStart, f.errorSum = h, xStartIndex, *errorSum
 	f.skipIdle = skipIdle
+	if g == 16 && len(xw) == len(x) && len(x) > 0 {
+		f.xw = xw
+	}
 	if g != 16 && len(sq) >= dlyX2SqScratch(len(h)) {
 		f.sq = sq
 	}
@@ -1703,17 +1773,19 @@ func dlyLaneGroupSize(optimization Aec3Optimization) int {
 
 func (m *MatchedFilter) runCore(xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32, computePreEcho bool) {
-	m.runCoreSkip(xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum, computePreEcho, false)
+	m.runCoreSkip(xStartIndex, x2SumThreshold, smoothing, x, nil, y, h, filtersUpdated, errorSum, computePreEcho,
+		false)
 }
 
 // runCoreSkip is runCore; with skipIdle, a core that has its x*x sums
 // before its h*x sums does not compute the latter, nor errorSum, when no
-// sample updates the filter (see the idle-filter skip).
-func (m *MatchedFilter) runCoreSkip(xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
-	filtersUpdated *bool, errorSum *float32, computePreEcho, skipIdle bool) {
+// sample updates the filter (see the idle-filter skip). xw, when not nil,
+// is x widened to float64 for the pure-Go core of the AVX2 lane.
+func (m *MatchedFilter) runCoreSkip(xStartIndex int, x2SumThreshold, smoothing float32, x []float32,
+	xw []float64, y, h []float32, filtersUpdated *bool, errorSum *float32, computePreEcho, skipIdle bool) {
 	if dlyLanesPureGo && !computePreEcho && m.optimization != OptNone {
 		// The scratch is free: only the accumulated-error cores use it.
-		if dlyCoreLaneSkip(dlyLaneGroupSize(m.optimization), xStartIndex, x2SumThreshold, smoothing, x,
+		if dlyCoreLaneSkip(dlyLaneGroupSize(m.optimization), xStartIndex, x2SumThreshold, smoothing, x, xw,
 			m.scratchMemory(), y, h, filtersUpdated, errorSum, m.quietSkip && skipIdle) {
 			m.quietFilterSkips++
 		}
@@ -1781,7 +1853,7 @@ func (m *MatchedFilter) runCoresPaired(renderBuffer *DownsampledRenderBuffer, y 
 		first = -1
 	}
 	if first >= 0 {
-		m.runCoreSkip(m.xStartIndex(renderBuffer, first), x2SumThreshold, smoothing, x, y, m.filter(first),
+		m.runCoreSkip(m.xStartIndex(renderBuffer, first), x2SumThreshold, smoothing, x, nil, y, m.filter(first),
 			&updated[first], &errorSums[first], false, true)
 	}
 }
@@ -1840,6 +1912,14 @@ func (m *MatchedFilter) runCoresScalar(renderBuffer *DownsampledRenderBuffer, y 
 
 // Update updates the correlation with the values in the capture buffer.
 func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []float32, useSlowSmoothing bool) {
+	m.UpdateWide(renderBuffer, capture, useSlowSmoothing, nil)
+}
+
+// UpdateWide is Update with room for the render samples widened to float64,
+// which the pure-Go core of the AVX2 lane reads in the builds that run it
+// (see dlyWide); wide may be nil.
+func (m *MatchedFilter) UpdateWide(renderBuffer *DownsampledRenderBuffer, capture []float32, useSlowSmoothing bool,
+	wide *dlyWide) {
 	y := capture[:m.subBlockSize]
 
 	smoothing := m.smoothingFast
@@ -1866,6 +1946,10 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 			dlyQuietSkips.Add(1)
 		}
 		return
+	}
+	var xw []float64
+	if m.optimization == OptAvx2 && wide != nil {
+		xw = wide.fill(renderBuffer.Buffer)
 	}
 	alignmentShift := 0
 	// The peak of filter peakFilter and of the filter before the current
@@ -1895,7 +1979,7 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 		} else {
 			computePreEcho := m.detectPreEcho && n == m.lastDetectedBestLagFilter
 			if computePreEcho || !m.filterIsQuiet(renderBuffer, n) {
-				m.runCoreSkip(m.xStartIndex(renderBuffer, n), x2SumThreshold, smoothing, renderBuffer.Buffer, y,
+				m.runCoreSkip(m.xStartIndex(renderBuffer, n), x2SumThreshold, smoothing, renderBuffer.Buffer, xw, y,
 					m.filter(n), &filtersUpdated, &errorSum, computePreEcho, true)
 			}
 		}

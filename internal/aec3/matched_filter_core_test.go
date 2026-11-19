@@ -301,7 +301,21 @@ func TestDlyMatchedFilterCoreLanesMatchReference(t *testing.T) {
 				t.Fatalf("opt %d trial %d: updated %v/%v errorSum %v/%v", opt, trial, updA, updWant, esA, esWant)
 			}
 
-			if opt != OptAvx2 {
+			if opt == OptAvx2 {
+				// The same core on the widened render samples.
+				xw := make([]float64, len(c.x))
+				for k, v := range c.x {
+					xw[k] = float64(v)
+				}
+				hW := append([]float32(nil), c.h...)
+				var updW bool
+				esW := es0
+				dlyCoreLaneSkip(g, c.xs, c.thr, 0.7, c.x, xw, nil, c.y, hW, &updW, &esW, false)
+				dlyRequireBits(t, "wide h", hW, hWant)
+				if updW != updWant || math.Float32bits(esW) != math.Float32bits(esWant) {
+					t.Fatalf("wide trial %d: updated %v/%v errorSum %v/%v", trial, updW, updWant, esW, esWant)
+				}
+			} else {
 				// The same core with x*x from a table of squares.
 				sq := dlyRandSlice(rng, dlyX2SqScratch(len(c.h)), 1)
 				hS := append([]float32(nil), c.h...)
@@ -428,14 +442,28 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 		{"Avx2", OptAvx2, 100, false}, {"NeonWrap", OptNeon, len(x) - 300, false},
 		{"Sse2Wrap", OptSse2, len(x) - 300, false}, {"Avx2Wrap", OptAvx2, len(x) - 300, false},
 		{"NeonAccErr", OptNeon, 100, true}, {"Sse2AccErr", OptSse2, 100, true}, {"Avx2AccErr", OptAvx2, 100, true},
+		{"Avx2Wide", OptAvx2, 100, false}, {"Avx2WideWrap", OptAvx2, len(x) - 300, false},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			mf := NewMatchedFilter(tc.opt, 16, 32, 5, 24, 150, 0.7, 0.7, 0.2, true)
 			h := make([]float32, len(h0))
 			var updated bool
 			var errSum float32
+			var xw []float64
+			if tc.name == "Avx2Wide" || tc.name == "Avx2WideWrap" {
+				// The render samples widened, as Update has them in the
+				// builds that run this core.
+				xw = make([]float64, len(x))
+				for k, v := range x {
+					xw[k] = float64(v)
+				}
+			}
 			for i := 0; i < b.N; i++ {
 				copy(h, h0)
+				if xw != nil {
+					dlyCoreLaneSkip(16, tc.startIdx, 1, 0.7, x, xw, nil, y, h, &updated, &errSum, false)
+					continue
+				}
 				mf.runCore(tc.startIdx, 1, 0.7, x, y, h, &updated, &errSum, tc.accErr)
 			}
 		})

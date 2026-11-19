@@ -52,13 +52,21 @@ func (e *EchoPathDelayEstimator) Reset(resetDelayConfidence bool) {
 
 // EstimateDelay produces a delay estimate (in samples) if one is available.
 func (e *EchoPathDelayEstimator) EstimateDelay(renderBuffer *DownsampledRenderBuffer, capture *Block) (DelayEstimate, bool) {
+	return e.EstimateDelayWide(renderBuffer, capture, nil)
+}
+
+// EstimateDelayWide is EstimateDelay with the room the matched filter can
+// use for widened render samples (MatchedFilter.UpdateWide); wide may be nil.
+func (e *EchoPathDelayEstimator) EstimateDelayWide(renderBuffer *DownsampledRenderBuffer, capture *Block,
+	wide *dlyWide) (DelayEstimate, bool) {
 	var downsampledCaptureData [BlockSize]float32
 	downsampledCapture := downsampledCaptureData[:e.subBlockSize]
 
 	var downmixedCapture [BlockSize]float32
 	e.captureMixer.ProduceOutput(capture, downmixedCapture[:])
 	e.captureDecimator.Decimate(downmixedCapture[:], downsampledCapture)
-	e.matchedFilter.Update(renderBuffer, downsampledCapture, e.matchedFilterLagAggregator.ReliableDelayFound())
+	e.matchedFilter.UpdateWide(renderBuffer, downsampledCapture, e.matchedFilterLagAggregator.ReliableDelayFound(),
+		wide)
 
 	aggregated, ok := e.matchedFilterLagAggregator.Aggregate(e.matchedFilter.GetBestLagEstimate())
 

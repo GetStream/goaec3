@@ -448,6 +448,327 @@ func dlySqAvx2Ref(x []float32, acc *[16]float32) {
 	dlyDotSAvx2Ref(x, x, acc)
 }
 
+// The Wide references are the AVX2 lane references on a float64 copy of the
+// render samples (x[k] widened, an exact conversion): the loops load a
+// float64 where the others load and widen a float32. A caller that reads
+// every render sample many times, as the matched filters of one block do,
+// widens each once.
+
+// dlyDotSAvx2Wide is dlyDotSAvx2Ref with x widened.
+func dlyDotSAvx2Wide(h []float32, x []float64, acc *[16]float32) {
+	n := len(h) &^ 15
+	h = h[:n:n]
+	x = x[:n:n]
+	if n == 0 {
+		return
+	}
+	q := 0
+pass:
+	for ; q < 16; q += 8 {
+		a := (*[8]float32)(acc[q : q+8])
+		s0, s1, s2, s3, s4, s5, s6, s7 := float64(a[0]), float64(a[1]), float64(a[2]), float64(a[3]), float64(a[4]), float64(a[5]), float64(a[6]), float64(a[7])
+		for k := q; k < len(h)-7; k += 16 {
+			hh := (*[8]float32)(h[k : k+8])
+			xx := (*[8]float64)(x[k : k+8])
+			u0 := float64(hh[0])*xx[0] + s0
+			s0 = float64(float32(u0))
+			if fmafTie(u0, s0) {
+				break pass
+			}
+			u1 := float64(hh[1])*xx[1] + s1
+			s1 = float64(float32(u1))
+			if fmafTie(u1, s1) {
+				break pass
+			}
+			u2 := float64(hh[2])*xx[2] + s2
+			s2 = float64(float32(u2))
+			if fmafTie(u2, s2) {
+				break pass
+			}
+			u3 := float64(hh[3])*xx[3] + s3
+			s3 = float64(float32(u3))
+			if fmafTie(u3, s3) {
+				break pass
+			}
+			u4 := float64(hh[4])*xx[4] + s4
+			s4 = float64(float32(u4))
+			if fmafTie(u4, s4) {
+				break pass
+			}
+			u5 := float64(hh[5])*xx[5] + s5
+			s5 = float64(float32(u5))
+			if fmafTie(u5, s5) {
+				break pass
+			}
+			u6 := float64(hh[6])*xx[6] + s6
+			s6 = float64(float32(u6))
+			if fmafTie(u6, s6) {
+				break pass
+			}
+			u7 := float64(hh[7])*xx[7] + s7
+			s7 = float64(float32(u7))
+			if fmafTie(u7, s7) {
+				break pass
+			}
+		}
+		a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7] = float32(s0), float32(s1), float32(s2), float32(s3), float32(s4), float32(s5), float32(s6), float32(s7)
+	}
+	if q < 16 {
+		dlyDotSAvx2WideFrom(h, x, acc, q)
+	}
+}
+
+// dlyDotSAvx2WideFrom finishes dlyDotSAvx2Wide from the pass that starts at
+// lane q, whose accumulators acc holds as they were before the pass.
+//
+//go:noinline
+func dlyDotSAvx2WideFrom(h []float32, x []float64, acc *[16]float32, q int) {
+	for ; q < 16; q += 8 {
+		for k := q; k < len(h)-7; k += 16 {
+			for j := 0; j < 8; j++ {
+				acc[q+j] = fmaf(h[k+j], float32(x[k+j]), acc[q+j])
+			}
+		}
+	}
+}
+
+// dlySqAvx2Wide is dlySqAvx2Ref with x widened.
+func dlySqAvx2Wide(x []float64, acc *[16]float32) {
+	n := len(x) &^ 15
+	x = x[:n:n]
+	if n == 0 {
+		return
+	}
+	q := 0
+pass:
+	for ; q < 16; q += 8 {
+		a := (*[8]float32)(acc[q : q+8])
+		s0, s1, s2, s3, s4, s5, s6, s7 := float64(a[0]), float64(a[1]), float64(a[2]), float64(a[3]), float64(a[4]), float64(a[5]), float64(a[6]), float64(a[7])
+		for k := q; k < len(x)-7; k += 16 {
+			xx := (*[8]float64)(x[k : k+8])
+			u0 := xx[0]*xx[0] + s0
+			s0 = float64(float32(u0))
+			if fmafTie(u0, s0) {
+				break pass
+			}
+			u1 := xx[1]*xx[1] + s1
+			s1 = float64(float32(u1))
+			if fmafTie(u1, s1) {
+				break pass
+			}
+			u2 := xx[2]*xx[2] + s2
+			s2 = float64(float32(u2))
+			if fmafTie(u2, s2) {
+				break pass
+			}
+			u3 := xx[3]*xx[3] + s3
+			s3 = float64(float32(u3))
+			if fmafTie(u3, s3) {
+				break pass
+			}
+			u4 := xx[4]*xx[4] + s4
+			s4 = float64(float32(u4))
+			if fmafTie(u4, s4) {
+				break pass
+			}
+			u5 := xx[5]*xx[5] + s5
+			s5 = float64(float32(u5))
+			if fmafTie(u5, s5) {
+				break pass
+			}
+			u6 := xx[6]*xx[6] + s6
+			s6 = float64(float32(u6))
+			if fmafTie(u6, s6) {
+				break pass
+			}
+			u7 := xx[7]*xx[7] + s7
+			s7 = float64(float32(u7))
+			if fmafTie(u7, s7) {
+				break pass
+			}
+		}
+		a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7] = float32(s0), float32(s1), float32(s2), float32(s3), float32(s4), float32(s5), float32(s6), float32(s7)
+	}
+	if q < 16 {
+		dlySqAvx2WideFrom(x, acc, q)
+	}
+}
+
+// dlySqAvx2WideFrom finishes dlySqAvx2Wide from the pass that starts at
+// lane q, whose accumulators acc holds as they were before the pass.
+//
+//go:noinline
+func dlySqAvx2WideFrom(x []float64, acc *[16]float32, q int) {
+	for ; q < 16; q += 8 {
+		for k := q; k < len(x)-7; k += 16 {
+			for j := 0; j < 8; j++ {
+				acc[q+j] = fmaf(float32(x[k+j]), float32(x[k+j]), acc[q+j])
+			}
+		}
+	}
+}
+
+// dlyAxpyFmaDotSAvx2Wide is dlyAxpyFmaDotSAvx2Ref with xa and xb widened.
+func dlyAxpyFmaDotSAvx2Wide(h []float32, xa, xb []float64, alpha float32, acc *[16]float32) {
+	n := len(h) &^ 15
+	h = h[:n:n]
+	xa = xa[:n:n]
+	xb = xb[:n:n]
+	if n == 0 {
+		return
+	}
+	al := float64(alpha)
+	// On a flagged sum, the pass has updated its elements of h before
+	// element e and none after.
+	q, e := 0, 0
+pass:
+	for ; q < 16; q += 8 {
+		a := (*[8]float32)(acc[q : q+8])
+		s0, s1, s2, s3, s4, s5, s6, s7 := float64(a[0]), float64(a[1]), float64(a[2]), float64(a[3]), float64(a[4]), float64(a[5]), float64(a[6]), float64(a[7])
+		for k := q; k < len(h)-7; k += 16 {
+			hh := (*[8]float32)(h[k : k+8])
+			aa := (*[8]float64)(xa[k : k+8])
+			bb := (*[8]float64)(xb[k : k+8])
+			v0 := aa[0]*al + float64(hh[0])
+			h0 := float32(v0)
+			g0 := float64(h0)
+			u0 := g0*bb[0] + s0
+			s0 = float64(float32(u0))
+			if fmafTie(v0, g0) {
+				e = k + 0
+				break pass
+			}
+			if fmafTie(u0, s0) {
+				e = k + 0
+				break pass
+			}
+			hh[0] = h0
+			v1 := aa[1]*al + float64(hh[1])
+			h1 := float32(v1)
+			g1 := float64(h1)
+			u1 := g1*bb[1] + s1
+			s1 = float64(float32(u1))
+			if fmafTie(v1, g1) {
+				e = k + 1
+				break pass
+			}
+			if fmafTie(u1, s1) {
+				e = k + 1
+				break pass
+			}
+			hh[1] = h1
+			v2 := aa[2]*al + float64(hh[2])
+			h2 := float32(v2)
+			g2 := float64(h2)
+			u2 := g2*bb[2] + s2
+			s2 = float64(float32(u2))
+			if fmafTie(v2, g2) {
+				e = k + 2
+				break pass
+			}
+			if fmafTie(u2, s2) {
+				e = k + 2
+				break pass
+			}
+			hh[2] = h2
+			v3 := aa[3]*al + float64(hh[3])
+			h3 := float32(v3)
+			g3 := float64(h3)
+			u3 := g3*bb[3] + s3
+			s3 = float64(float32(u3))
+			if fmafTie(v3, g3) {
+				e = k + 3
+				break pass
+			}
+			if fmafTie(u3, s3) {
+				e = k + 3
+				break pass
+			}
+			hh[3] = h3
+			v4 := aa[4]*al + float64(hh[4])
+			h4 := float32(v4)
+			g4 := float64(h4)
+			u4 := g4*bb[4] + s4
+			s4 = float64(float32(u4))
+			if fmafTie(v4, g4) {
+				e = k + 4
+				break pass
+			}
+			if fmafTie(u4, s4) {
+				e = k + 4
+				break pass
+			}
+			hh[4] = h4
+			v5 := aa[5]*al + float64(hh[5])
+			h5 := float32(v5)
+			g5 := float64(h5)
+			u5 := g5*bb[5] + s5
+			s5 = float64(float32(u5))
+			if fmafTie(v5, g5) {
+				e = k + 5
+				break pass
+			}
+			if fmafTie(u5, s5) {
+				e = k + 5
+				break pass
+			}
+			hh[5] = h5
+			v6 := aa[6]*al + float64(hh[6])
+			h6 := float32(v6)
+			g6 := float64(h6)
+			u6 := g6*bb[6] + s6
+			s6 = float64(float32(u6))
+			if fmafTie(v6, g6) {
+				e = k + 6
+				break pass
+			}
+			if fmafTie(u6, s6) {
+				e = k + 6
+				break pass
+			}
+			hh[6] = h6
+			v7 := aa[7]*al + float64(hh[7])
+			h7 := float32(v7)
+			g7 := float64(h7)
+			u7 := g7*bb[7] + s7
+			s7 = float64(float32(u7))
+			if fmafTie(v7, g7) {
+				e = k + 7
+				break pass
+			}
+			if fmafTie(u7, s7) {
+				e = k + 7
+				break pass
+			}
+			hh[7] = h7
+		}
+		a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7] = float32(s0), float32(s1), float32(s2), float32(s3), float32(s4), float32(s5), float32(s6), float32(s7)
+	}
+	if q < 16 {
+		dlyAxpyFmaDotSAvx2WideFrom(h, xa, xb, alpha, acc, q, e)
+	}
+}
+
+// dlyAxpyFmaDotSAvx2WideFrom finishes dlyAxpyFmaDotSAvx2Wide from the pass
+// that starts at lane q: acc holds the accumulators as they were before the
+// pass, and the pass has updated its elements of h before element e and
+// none after.
+//
+//go:noinline
+func dlyAxpyFmaDotSAvx2WideFrom(h []float32, xa, xb []float64, alpha float32, acc *[16]float32, q, e int) {
+	for ; q < 16; q += 8 {
+		for k := q; k < len(h)-7; k += 16 {
+			for j := 0; j < 8; j++ {
+				if k+j >= e {
+					h[k+j] = fmaf(float32(xa[k+j]), alpha, h[k+j])
+				}
+				acc[q+j] = fmaf(h[k+j], float32(xb[k+j]), acc[q+j])
+			}
+		}
+		e = 0
+	}
+}
+
 // dlyAccErrNeonRef runs the filter loop of
 // MatchedFilterCoreWithAccumulatedError_NEON for one capture sample over
 // len(h)/4 groups, without its x*x accumulation (see dlySqNeonRef): it adds

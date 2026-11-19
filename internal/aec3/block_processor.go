@@ -37,6 +37,11 @@ type BlockProcessor struct {
 	captureCallCounter     int
 	estimatedDelay         DelayEstimate
 	hasEstimatedDelay      bool
+
+	// delayWide is room for the matched filter of the delay controller
+	// (RenderDelayController.GetDelayWide). It has no pointers and comes
+	// last.
+	delayWide dlyWide
 }
 
 // blockProcessorComponents are the components handed to
@@ -173,8 +178,8 @@ func (p *BlockProcessor) ProcessCapture(echoPathGainChange, captureSignalSaturat
 	if hasDelayEstimator {
 		// Compute and apply the render delay required to achieve proper
 		// signal alignment.
-		p.estimatedDelay, p.hasEstimatedDelay = p.delayController().GetDelay(
-			p.renderBuffer().GetDownsampledRenderBuffer(), p.renderBuffer().Delay(), captureBlock)
+		p.estimatedDelay, p.hasEstimatedDelay = p.delayController().GetDelayWide(
+			p.renderBuffer().GetDownsampledRenderBuffer(), p.renderBuffer().Delay(), captureBlock, &p.delayWide)
 
 		if p.hasEstimatedDelay {
 			if p.renderBuffer().AlignFromDelay(p.estimatedDelay.Delay) {

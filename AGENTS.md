@@ -139,6 +139,12 @@ frame (`matched_filter_kernels.go`, `matched_filter_scalar.go`).
   per fused update and accumulation, against eight for the unfused lanes):
   a form with fewer conversions or loads is faster in proportion, a form
   that adds a store and a load to convert in place is slower.
+- Loops that read an operand many times read a float64 copy that is widened
+  once (`dlyWide`: the downsampled render buffer, once per block). The copy
+  is a pointer-free array that is the last field of the block processor and
+  reaches the matched filter as an argument (`GetDelayWide`), so it adds no
+  heap object and no pointer word and sits behind the canceller's last
+  pointer.
 - amd64 has fifteen float registers, and the compiler schedules a value
   without a use in its own basic block (the addition of an accumulator)
   after every value that has one (the products). A block with eight chains

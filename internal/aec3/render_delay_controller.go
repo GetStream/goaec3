@@ -70,9 +70,18 @@ func (c *RenderDelayController) LogRenderCall() {}
 // returns the render delay buffer delay in blocks, if any.
 func (c *RenderDelayController) GetDelay(renderBuffer *DownsampledRenderBuffer, renderDelayBufferDelay int,
 	capture *Block) (DelayEstimate, bool) {
+	return c.GetDelayWide(renderBuffer, renderDelayBufferDelay, capture, nil)
+}
+
+// GetDelayWide is GetDelay with the room the matched filter can use for
+// widened render samples (MatchedFilter.UpdateWide); wide may be nil. The
+// room is pointer-free and large, so the caller keeps it behind its last
+// pointer.
+func (c *RenderDelayController) GetDelayWide(renderBuffer *DownsampledRenderBuffer, renderDelayBufferDelay int,
+	capture *Block, wide *dlyWide) (DelayEstimate, bool) {
 	_ = renderDelayBufferDelay
 	c.captureCallCounter++
-	delaySamples, ok := c.delayEstimator.EstimateDelay(renderBuffer, capture)
+	delaySamples, ok := c.delayEstimator.EstimateDelayWide(renderBuffer, capture, wide)
 	if ok {
 		if !c.hasDelaySamples || delaySamples.Delay != c.delaySamples.Delay {
 			c.delayChangeCounter = 0

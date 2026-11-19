@@ -394,7 +394,9 @@ func dlyAccErrAvx2Lanes(h, x []float32, y float32, accErr []float32, r *[4]float
 	x = x[:n:n]
 	accErr = accErr[: 4*groups : 4*groups]
 	yv := archsimd.BroadcastFloat32x4(y)
-	var sv archsimd.Float32x4
+	// The running sum starts from r, which the caller zeroes: a zero made
+	// here would be a legacy-SSE instruction inside the 256-bit section.
+	sv := dlyLd4(r)
 	for g, i := 0, 0; g < len(accErr)-3 && i < len(h)-15; g, i = g+4, i+16 {
 		hh := (*[16]float32)(h[i : i+16])
 		xx := (*[16]float32)(x[i : i+16])
@@ -439,7 +441,9 @@ func dlyAxpyFmaAccErrAvx2Lanes(h, xa, xb []float32, alpha, y float32, accErr []f
 	accErr = accErr[: 4*groups : 4*groups]
 	a := archsimd.BroadcastFloat32x8(alpha)
 	yv := archsimd.BroadcastFloat32x4(y)
-	var sv archsimd.Float32x4
+	// The running sum starts from r, which the caller zeroes: a zero made
+	// here would be a legacy-SSE instruction inside the 256-bit section.
+	sv := dlyLd4(r)
 	for g, i := 0, 0; g < len(accErr)-3 && i < len(h)-15; g, i = g+4, i+16 {
 		hh := (*[16]float32)(h[i : i+16])
 		aa := (*[16]float32)(xa[i : i+16])
