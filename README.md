@@ -10,6 +10,9 @@ processing allocates nothing, and a canceller is a handful of heap objects, so
 it costs the garbage collector little. Every module is proven against a live
 C++ reference (see [Parity & testing](#parity--testing)).
 
+> **Status: pre-v1.** The full AEC3 pipeline is ported and bit-exact; the API
+> may still change.
+
 ## Install
 
 ```sh
@@ -209,29 +212,33 @@ through `webrtc::AudioBuffer`, on the same input, producing the same output.
 goaec3 is built with `GOEXPERIMENT=simd` unless noted. Go/C++ is the time
 ratio; below 1 goaec3 is faster.
 
-| Machine, lane | 16 kHz mono | 48 kHz mono | 48 kHz stereo | Go/C++ |
+Apple M4 Max, against the prebuilt libwebrtc:
+
+| Build | 16 kHz mono | 48 kHz mono | 48 kHz stereo | Go/C++ |
 | --- | --- | --- | --- | --- |
-| Apple M4 Max, NEON: goaec3 | 43.3 µs | 48.8 µs | 72.8 µs | 0.65–0.72× |
-| Apple M4 Max, NEON: libwebrtc | 66.8 µs | 74.5 µs | 101.3 µs | 1 |
-| Apple M4 Max, NEON: goaec3 without the experiment | 91.7 µs | 101.7 µs | 162.9 µs | 1.4–1.6× |
-| Neoverse-N2, NEON | | | | 0.86–0.89× |
-| AMD EPYC Zen 4, AVX2 | | | | 0.78–0.86× |
-| AMD EPYC Zen 3, AVX2 | | | | 0.81–0.95× |
-| Intel Xeon 6975P-C, AVX2 | | | | 0.93–1.01× |
-| AMD EPYC Zen 4, SSE2 | | | | 0.85–0.93× |
-| AMD EPYC Zen 3, SSE2 | | | | 0.88–0.91× |
+| goaec3, `GOEXPERIMENT=simd` | **43.3 µs** | **48.8 µs** | **72.8 µs** | 0.65–0.72× |
+| libwebrtc | 66.8 µs | 74.5 µs | 101.3 µs | 1 |
+| goaec3, pure Go | 91.7 µs | 101.7 µs | 162.9 µs | 1.4–1.6× |
 
-The M4 rows compare with the prebuilt libwebrtc. The other rows are
-GitHub-hosted runners (`.github/workflows/bench.yml`), where libwebrtc is
-built from source with clang `-O2` in the same job; the runner CPU varies per
-job, so those rows give ratios only. The Intel row predates the current x86
-kernels.
+GitHub-hosted runners (`.github/workflows/bench.yml`), against libwebrtc
+built from source with clang `-O2` in the same job. The runner CPU varies per
+job, so these are ratios over the three cases:
 
-Without `GOEXPERIMENT=simd` the same lanes run as pure Go: about 2.0–2.3× the
-time of libwebrtc on Neoverse-N2, 1.8–2.3× in the SSE2 lane and 4–5× in the
+| CPU | Lane | Go/C++ |
+| --- | --- | --- |
+| Neoverse-N2 | NEON | 0.86–0.89× |
+| AMD EPYC Zen 4 | AVX2 | 0.78–0.86× |
+| AMD EPYC Zen 3 | AVX2 | 0.81–0.95× |
+| AMD EPYC Zen 4 | SSE2 | 0.85–0.93× |
+| AMD EPYC Zen 3 | SSE2 | 0.88–0.91× |
+| Intel Xeon 6975P-C | AVX2 | 0.93–1.01× (measured before the current x86 kernels) |
+
+Without `GOEXPERIMENT=simd` the same lanes run as pure Go: about 2.1–2.3× the
+time of libwebrtc on Neoverse-N2, 2.2–2.5× in the SSE2 lane and 4.5–5.3× in the
 AVX2 lane, whose fused multiply-adds then run in software.
 
-Memory and garbage collection, per canceller with the default config:
+Memory and garbage collection, per canceller with the default config
+(`GOEXPERIMENT=simd`; the pure-Go build is within a few percent):
 
 | | 16 kHz mono | 48 kHz mono | 48 kHz stereo |
 | --- | --- | --- | --- |
