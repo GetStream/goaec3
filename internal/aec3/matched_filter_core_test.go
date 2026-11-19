@@ -269,8 +269,8 @@ func dlyRandCoreTrial(rng *rand.Rand, trial, multiple int) dlyCoreTrial {
 // in step, with and without the two-filter kernels.
 func TestDlyMatchedFilterCoreLanesMatchReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(5))
-	saved := [3]bool{dlyPairNeon, dlyPairSse2, dlyPairAvx2}
-	defer func() { dlyPairNeon, dlyPairSse2, dlyPairAvx2 = saved[0], saved[1], saved[2] }()
+	savedPair := dlyPairNeon
+	defer func() { dlyPairNeon = savedPair }()
 	for trial := 0; trial < 4000; trial++ {
 		c := dlyRandCoreTrial(rng, trial, 1)
 		// A second filter on the same buffer, as Update pairs them.
@@ -302,7 +302,7 @@ func TestDlyMatchedFilterCoreLanesMatchReference(t *testing.T) {
 			}
 
 			for _, pair := range []bool{false, true} {
-				dlyPairNeon, dlyPairSse2, dlyPairAvx2 = pair, pair, pair
+				dlyPairNeon = pair
 				fa := dlyLaneFilter{h: append([]float32(nil), c.h...), xStart: c.xs, errorSum: es0}
 				fb := dlyLaneFilter{h: append([]float32(nil), hB0...), xStart: xsB}
 				dlyCoreLanes(g, &fa, &fb, c.thr, 0.7, c.x, c.y)
@@ -314,7 +314,7 @@ func TestDlyMatchedFilterCoreLanesMatchReference(t *testing.T) {
 						fa.updated, updWant, fb.updated, updWantB, fa.errorSum, esWant, fb.errorSum, esWantB)
 				}
 			}
-			dlyPairNeon, dlyPairSse2, dlyPairAvx2 = saved[0], saved[1], saved[2]
+			dlyPairNeon = savedPair
 		}
 	}
 }
@@ -432,9 +432,9 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 		{"NeonWrapTwo", 4, len(x) - 300, false}, {"NeonWrapPair", 4, len(x) - 300, true},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			saved := [3]bool{dlyPairNeon, dlyPairSse2, dlyPairAvx2}
-			defer func() { dlyPairNeon, dlyPairSse2, dlyPairAvx2 = saved[0], saved[1], saved[2] }()
-			dlyPairNeon, dlyPairSse2, dlyPairAvx2 = tc.pair, tc.pair, tc.pair
+			savedPair := dlyPairNeon
+			defer func() { dlyPairNeon = savedPair }()
+			dlyPairNeon = tc.pair
 			hA := make([]float32, len(h0))
 			hB := make([]float32, len(h0))
 			for i := 0; i < b.N; i++ {

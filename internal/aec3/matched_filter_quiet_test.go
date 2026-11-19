@@ -290,17 +290,16 @@ func TestDlyQuietSkipStateMatchesNoSkip(t *testing.T) {
 }
 
 // TestDlyMatchedFilterPairedUpdateMatchesUnpaired runs Update with the
-// filter cores two at a time (through the two-filter kernels of every lane)
-// and one at a time, on the same loud and quiet render, and requires
-// identical state after every block.
+// NEON-lane filter cores two at a time and one at a time, on the same loud
+// and quiet render, and requires identical state after every block.
 func TestDlyMatchedFilterPairedUpdateMatchesUnpaired(t *testing.T) {
-	saved := [3]bool{dlyPairNeon, dlyPairSse2, dlyPairAvx2}
-	defer func() { dlyPairNeon, dlyPairSse2, dlyPairAvx2 = saved[0], saved[1], saved[2] }()
+	savedPair := dlyPairNeon
+	defer func() { dlyPairNeon = savedPair }()
 	numBlocks := 3000
 	if testing.Short() {
 		numBlocks = 600
 	}
-	for _, opt := range []Aec3Optimization{OptNeon, OptSse2, OptAvx2} {
+	for _, opt := range []Aec3Optimization{OptNeon} {
 		for _, factor := range []int{4, 8} {
 			for _, preEcho := range []bool{false, true} {
 				limit := float32(150)
@@ -325,9 +324,9 @@ func TestDlyMatchedFilterPairedUpdateMatchesUnpaired(t *testing.T) {
 						y[s.rng.Intn(len(y))] = 32700
 					}
 					slow := s.rng.Intn(3) == 0
-					dlyPairNeon, dlyPairSse2, dlyPairAvx2 = true, true, true
+					dlyPairNeon = true
 					paired.Update(s.buf, y, slow)
-					dlyPairNeon, dlyPairSse2, dlyPairAvx2 = false, false, false
+					dlyPairNeon = false
 					single.Update(s.buf, y, slow)
 					if d := dlyQuietStateDiff(paired, single); d != "" {
 						t.Fatalf("opt %d ds%d preEcho %v block %d: %s", opt, factor, preEcho, blk, d)

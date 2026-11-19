@@ -626,89 +626,15 @@ func (f *dlyLaneFilter) run(g int, x []float32) {
 	f.s = dlyReduceS(g, &f.acc, f.sTail)
 }
 
-// dlyPairs reports whether the lane with group size g runs two filters in
-// step through its two-filter kernels.
-func dlyPairs(g int) bool {
-	switch g {
-	case 4:
-		return dlyPairNeon
-	case 8:
-		return dlyPairSse2
-	}
-	return dlyPairAvx2
-}
-
-// dlyDotS2 is dlyDotS for two filters of the same length at once: each
-// filter's groups reach its own accumulators in order.
-func dlyDotS2(g int, hA, xA []float32, accA *[16]float32, hB, xB []float32, accB *[16]float32) {
-	switch g {
-	case 4:
-		dlyDotS2Neon(hA, xA, (*[4]float32)(accA[:4]), hB, xB, (*[4]float32)(accB[:4]))
-	case 8:
-		dlyDotS2Sse2(hA, xA, (*[8]float32)(accA[:8]), hB, xB, (*[8]float32)(accB[:8]))
-	default:
-		dlyDotS2Avx2(hA, xA, accA, hB, xB, accB)
-	}
-}
-
-// dlyAxpyDotS2 is dlyAxpyDotS for two filters of the same length at once.
-func dlyAxpyDotS2(g int, hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[16]float32) {
-	switch g {
-	case 4:
-		dlyAxpyDotS2Neon(hA, xaA, xbA, alphaA, (*[4]float32)(accA[:4]), hB, xaB, xbB, alphaB, (*[4]float32)(accB[:4]))
-	case 8:
-		dlyAxpyDotS2Sse2(hA, xaA, xbA, alphaA, (*[8]float32)(accA[:8]), hB, xaB, xbB, alphaB, (*[8]float32)(accB[:8]))
-	default:
-		dlyAxpyFmaDotS2Avx2(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
-	}
-}
-
-// dlyAxpyDotDotS2 is dlyAxpyDotS on the filter A and dlyDotS on the filter
-// B, of the same length, at once.
-func dlyAxpyDotDotS2(g int, hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
-	hB, xB []float32, accB *[16]float32) {
-	if g == 4 {
-		dlyAxpyDotDotS2Neon(hA, xaA, xbA, alphaA, (*[4]float32)(accA[:4]), hB, xB, (*[4]float32)(accB[:4]))
-		return
-	}
-	dlyAxpyDotS(g, hA, xaA, xbA, alphaA, accA)
-	dlyDotS(g, hB, xB, accB)
-}
-
-// dlyRunPairSum is dlyRunPair for the common case that both filters have
-// one stretch over all of h, no tails, and the same kind of stretch, on
-// lanes with a two-filter Sum kernel, which starts from zero accumulators
-// and reduces in registers. It reports whether it ran.
-func dlyRunPairSum(g int, fa, fb *dlyLaneFilter, x []float32) bool {
-	pa, pb := &fa.pieces[0], &fb.pieces[0]
-	n := len(fa.h)
-	if fa.np != 1 || fb.np != 1 || pa.n != n || pb.n != n || len(fb.h) != n || pa.upd != pb.upd {
-		return false
-	}
-	var out [4]float32
-	if pa.upd {
-		if !dlyAxpyDotS2Sum(g, fa.h, x[pa.xa:pa.xa+n], x[pa.xb:pa.xb+n], fa.pend.alpha,
-			fb.h, x[pb.xa:pb.xa+n], x[pb.xb:pb.xb+n], fb.pend.alpha, &out) {
-			return false
-		}
-	} else if !dlyDotS2Sum(g, fa.h, x[pa.xb:pa.xb+n], fb.h, x[pb.xb:pb.xb+n], &out) {
-		return false
-	}
-	// The tails are empty: the sums are added to zero.
-	fa.s = fa.sTail + out[0]
-	fb.s = fb.sTail + out[2]
-	return true
-}
-
-// dlyRunPair is run for two filters at once: it walks the stretches of both
-// in step and hands equal lengths to the two-filter kernel of their kinds
-// (each with or without a fused update). Each filter's stretches still
-// reach its accumulators in order.
-func dlyRunPair(g int, fa, fb *dlyLaneFilter, x []float32) {
-	accA, accB := &fa.acc, &fb.acc
-	dlyZeroAcc(accA)
-	dlyZeroAcc(accB)
+// dlyRunPairNeon is run for two NEON-lane filters at once: it walks the
+// stretches of both in step and hands equal lengths to the two-filter
+// kernel of their kinds (each with or without a fused update). Each
+// filter's stretches still reach its accumulators in order.
+func dlyRunPairNeon(fa, fb *dlyLaneFilter, x []float32) {
+	accA := (*[4]float32)(fa.acc[:4])
+	accB := (*[4]float32)(fb.acc[:4])
+	*accA = [4]float32{}
+	*accB = [4]float32{}
 	ia, ib := 0, 0
 	oa, ob := 0, 0 // consumed part of the current stretch of each filter
 	for ia < fa.np && ib < fb.np {
@@ -720,14 +646,14 @@ func dlyRunPair(g int, fa, fb *dlyLaneFilter, x []float32) {
 		xbB := x[pb.xb+ob : pb.xb+ob+n]
 		switch {
 		case pa.upd && pb.upd:
-			dlyAxpyDotS2(g, ha, x[pa.xa+oa:pa.xa+oa+n], xbA, fa.pend.alpha, accA,
+			dlyAxpyDotS2Neon(ha, x[pa.xa+oa:pa.xa+oa+n], xbA, fa.pend.alpha, accA,
 				hb, x[pb.xa+ob:pb.xa+ob+n], xbB, fb.pend.alpha, accB)
-		case !pa.upd && !pb.upd:
-			dlyDotS2(g, ha, xbA, accA, hb, xbB, accB)
 		case pa.upd:
-			dlyAxpyDotDotS2(g, ha, x[pa.xa+oa:pa.xa+oa+n], xbA, fa.pend.alpha, accA, hb, xbB, accB)
+			dlyAxpyDotDotS2Neon(ha, x[pa.xa+oa:pa.xa+oa+n], xbA, fa.pend.alpha, accA, hb, xbB, accB)
+		case pb.upd:
+			dlyAxpyDotDotS2Neon(hb, x[pb.xa+ob:pb.xa+ob+n], xbB, fb.pend.alpha, accB, ha, xbA, accA)
 		default:
-			dlyAxpyDotDotS2(g, hb, x[pb.xa+ob:pb.xa+ob+n], xbB, fb.pend.alpha, accB, ha, xbA, accA)
+			dlyDotS2Neon(ha, xbA, accA, hb, xbB, accB)
 		}
 		if oa += n; oa == pa.n {
 			ia, oa = ia+1, 0
@@ -740,22 +666,22 @@ func dlyRunPair(g int, fa, fb *dlyLaneFilter, x []float32) {
 		p := &fa.pieces[ia]
 		hk, xb := fa.h[p.k+oa:p.k+p.n], x[p.xb+oa:p.xb+p.n]
 		if p.upd {
-			dlyAxpyDotS(g, hk, x[p.xa+oa:p.xa+p.n], xb, fa.pend.alpha, accA)
+			dlyAxpyDotSNeon(hk, x[p.xa+oa:p.xa+p.n], xb, fa.pend.alpha, accA)
 		} else {
-			dlyDotS(g, hk, xb, accA)
+			dlyDotSNeon(hk, xb, accA)
 		}
 	}
 	for ; ib < fb.np; ib, ob = ib+1, 0 {
 		p := &fb.pieces[ib]
 		hk, xb := fb.h[p.k+ob:p.k+p.n], x[p.xb+ob:p.xb+p.n]
 		if p.upd {
-			dlyAxpyDotS(g, hk, x[p.xa+ob:p.xa+p.n], xb, fb.pend.alpha, accB)
+			dlyAxpyDotSNeon(hk, x[p.xa+ob:p.xa+p.n], xb, fb.pend.alpha, accB)
 		} else {
-			dlyDotS(g, hk, xb, accB)
+			dlyDotSNeon(hk, xb, accB)
 		}
 	}
-	fa.s = dlyReduceS(g, accA, fa.sTail)
-	fb.s = dlyReduceS(g, accB, fb.sTail)
+	fa.s = dlyReduceS(4, &fa.acc, fa.sTail)
+	fb.s = dlyReduceS(4, &fb.acc, fb.sTail)
 }
 
 // finish turns the filter output of the current sample into the error and
@@ -793,7 +719,7 @@ func (f *dlyLaneFilter) flush(g int, x []float32) {
 // size g for the filter fa and, when fb is not nil, for fb in step with it.
 func dlyCoreLanes(g int, fa, fb *dlyLaneFilter, x2SumThreshold, smoothing float32, x, y []float32) {
 	xSize := len(x)
-	pair := fb != nil && dlyPairs(g)
+	pair := fb != nil && g == 4 && dlyPairNeon
 	for i, yi := range y {
 		left := len(y) - i
 		if fb != nil {
@@ -805,9 +731,7 @@ func dlyCoreLanes(g int, fa, fb *dlyLaneFilter, x2SumThreshold, smoothing float3
 		}
 		switch {
 		case pair:
-			if !dlyRunPairSum(g, fa, fb, x) {
-				dlyRunPair(g, fa, fb, x)
-			}
+			dlyRunPairNeon(fa, fb, x)
 		case fb != nil:
 			fa.run(g, x)
 			fb.run(g, x)
@@ -1347,20 +1271,6 @@ func (m *MatchedFilter) runCore(xStartIndex int, x2SumThreshold, smoothing float
 	}
 }
 
-// dlyLaneGroupSize returns the group size of the SIMD lane of optimization,
-// or 0 for the scalar lane.
-func dlyLaneGroupSize(optimization Aec3Optimization) int {
-	switch optimization {
-	case OptNeon:
-		return 4
-	case OptSse2:
-		return 8
-	case OptAvx2:
-		return 16
-	}
-	return 0
-}
-
 // dlyMaxPairedFilters bounds the number of filters whose cores Update runs
 // two at a time.
 const dlyMaxPairedFilters = 16
@@ -1370,12 +1280,12 @@ func (m *MatchedFilter) xStartIndex(renderBuffer *DownsampledRenderBuffer, n int
 	return (renderBuffer.Read + n*m.filterIntraLagShift + m.subBlockSize - 1) % len(renderBuffer.Buffer)
 }
 
-// runCoresPaired runs the cores of all filters for one block and stores
+// runCoresPaired runs the NEON-lane cores of all filters for one block and stores
 // their error sums and update flags. The cores of different filters share
 // no state (the accumulated-error scratch belongs to the one filter that
 // computes it), so their order is free: the filters without accumulated
 // error run two at a time through dlyCoreLanes.
-func (m *MatchedFilter) runCoresPaired(g int, renderBuffer *DownsampledRenderBuffer, y []float32, x2SumThreshold,
+func (m *MatchedFilter) runCoresPaired(renderBuffer *DownsampledRenderBuffer, y []float32, x2SumThreshold,
 	smoothing float32, errorSums *[dlyMaxPairedFilters]float32, updated *[dlyMaxPairedFilters]bool) {
 	x := renderBuffer.Buffer
 	var fa, fb dlyLaneFilter
@@ -1392,7 +1302,7 @@ func (m *MatchedFilter) runCoresPaired(g int, renderBuffer *DownsampledRenderBuf
 		}
 		fa = dlyLaneFilter{h: m.filters[first], xStart: m.xStartIndex(renderBuffer, first)}
 		fb = dlyLaneFilter{h: m.filters[n], xStart: m.xStartIndex(renderBuffer, n)}
-		dlyCoreLanes(g, &fa, &fb, x2SumThreshold, smoothing, x, y)
+		dlyCoreLanes(4, &fa, &fb, x2SumThreshold, smoothing, x, y)
 		errorSums[first], updated[first] = fa.errorSum, fa.updated
 		errorSums[n], updated[n] = fb.errorSum, fb.updated
 		first = -1
@@ -1438,10 +1348,10 @@ func (m *MatchedFilter) Update(renderBuffer *DownsampledRenderBuffer, capture []
 	winnerIndex := -1
 	var pairedErrorSums [dlyMaxPairedFilters]float32
 	var pairedUpdated [dlyMaxPairedFilters]bool
-	paired := false
-	if g := dlyLaneGroupSize(m.optimization); g != 0 && dlyPairs(g) && len(m.filters) <= dlyMaxPairedFilters {
-		paired = true
-		m.runCoresPaired(g, renderBuffer, y, x2SumThreshold, smoothing, &pairedErrorSums, &pairedUpdated)
+	// The NEON lane has two-filter kernels.
+	paired := m.optimization == OptNeon && dlyPairNeon && len(m.filters) <= dlyMaxPairedFilters
+	if paired {
+		m.runCoresPaired(renderBuffer, y, x2SumThreshold, smoothing, &pairedErrorSums, &pairedUpdated)
 	}
 	for n := range m.filters {
 		var errorSum float32

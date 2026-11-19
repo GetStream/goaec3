@@ -612,25 +612,3 @@ func dlyAxpyDotDotS2NeonRef(hA, xaA, xbA []float32, alphaA float32, accA *[4]flo
 	dlyAxpyDotSNeonRef(hA, xaA, xbA, alphaA, accA)
 	dlyDotSNeonRef(hB, xB, accB)
 }
-
-func dlyDotS2Sse2Ref(hA, xA []float32, accA *[8]float32, hB, xB []float32, accB *[8]float32) {
-	dlyDotSSse2Ref(hA, xA, accA)
-	dlyDotSSse2Ref(hB, xB, accB)
-}
-
-func dlyAxpyDotS2Sse2Ref(hA, xaA, xbA []float32, alphaA float32, accA *[8]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[8]float32) {
-	dlyAxpyDotSSse2Ref(hA, xaA, xbA, alphaA, accA)
-	dlyAxpyDotSSse2Ref(hB, xaB, xbB, alphaB, accB)
-}
-
-func dlyDotS2Avx2Ref(hA, xA []float32, accA *[16]float32, hB, xB []float32, accB *[16]float32) {
-	dlyDotSAvx2Ref(hA, xA, accA)
-	dlyDotSAvx2Ref(hB, xB, accB)
-}
-
-func dlyAxpyFmaDotS2Avx2Ref(hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[16]float32) {
-	dlyAxpyFmaDotSAvx2Ref(hA, xaA, xbA, alphaA, accA)
-	dlyAxpyFmaDotSAvx2Ref(hB, xaB, xbB, alphaB, accB)
-}

@@ -301,49 +301,6 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 			}
 		}
 
-		// Two SSE2-lane and two AVX2-lane filters at once against one at a
-		// time.
-		for _, g := range []int{8, 16} {
-			mg := n &^ (g - 1)
-			hB0 := dlyRandSlice(rng, mg, 0.3)
-			xB := dlyRandSlice(rng, mg+rng.Intn(5), 1000)
-			xaB := dlyRandSlice(rng, mg+rng.Intn(5), 1000)
-			alphaB := float32(rng.NormFloat64() * 1e-4)
-			acc0, acc1 := dlyRandAcc(rng), dlyRandAcc(rng)
-			a, b, c, d := acc0, acc1, acc0, acc1
-			hA := append([]float32(nil), h[:mg]...)
-			hB := append([]float32(nil), hB0...)
-			hC := append([]float32(nil), h[:mg]...)
-			hD := append([]float32(nil), hB0...)
-			dlyDotS2(g, hA, x, &a, hB, xB, &b)
-			dlyAxpyDotS2(g, hA, xa, x, alpha, &a, hB, xaB, xB, alphaB, &b)
-			if g == 8 {
-				dlyDotSSse2Ref(hC, x, (*[8]float32)(c[:8]))
-				dlyDotSSse2Ref(hD, xB, (*[8]float32)(d[:8]))
-				dlyAxpyDotSSse2Ref(hC, xa, x, alpha, (*[8]float32)(c[:8]))
-				dlyAxpyDotSSse2Ref(hD, xaB, xB, alphaB, (*[8]float32)(d[:8]))
-			} else {
-				dlyDotSAvx2Ref(hC, x, &c)
-				dlyDotSAvx2Ref(hD, xB, &d)
-				dlyAxpyFmaDotSAvx2Ref(hC, xa, x, alpha, &c)
-				dlyAxpyFmaDotSAvx2Ref(hD, xaB, xB, alphaB, &d)
-			}
-			var out [4]float32
-			if dlyDotS2Sum(g, hA, x, hB, xB, &out) {
-				dlyRequireBits(t, "dot pair sum", []float32{0 + out[0], 0 + out[2]},
-					[]float32{dlyDotSSum(g, hC, x), dlyDotSSum(g, hD, xB)})
-			}
-			if dlyAxpyDotS2Sum(g, hA, xa, x, alpha, hB, xaB, xB, alphaB, &out) {
-				sC := dlyAxpyDotSSum(g, hC, xa, x, alpha)
-				sD := dlyAxpyDotSSum(g, hD, xaB, xB, alphaB)
-				dlyRequireBits(t, "axpyDot pair sum", []float32{0 + out[0], 0 + out[2]}, []float32{sC, sD})
-			}
-			dlyRequireBits(t, "pair h A", hA, hC)
-			dlyRequireBits(t, "pair h B", hB, hD)
-			dlyRequireBits(t, "pair acc A", a[:], c[:])
-			dlyRequireBits(t, "pair acc B", b[:], d[:])
-		}
-
 		// Two NEON-lane filters at once against one at a time.
 		{
 			m4 := n &^ 3

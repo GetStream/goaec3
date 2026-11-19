@@ -105,28 +105,6 @@ func dlyMaxSquarePeakIndex(h []float32) int { return dlyMaxSquarePeakIndexRef(h)
 // dlyZeroAcc clears the lane accumulators.
 func dlyZeroAcc(acc *[16]float32) { *acc = [16]float32{} }
 
-// dlyPairSse2 and dlyPairAvx2 select the two-filter kernels for the SSE2
-// and AVX2 lanes; they exist as archsimd kernels on amd64 only.
-var dlyPairSse2, dlyPairAvx2 = false, false
-
-func dlyDotS2Sse2(hA, xA []float32, accA *[8]float32, hB, xB []float32, accB *[8]float32) {
-	dlyDotS2Sse2Ref(hA, xA, accA, hB, xB, accB)
-}
-
-func dlyAxpyDotS2Sse2(hA, xaA, xbA []float32, alphaA float32, accA *[8]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[8]float32) {
-	dlyAxpyDotS2Sse2Ref(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
-}
-
-func dlyDotS2Avx2(hA, xA []float32, accA *[16]float32, hB, xB []float32, accB *[16]float32) {
-	dlyDotS2Avx2Ref(hA, xA, accA, hB, xB, accB)
-}
-
-func dlyAxpyFmaDotS2Avx2(hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[16]float32) {
-	dlyAxpyFmaDotS2Avx2Ref(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
-}
-
 func dlyAxpyDotDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
 	hB, xB []float32, accB *[4]float32) {
 	dlyAxpyDotDotS2NeonRef(hA, xaA, xbA, alphaA, accA, hB, xB, accB)
@@ -134,18 +112,6 @@ func dlyAxpyDotDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float3
 
 func dlyX2Lanes2(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
 	dlyX2Lanes2Ref(g, xA, xB, n, lanesA, lanesB)
-}
-
-// dlyDotS2Sum and dlyAxpyDotS2Sum are the two-filter Sum kernels of the
-// lane with group size g: dlyDotSSum (dlyAxpyDotSSum) for two filters at
-// once, with the reduced sums before their addition to the zero tail in
-// out[0] and out[2]. They report false where the lane has none.
-
-func dlyDotS2Sum(g int, hA, xA, hB, xB []float32, out *[4]float32) bool { return false }
-
-func dlyAxpyDotS2Sum(g int, hA, xaA, xbA []float32, alphaA float32,
-	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) bool {
-	return false
 }
 
 // dlyCoreLaneKernel runs the MatchedFilterCore loop of the lane with group

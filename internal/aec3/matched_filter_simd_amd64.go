@@ -605,38 +605,6 @@ func dlyX2Wrapped(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) 
 	dlyX2WrappedRef(g, x, hSize, lo, r, out)
 }
 
-// dlyPairSse2 and dlyPairAvx2 select the two-filter kernels for the SSE2
-// and AVX2 lanes; there are none.
-var dlyPairSse2, dlyPairAvx2 = false, false
-
-func dlyDotS2Sse2(hA, xA []float32, accA *[8]float32, hB, xB []float32, accB *[8]float32) {
-	dlyDotS2Sse2Ref(hA, xA, accA, hB, xB, accB)
-}
-
-func dlyAxpyDotS2Sse2(hA, xaA, xbA []float32, alphaA float32, accA *[8]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[8]float32) {
-	dlyAxpyDotS2Sse2Ref(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
-}
-
-func dlyDotS2Avx2(hA, xA []float32, accA *[16]float32, hB, xB []float32, accB *[16]float32) {
-	dlyDotS2Avx2Ref(hA, xA, accA, hB, xB, accB)
-}
-
-func dlyAxpyFmaDotS2Avx2(hA, xaA, xbA []float32, alphaA float32, accA *[16]float32,
-	hB, xaB, xbB []float32, alphaB float32, accB *[16]float32) {
-	dlyAxpyFmaDotS2Avx2Ref(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
-}
-
-// dlyDotS2Sum and dlyAxpyDotS2Sum are the two-filter Sum kernels; these
-// lanes have none.
-
-func dlyDotS2Sum(g int, hA, xA, hB, xB []float32, out *[4]float32) bool { return false }
-
-func dlyAxpyDotS2Sum(g int, hA, xaA, xbA []float32, alphaA float32,
-	hB, xaB, xbB []float32, alphaB float32, out *[4]float32) bool {
-	return false
-}
-
 // Plain cores of the SSE2 and AVX2 lanes.
 //
 // On x86 the MatchedFilterCore loop is bound by its loads and stores, not
