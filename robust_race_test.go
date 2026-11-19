@@ -55,23 +55,39 @@ func TestConcurrentRenderAndCapture(t *testing.T) {
 			n := e.FrameSize()
 			renderScene := newRobustScene(1, c.rate, 30)
 			captureScene := newRobustScene(1, c.rate, 30)
+			// Render and capture stay within a few frames of each other, as
+			// with real audio devices: an unbounded lead of either side
+			// overflows or starves the render queue and drops the frames
+			// stereo detection needs.
+			const maxLead = 8
+			ahead := make(chan struct{}, frames+maxLead) // render may start frame i
+			rendered := make(chan struct{}, frames)      // render finished a frame
+			for range maxLead {
+				ahead <- struct{}{}
+			}
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				defer close(rendered) // capture never waits on a failed render side
 				render := robustFrame(c.numRender, n)
 				for range frames {
+					<-ahead
 					renderScene.render(render, robustSigEcho)
 					if err := e.AnalyzeRender(render); err != nil {
 						t.Error(err)
 						return
 					}
+					rendered <- struct{}{}
 				}
 			}()
 			capture := robustFrame(c.numCapture, n)
 			linear := robustFrame(c.numCapture, LinearOutputFrameSize)
 			stereoSeen := false
 			for i := range frames {
+				if i >= maxLead {
+					<-rendered
+				}
 				// The capture scene replays the render signal on this
 				// goroutine to build an echo.
 				captureScene.render(robustFrame(1, n), robustSigEcho)
@@ -98,6 +114,7 @@ func TestConcurrentRenderAndCapture(t *testing.T) {
 					t.Fatalf("metrics %+v", m)
 				}
 				stereoSeen = stereoSeen || e.ec.StereoRenderProcessingActiveForTesting()
+				ahead <- struct{}{}
 			}
 			wg.Wait()
 			// Stereo processing may end again when the render goroutine
