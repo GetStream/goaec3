@@ -165,11 +165,11 @@ libwebrtc m141's `EchoCanceller3` driven through `webrtc::AudioBuffer`
 
 | Case | goaec3, `GOEXPERIMENT=simd` | libwebrtc, prebuilt | goaec3, pure Go |
 | --- | --- | --- | --- |
-| 16 kHz mono | **44.7 µs** | 66.7 µs | 91.6 µs |
-| 48 kHz mono | **49.6 µs** | 73.6 µs | 101.6 µs |
-| 48 kHz stereo | **75.7 µs** | 100.4 µs | 163.1 µs |
+| 16 kHz mono | **43.3 µs** | 66.8 µs | 91.7 µs |
+| 48 kHz mono | **48.8 µs** | 74.5 µs | 101.7 µs |
+| 48 kHz stereo | **72.8 µs** | 101.3 µs | 162.9 µs |
 
-On Apple silicon with `GOEXPERIMENT=simd`, goaec3 takes 0.67–0.75× the time
+On Apple silicon with `GOEXPERIMENT=simd`, goaec3 takes 0.65–0.72× the time
 of libwebrtc, producing the same output bit for bit; that is under 0.5% of one
 core per stream at 16 kHz. Zero allocations per frame in every case.
 
@@ -179,16 +179,17 @@ On real x86 and Linux arm64 hardware (GitHub-hosted runners,
 
 | Lane, CPU | 16 kHz mono | 48 kHz mono | 48 kHz stereo | goaec3 / libwebrtc |
 | --- | --- | --- | --- | --- |
-| arm64 NEON, Neoverse-N2 | 63.2 µs | 70.6 µs | 106.4 µs | 0.92–0.97× |
-| amd64 AVX2, AMD EPYC 9V74 | 39.8 µs | 45.1 µs | 68.5 µs | 0.97–1.02× |
-| amd64 SSE2, AMD EPYC 9V74 | 53.3 µs | 59.2 µs | 83.1 µs | 1.02–1.03× |
+| arm64 NEON, Neoverse-N2 | 62.3 µs | 69.4 µs | 103 µs | 0.90–0.94× |
+| amd64 AVX2, AMD EPYC 9V45 | 27.6 µs | 30.5 µs | 42.7 µs | 0.84–0.90× |
+| amd64 SSE2, AMD EPYC 7763 | 63.3 µs | 69.8 µs | 95.1 µs | 0.97–1.02× |
 
-So with `GOEXPERIMENT=simd` goaec3 is faster than libwebrtc on arm64 and
-level with it on amd64 (within ±3% across runner CPUs), all bit-exact.
-Without `GOEXPERIMENT=simd` the same lanes run as plain, memory-safe Go: about
-1.4–1.6× libwebrtc on Apple silicon, 2.1–2.4× on Neoverse-N2 and on the amd64
-SSE2 lane, and 4.6–5.2× on the amd64 AVX2 lane, whose fused multiply-adds then
-run in software. Build with the experiment.
+So with `GOEXPERIMENT=simd` goaec3 is faster than libwebrtc on arm64 and on
+the amd64 AVX2 lane (0.93–1.01× on Intel Xeon 6975P-C runners), and level with
+it on the SSE2 lane, all bit-exact. Without `GOEXPERIMENT=simd` the same lanes
+run as plain, memory-safe Go: about 1.4–1.6× libwebrtc on Apple silicon,
+2.1–2.5× on Neoverse-N2 and on the amd64 SSE2 lane, and 4.5–5.3× on the amd64
+AVX2 lane, whose fused multiply-adds then run in software. Build with the
+experiment.
 
 ```sh
 GOEXPERIMENT=simd go test -tags webrtc_oracle -run '^$' -bench BenchmarkEc3VsLibwebrtc ./internal/webrtcoracle/
