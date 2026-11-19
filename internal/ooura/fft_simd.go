@@ -187,36 +187,35 @@ func cftmdlSimd(s, a *[128]float32) {
 	for j := 0; j < 8; j += 4 {
 		A0, A8, A16, A24 := ld(w8(s, 64, j)), ld(w8(s, 72, j)), ld(w8(s, 80, j)), ld(w8(s, 88, j))
 		A32, A40, A48, A56 := ld(w8(s, 96, j)), ld(w8(s, 104, j)), ld(w8(s, 112, j)), ld(w8(s, 120, j))
-		var xx, xx4, xx12, xx22 [2]vec
-		for h := 0; h < 2; h++ {
-			var p0, p8, p16, p24 vec
-			if h == 0 {
-				p0, p8, p16, p24 = lo64(A0, A32), lo64(A8, A40), lo64(A16, A48), lo64(A24, A56)
-			} else {
-				p0, p8, p16, p24 = hi64(A0, A32), hi64(A8, A40), hi64(A16, A48), hi64(A24, A56)
-			}
-			x0 := p0.Add(p8)
-			x1 := p0.Sub(p8)
-			x2 := p16.Add(p24)
-			x3 := p16.Sub(p24)
-			xx[h] = x0.Add(x2)
-			xx1 := x0.Sub(x2)
-			x3s := swap.Mul(rev64(x3))
-			add := x1.Add(x3s)
-			sub := x1.Sub(x3s)
-			xx4[h] = wk2rv.Mul(xx1).Add(wk2iv.Mul(rev64(xx1)))
-			xx12[h] = wk1rv.Mul(add).Add(wk1iv.Mul(rev64(add)))
-			xx22[h] = wk3rv.Mul(sub).Add(wk3iv.Mul(rev64(sub)))
-		}
-		lo64(xx[0], xx[1]).StoreArray(w8(a, 64, j))
-		hi64(xx[0], xx[1]).StoreArray(w8(a, 96, j))
-		lo64(xx4[0], xx4[1]).StoreArray(w8(a, 80, j))
-		hi64(xx4[0], xx4[1]).StoreArray(w8(a, 112, j))
-		lo64(xx12[0], xx12[1]).StoreArray(w8(a, 72, j))
-		hi64(xx12[0], xx12[1]).StoreArray(w8(a, 104, j))
-		lo64(xx22[0], xx22[1]).StoreArray(w8(a, 88, j))
-		hi64(xx22[0], xx22[1]).StoreArray(w8(a, 120, j))
+		xxa, xx4a, xx12a, xx22a := cftmdlSecond(lo64(A0, A32), lo64(A8, A40), lo64(A16, A48), lo64(A24, A56), swap, wk1rv, wk1iv, wk2rv, wk2iv, wk3rv, wk3iv)
+		xxb, xx4b, xx12b, xx22b := cftmdlSecond(hi64(A0, A32), hi64(A8, A40), hi64(A16, A48), hi64(A24, A56), swap, wk1rv, wk1iv, wk2rv, wk2iv, wk3rv, wk3iv)
+		lo64(xxa, xxb).StoreArray(w8(a, 64, j))
+		hi64(xxa, xxb).StoreArray(w8(a, 96, j))
+		lo64(xx4a, xx4b).StoreArray(w8(a, 80, j))
+		hi64(xx4a, xx4b).StoreArray(w8(a, 112, j))
+		lo64(xx12a, xx12b).StoreArray(w8(a, 72, j))
+		hi64(xx12a, xx12b).StoreArray(w8(a, 104, j))
+		lo64(xx22a, xx22b).StoreArray(w8(a, 88, j))
+		hi64(xx22a, xx22b).StoreArray(w8(a, 120, j))
 	}
+}
+
+// cftmdlSecond is the body of the second cftmdl_128 loop for one
+// iteration.
+func cftmdlSecond(p0, p8, p16, p24, swap, wk1rv, wk1iv, wk2rv, wk2iv, wk3rv, wk3iv vec) (xx, xx4, xx12, xx22 vec) {
+	x0 := p0.Add(p8)
+	x1 := p0.Sub(p8)
+	x2 := p16.Add(p24)
+	x3 := p16.Sub(p24)
+	xx = x0.Add(x2)
+	xx1 := x0.Sub(x2)
+	x3s := swap.Mul(rev64(x3))
+	add := x1.Add(x3s)
+	sub := x1.Sub(x3s)
+	xx4 = wk2rv.Mul(xx1).Add(wk2iv.Mul(rev64(xx1)))
+	xx12 = wk1rv.Mul(add).Add(wk1iv.Mul(rev64(add)))
+	xx22 = wk3rv.Mul(sub).Add(wk3iv.Mul(rev64(sub)))
+	return
 }
 
 // cftmdlFirst is the body of the first cftmdl_128 loop for one iteration.
