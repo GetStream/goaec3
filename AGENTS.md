@@ -93,7 +93,9 @@ write changelog narrative.
 - Check with `go build -gcflags=-d=ssa/check_bce ./internal/...` (it lists the
   checks left in each function; a helper that inlines everywhere still lists
   the checks of its own never-called body) or look for `panicBounds` calls in
-  `-gcflags=-S` output.
+  `-gcflags=-S` output. `TestNoBoundsChecks` in `internal/ooura` does the
+  latter for every FFT pass, on arm64 and amd64, with and without the
+  experiment.
 - Reinterpreting bits goes through `math.Float32bits`/`Float32frombits` or
   archsimd's `ToBits`/`BitsToFloat32`, never through a pointer cast.
 
