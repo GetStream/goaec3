@@ -115,6 +115,10 @@ type subtractorState struct {
 	channels [inlineChannels]subChannelState
 	h2Spans  [inlineChannels]span
 	hSpans   [inlineChannels]span
+	// The lengths of the responses, which follow the filter size: a view
+	// bound for a call takes them from here, and Process stores them.
+	h2Lens [inlineChannels]int32
+	hLens  [inlineChannels]int32
 
 	fft                          aec3FftPair
 	optimization                 Aec3Optimization
@@ -167,8 +171,17 @@ func (s *Subtractor) bind(st *subtractorState, b *binder) {
 		bindPtr(b, &s.more, &b.x.subMore)
 	}
 	for ch := range s.channels {
-		b.spec(&s.refinedFrequencyResponses[ch], &st.h2Spans[ch])
-		b.f32(&s.refinedImpulseResponses[ch], &st.hSpans[ch])
+		H2, h := &s.refinedFrequencyResponses[ch], &s.refinedImpulseResponses[ch]
+		if b != nil && b.mode == bindMeasure {
+			// The arenas hold the responses at their full size.
+			st.h2Lens[ch], st.hLens[ch] = int32(len(*H2)), int32(len(*h))
+			*H2, *h = (*H2)[:cap(*H2)], (*h)[:cap(*h)]
+		}
+		b.spec(H2, &st.h2Spans[ch])
+		b.f32(h, &st.hSpans[ch])
+		if b != nil && b.mode != bindMeasure {
+			*H2, *h = (*H2)[:st.h2Lens[ch]], (*h)[:st.hLens[ch]]
+		}
 		s.channels[ch].bind(&st.channels[ch], b)
 	}
 }
@@ -439,5 +452,10 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 
 		// SafeClamp(a, -32768.f, 32767.f); see kernClamp.
 		kernClamp(eRefined[:], -32768, 32767)
+	}
+	if s.more == nil {
+		for ch := range channels {
+			s.h2Lens[ch], s.hLens[ch] = int32(len(frequencyResponses[ch])), int32(len(impulseResponses[ch]))
+		}
 	}
 }
