@@ -399,30 +399,136 @@ func afirApplyAllGo(x, h, s *FftData) {
 	}
 }
 
-// afirAdaptAllGo is afirAdaptBinsGo over all bins.
+// afirAdaptAllGo is afirAdaptBinsGo over all bins, several bins per step.
+// The loop is bound by its instruction count. Where the float registers hold
+// the operands of eight bins a step loads them before it stores its results,
+// which leaves every result as it is (a store to h reaches no operand of
+// another bin, whatever h aliases); on amd64 a step is four bins, one after
+// the other.
 func afirAdaptAllGo(x, g, h *FftData) {
-	xr, xi, gr, gi := &x.Re, &x.Im, &g.Re, &g.Im
-	hr, hi := &h.Re, &h.Im
-	for k := range hr {
-		a, b, c, d := xr[k], xi[k], gr[k], gi[k]
-		hr[k] += float32(a*c) + float32(b*d)
-		hi[k] += float32(a*d) - float32(b*c)
+	if isAMD64 {
+		afirAdaptAll4Go(x, g, h)
+	} else {
+		afirAdaptAll8Go(x, g, h)
 	}
 }
 
-// afirApplyTermsFastGo is afirApplyTermsGo with the bin loop outside the
-// pair loop: four bins of S stay in locals while all pairs accumulate into
-// them, in pair order, starting from +0.
-func afirApplyTermsFastGo(xs, hs []*FftData, s *FftData) {
-	hs = hs[:len(xs)]
+func afirAdaptAll4Go(x, g, h *FftData) {
+	xre, xim, gre, gim, hre, him := &x.Re, &x.Im, &g.Re, &g.Im, &h.Re, &h.Im
 	for k := 0; k < FftLengthBy2; k += 4 {
-		var r0, r1, r2, r3, i0, i1, i2, i3 float32
+		xr := (*[4]float32)(xre[k : k+4])
+		xi := (*[4]float32)(xim[k : k+4])
+		gr := (*[4]float32)(gre[k : k+4])
+		gi := (*[4]float32)(gim[k : k+4])
+		hr := (*[4]float32)(hre[k : k+4])
+		hi := (*[4]float32)(him[k : k+4])
+		// Bin by bin: the stores of a bin separate its operands from those
+		// of the next, so four values are live at a time.
+		a, b, c, d := xr[0], xi[0], gr[0], gi[0]
+		hr[0] += float32(a*c) + float32(b*d)
+		hi[0] += float32(a*d) - float32(b*c)
+		a, b, c, d = xr[1], xi[1], gr[1], gi[1]
+		hr[1] += float32(a*c) + float32(b*d)
+		hi[1] += float32(a*d) - float32(b*c)
+		a, b, c, d = xr[2], xi[2], gr[2], gi[2]
+		hr[2] += float32(a*c) + float32(b*d)
+		hi[2] += float32(a*d) - float32(b*c)
+		a, b, c, d = xr[3], xi[3], gr[3], gi[3]
+		hr[3] += float32(a*c) + float32(b*d)
+		hi[3] += float32(a*d) - float32(b*c)
+	}
+	afirAdaptLastBin(x, g, h)
+}
+
+func afirAdaptAll8Go(x, g, h *FftData) {
+	xre, xim, gre, gim, hre, him := &x.Re, &x.Im, &g.Re, &g.Im, &h.Re, &h.Im
+	for k := 0; k < FftLengthBy2; k += 8 {
+		xr := (*[8]float32)(xre[k : k+8])
+		xi := (*[8]float32)(xim[k : k+8])
+		gr := (*[8]float32)(gre[k : k+8])
+		gi := (*[8]float32)(gim[k : k+8])
+		hr := (*[8]float32)(hre[k : k+8])
+		hi := (*[8]float32)(him[k : k+8])
+		a0, b0, c0, d0 := xr[0], xi[0], gr[0], gi[0]
+		a1, b1, c1, d1 := xr[1], xi[1], gr[1], gi[1]
+		a2, b2, c2, d2 := xr[2], xi[2], gr[2], gi[2]
+		a3, b3, c3, d3 := xr[3], xi[3], gr[3], gi[3]
+		a4, b4, c4, d4 := xr[4], xi[4], gr[4], gi[4]
+		a5, b5, c5, d5 := xr[5], xi[5], gr[5], gi[5]
+		a6, b6, c6, d6 := xr[6], xi[6], gr[6], gi[6]
+		a7, b7, c7, d7 := xr[7], xi[7], gr[7], gi[7]
+		r0 := hr[0] + (float32(a0*c0) + float32(b0*d0))
+		i0 := hi[0] + (float32(a0*d0) - float32(b0*c0))
+		r1 := hr[1] + (float32(a1*c1) + float32(b1*d1))
+		i1 := hi[1] + (float32(a1*d1) - float32(b1*c1))
+		r2 := hr[2] + (float32(a2*c2) + float32(b2*d2))
+		i2 := hi[2] + (float32(a2*d2) - float32(b2*c2))
+		r3 := hr[3] + (float32(a3*c3) + float32(b3*d3))
+		i3 := hi[3] + (float32(a3*d3) - float32(b3*c3))
+		r4 := hr[4] + (float32(a4*c4) + float32(b4*d4))
+		i4 := hi[4] + (float32(a4*d4) - float32(b4*c4))
+		r5 := hr[5] + (float32(a5*c5) + float32(b5*d5))
+		i5 := hi[5] + (float32(a5*d5) - float32(b5*c5))
+		r6 := hr[6] + (float32(a6*c6) + float32(b6*d6))
+		i6 := hi[6] + (float32(a6*d6) - float32(b6*c6))
+		r7 := hr[7] + (float32(a7*c7) + float32(b7*d7))
+		i7 := hi[7] + (float32(a7*d7) - float32(b7*c7))
+		hr[0], hr[1], hr[2], hr[3], hr[4], hr[5], hr[6], hr[7] = r0, r1, r2, r3, r4, r5, r6, r7
+		hi[0], hi[1], hi[2], hi[3], hi[4], hi[5], hi[6], hi[7] = i0, i1, i2, i3, i4, i5, i6, i7
+	}
+	afirAdaptLastBin(x, g, h)
+}
+
+// afirAdaptLastBin is bin FftLengthBy2 of afirAdaptBinsGo.
+func afirAdaptLastBin(x, g, h *FftData) {
+	const n = FftLengthBy2
+	a, b, c, d := x.Re[n], x.Im[n], g.Re[n], g.Im[n]
+	h.Re[n] += float32(a*c) + float32(b*d)
+	h.Im[n] += float32(a*d) - float32(b*c)
+}
+
+// afirApplyTermsFastGo is afirApplyTermsGo with the bin loop outside the
+// pair loop: the sums of a group of bins stay in locals while all pairs
+// accumulate into them, in pair order, starting from +0. The loop is bound
+// by its instruction count, so the form follows the registers of the
+// architecture.
+func afirApplyTermsFastGo(xs, hs []*FftData, s *FftData) {
+	if isAMD64 {
+		afirApplyTermsSplitGo(xs, hs, s)
+	} else {
+		afirApplyTermsWideGo(xs, hs, s)
+	}
+}
+
+// afirApplyTermsWideGo keeps eight bins (sixteen sums) in locals, for
+// architectures with thirty-two float registers: the bookkeeping of a pair
+// (two pointers, their nil checks, the window addresses) is paid once per
+// eight bins.
+func afirApplyTermsWideGo(xs, hs []*FftData, s *FftData) {
+	afirApplyTermsWide(xs, hs[:len(xs)], s, len(xs))
+	afirApplyTermsLastBin(xs, hs, s)
+}
+
+// afirApplyTermsWide is afirApplyTermsWideGo for the bins below
+// FftLengthBy2. n is len(xs). A pair is two basic blocks of four bins: in
+// one block the compiler computes the sixteen terms before it adds any of
+// them to its sum, and sixteen sums with sixteen terms exceed the
+// registers. The test between the blocks never holds (t < len(xs) = n); the
+// function does not inline, so the compiler does not know n and keeps the
+// test.
+//
+//go:noinline
+func afirApplyTermsWide(xs, hs []*FftData, s *FftData, n int) {
+	hs = hs[:len(xs)]
+	for k := 0; k < FftLengthBy2; k += 8 {
+		var r0, r1, r2, r3, r4, r5, r6, r7 float32
+		var i0, i1, i2, i3, i4, i5, i6, i7 float32
 		for t, x := range xs {
 			h := hs[t]
-			xr := (*[4]float32)(x.Re[k : k+4])
-			xi := (*[4]float32)(x.Im[k : k+4])
-			hr := (*[4]float32)(h.Re[k : k+4])
-			hi := (*[4]float32)(h.Im[k : k+4])
+			xr := (*[8]float32)(x.Re[k : k+8])
+			xi := (*[8]float32)(x.Im[k : k+8])
+			hr := (*[8]float32)(h.Re[k : k+8])
+			hi := (*[8]float32)(h.Im[k : k+8])
 			r0 += float32(xr[0]*hr[0]) - float32(xi[0]*hi[0])
 			i0 += float32(xr[0]*hi[0]) + float32(xi[0]*hr[0])
 			r1 += float32(xr[1]*hr[1]) - float32(xi[1]*hi[1])
@@ -431,12 +537,69 @@ func afirApplyTermsFastGo(xs, hs []*FftData, s *FftData) {
 			i2 += float32(xr[2]*hi[2]) + float32(xi[2]*hr[2])
 			r3 += float32(xr[3]*hr[3]) - float32(xi[3]*hi[3])
 			i3 += float32(xr[3]*hi[3]) + float32(xi[3]*hr[3])
+			if t >= n {
+				break
+			}
+			r4 += float32(xr[4]*hr[4]) - float32(xi[4]*hi[4])
+			i4 += float32(xr[4]*hi[4]) + float32(xi[4]*hr[4])
+			r5 += float32(xr[5]*hr[5]) - float32(xi[5]*hi[5])
+			i5 += float32(xr[5]*hi[5]) + float32(xi[5]*hr[5])
+			r6 += float32(xr[6]*hr[6]) - float32(xi[6]*hi[6])
+			i6 += float32(xr[6]*hi[6]) + float32(xi[6]*hr[6])
+			r7 += float32(xr[7]*hr[7]) - float32(xi[7]*hi[7])
+			i7 += float32(xr[7]*hi[7]) + float32(xi[7]*hr[7])
+		}
+		sr := (*[8]float32)(s.Re[k : k+8])
+		si := (*[8]float32)(s.Im[k : k+8])
+		sr[0], sr[1], sr[2], sr[3], sr[4], sr[5], sr[6], sr[7] = r0, r1, r2, r3, r4, r5, r6, r7
+		si[0], si[1], si[2], si[3], si[4], si[5], si[6], si[7] = i0, i1, i2, i3, i4, i5, i6, i7
+	}
+}
+
+// afirApplyTermsSplitGo runs the real and the imaginary sums of four bins
+// as two passes over the pairs, for amd64: a pass holds four sums and eight
+// products, which fit its fifteen float registers (the eight sums of four
+// whole bins and their products do not, and the compiler then spills nine
+// values per pair), and every operand is used once, so half of the loads
+// fold into the multiplications.
+func afirApplyTermsSplitGo(xs, hs []*FftData, s *FftData) {
+	hs = hs[:len(xs)]
+	for k := 0; k < FftLengthBy2; k += 4 {
+		var r0, r1, r2, r3 float32
+		for t, x := range xs {
+			h := hs[t]
+			xr := (*[4]float32)(x.Re[k : k+4])
+			xi := (*[4]float32)(x.Im[k : k+4])
+			hr := (*[4]float32)(h.Re[k : k+4])
+			hi := (*[4]float32)(h.Im[k : k+4])
+			r0 += float32(xr[0]*hr[0]) - float32(xi[0]*hi[0])
+			r1 += float32(xr[1]*hr[1]) - float32(xi[1]*hi[1])
+			r2 += float32(xr[2]*hr[2]) - float32(xi[2]*hi[2])
+			r3 += float32(xr[3]*hr[3]) - float32(xi[3]*hi[3])
 		}
 		sr := (*[4]float32)(s.Re[k : k+4])
-		si := (*[4]float32)(s.Im[k : k+4])
 		sr[0], sr[1], sr[2], sr[3] = r0, r1, r2, r3
+		var i0, i1, i2, i3 float32
+		for t, x := range xs {
+			h := hs[t]
+			xr := (*[4]float32)(x.Re[k : k+4])
+			xi := (*[4]float32)(x.Im[k : k+4])
+			hr := (*[4]float32)(h.Re[k : k+4])
+			hi := (*[4]float32)(h.Im[k : k+4])
+			i0 += float32(xr[0]*hi[0]) + float32(xi[0]*hr[0])
+			i1 += float32(xr[1]*hi[1]) + float32(xi[1]*hr[1])
+			i2 += float32(xr[2]*hi[2]) + float32(xi[2]*hr[2])
+			i3 += float32(xr[3]*hi[3]) + float32(xi[3]*hr[3])
+		}
+		si := (*[4]float32)(s.Im[k : k+4])
 		si[0], si[1], si[2], si[3] = i0, i1, i2, i3
 	}
+	afirApplyTermsLastBin(xs, hs, s)
+}
+
+// afirApplyTermsLastBin is bin FftLengthBy2 of afirApplyTermsGo.
+func afirApplyTermsLastBin(xs, hs []*FftData, s *FftData) {
+	hs = hs[:len(xs)]
 	const n = FftLengthBy2
 	var re, im float32
 	for t, x := range xs {

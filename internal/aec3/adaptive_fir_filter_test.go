@@ -151,12 +151,27 @@ func TestAfirFastGoKernels(t *testing.T) {
 		afirApplyTermsGo(xs, hs, &want)
 		afirApplyTermsFastGo(xs, hs, &got)
 		afirEqualFft(t, "apply terms", &got, &want)
+		got.Re[9], got.Im[64] = 5, 6
+		afirApplyTermsWideGo(xs, hs, &got)
+		afirEqualFft(t, "apply terms, eight bins", &got, &want)
+		got.Re[9], got.Im[64] = 5, 6
+		afirApplyTermsSplitGo(xs, hs, &got)
+		afirEqualFft(t, "apply terms, split", &got, &want)
 		got.Clear()
 		for i := range xs {
 			afirApplyAllGo(xs[i], hs[i], &got)
 		}
 		afirEqualFft(t, "apply all", &got, &want)
 
+		for i := range hs {
+			h4, h8 := *hs[i], *hs[i]
+			afirAdaptAll4Go(xs[i], &G, &h4)
+			afirAdaptAll8Go(xs[i], &G, &h8)
+			want := *hs[i]
+			afirAdaptBinsGo(xs[i], &G, &want, 0, FftLengthBy2Plus1)
+			afirEqualFft(t, "adapt, four bins", &h4, &want)
+			afirEqualFft(t, "adapt, eight bins", &h8, &want)
+		}
 		afirAdaptTermsGo(xs, hw, &G)
 		afirAdaptTermsFastGo(xs, hs, &G)
 		for i := range hs {
