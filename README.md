@@ -75,8 +75,9 @@ Lower is faster. Times cover the whole frame, band splitting included.
   drops to 53–70% of libwebrtc's time.
 - **Pure Go** (no `GOEXPERIMENT=simd`): 1.4–1.6× libwebrtc's time on M4,
   1.9–2.3× on Neoverse-N2 and x86 SSE2.
-- **Garbage collector:** a canceller is 13–15 heap objects (~320–500 kB);
-  1000 live cancellers add about 1.3 ms to a GC cycle.
+- **Garbage collector:** a canceller is 11–15 heap objects (~320–500 kB)
+  with at most 24 pointers; 1000 live cancellers add about 0.8 ms to a GC
+  cycle on M4.
 
 M4 is measured against the prebuilt libwebrtc; the other machines run on
 GitHub runners against libwebrtc built from source
