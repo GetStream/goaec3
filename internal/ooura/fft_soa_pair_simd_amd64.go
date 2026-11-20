@@ -18,6 +18,10 @@ import "simd/archsimd"
 // into that layout and the last one separates the results into one 256-bit
 // store per frame (VPERM2F128), as the passes of fft_pair_simd_amd64.go do.
 //
+// As in fft_soa_simd.go, every line that calls a helper has an archsimd
+// operation of its own; two 128-bit loads are gathered into a vector with
+// SetLo and SetHi on the line (ldPair written out).
+//
 // TestSoaPairMatchesSingle checks the pair bit-exactly against two single
 // transforms.
 
@@ -74,19 +78,25 @@ func inverseFftSplitPairSoa(re0, im0, re1, im1 *[65]float32, a, b *[128]float32,
 	archsimd.ClearAVXUpperBits()
 }
 
-func soaHalves8(t *[256]float32) (r, i *[128]float32) {
-	return (*[128]float32)(t[:128]), (*[128]float32)(t[128:])
-}
-
-// q8 is eight floats at the constant offset off of a window.
-func q8w104(p *[104]float32, off int) *[8]float32 { return (*[8]float32)(p[off : off+8]) }
-
-func q8w32(p *[32]float32, off int) *[8]float32 { return (*[8]float32)(p[off : off+8]) }
-
-func tab12g(t *[12][8]float32, i int) vec8 { return ld8(&t[i]) }
-
 func neg8(x vec8) vec8 {
 	return x.ToBits().Xor(archsimd.LoadUint32x8Array(&signAll8)).BitsToFloat32()
+}
+
+// soaLane0g..3g are soaLane0..3 on both halves.
+func soaLane0g(r0, r1, r2, r3 vec8) vec8 {
+	return r0.ConcatPermuteScalarsGrouped(0, 1, 4, 5, r1).ConcatPermuteScalarsGrouped(0, 2, 4, 6, r2.ConcatPermuteScalarsGrouped(0, 1, 4, 5, r3))
+}
+
+func soaLane1g(r0, r1, r2, r3 vec8) vec8 {
+	return r0.ConcatPermuteScalarsGrouped(0, 1, 4, 5, r1).ConcatPermuteScalarsGrouped(1, 3, 5, 7, r2.ConcatPermuteScalarsGrouped(0, 1, 4, 5, r3))
+}
+
+func soaLane2g(r0, r1, r2, r3 vec8) vec8 {
+	return r0.ConcatPermuteScalarsGrouped(2, 3, 6, 7, r1).ConcatPermuteScalarsGrouped(0, 2, 4, 6, r2.ConcatPermuteScalarsGrouped(2, 3, 6, 7, r3))
+}
+
+func soaLane3g(r0, r1, r2, r3 vec8) vec8 {
+	return r0.ConcatPermuteScalarsGrouped(2, 3, 6, 7, r1).ConcatPermuteScalarsGrouped(1, 3, 5, 7, r2.ConcatPermuteScalarsGrouped(2, 3, 6, 7, r3))
 }
 
 // soaButterfly8 is soaButterfly on both halves.
@@ -99,40 +109,34 @@ func soaButterfly8(ar, ai, br, bi, cr, ci, dr, di vec8) (sr, si, tr, ti, yr, yi,
 		x1r.Sub(x3i), x1i.Add(x3r), x1r.Add(x3i), x1i.Sub(x3r)
 }
 
-// soaRot8 is soaRot on both halves.
-func soaRot8(tab *[12][8]float32, w int, xr, xi vec8) (yr, yi vec8) {
-	return tab12g(tab, w).Mul(xr).Add(tab12g(tab, w+1).Mul(xi)), tab12g(tab, w+2).Mul(xi).Add(tab12g(tab, w+3).Mul(xr))
-}
-
-// soaTransposeStore8 is soaTransposeStore on both halves.
-func soaTransposeStore8(w *[104]float32, r0, r1, r2, r3 vec8) {
-	e0, e1, e2, e3 := lo64g(r0, r1), hi64g(r0, r1), lo64g(r2, r3), hi64g(r2, r3)
-	eveng(e0, e2).StoreArray(q8w104(w, 0))
-	eveng(e1, e3).StoreArray(q8w104(w, 32))
-	oddg(e0, e2).StoreArray(q8w104(w, 64))
-	oddg(e1, e3).StoreArray(q8w104(w, 96))
-}
-
 // soaCft1stPackedPair is soaCft1stPacked from the frames a and b into t.
 func soaCft1stPackedPair(a, b *[128]float32, t *[256]float32) {
-	outR, outI := soaHalves8(t)
+	outR, outI := (*[128]float32)(t[:128]), (*[128]float32)(t[128:])
 	var zero vec8
 	group := func(m, p int) {
 		_ = zero // a captured vector makes the compiler inline the closure
-		wa := (*[104]float32)(a[8*m : 8*m+104])
-		wb := (*[104]float32)(b[8*m : 8*m+104])
-		a0, a1 := ldPair((*[4]float32)(wa[0:4]), (*[4]float32)(wb[0:4])), ldPair((*[4]float32)(wa[4:8]), (*[4]float32)(wb[4:8]))
-		b0, b1 := ldPair((*[4]float32)(wa[64:68]), (*[4]float32)(wb[64:68])), ldPair((*[4]float32)(wa[68:72]), (*[4]float32)(wb[68:72]))
-		c0, c1 := ldPair((*[4]float32)(wa[32:36]), (*[4]float32)(wb[32:36])), ldPair((*[4]float32)(wa[36:40]), (*[4]float32)(wb[36:40]))
-		d0, d1 := ldPair((*[4]float32)(wa[96:100]), (*[4]float32)(wb[96:100])), ldPair((*[4]float32)(wa[100:104]), (*[4]float32)(wb[100:104]))
-		o0r, o0i, tr, ti, yr, yi, zr, zi := soaButterfly8(eveng(a0, a1), oddg(a0, a1), eveng(b0, b1), oddg(b0, b1),
-			eveng(c0, c1), oddg(c0, c1), eveng(d0, d1), oddg(d0, d1))
+		wa, wb := (*[104]float32)(a[8*m:8*m+104]), (*[104]float32)(b[8*m:8*m+104])
+		wr, wi := (*[104]float32)(outR[p:p+104]), (*[104]float32)(outI[p:p+104])
 		tab := &soaS1x8[m]
-		o2r, o2i := soaRot8(tab, 4, tr, ti)
-		o1r, o1i := soaRot8(tab, 0, yr, yi)
-		o3r, o3i := soaRot8(tab, 8, zr, zi)
-		soaTransposeStore8((*[104]float32)(outR[p:p+104]), o0r, o1r, o2r, o3r)
-		soaTransposeStore8((*[104]float32)(outI[p:p+104]), o0i, o1i, o2i, o3i)
+		a0, a1, b0, b1 := zero.SetLo(ld((*[4]float32)(wa[0:4]))).SetHi(ld((*[4]float32)(wb[0:4]))), zero.SetLo(ld((*[4]float32)(wa[4:8]))).SetHi(ld((*[4]float32)(wb[4:8]))), zero.SetLo(ld((*[4]float32)(wa[64:68]))).SetHi(ld((*[4]float32)(wb[64:68]))), zero.SetLo(ld((*[4]float32)(wa[68:72]))).SetHi(ld((*[4]float32)(wb[68:72])))
+		c0, c1, d0, d1 := zero.SetLo(ld((*[4]float32)(wa[32:36]))).SetHi(ld((*[4]float32)(wb[32:36]))), zero.SetLo(ld((*[4]float32)(wa[36:40]))).SetHi(ld((*[4]float32)(wb[36:40]))), zero.SetLo(ld((*[4]float32)(wa[96:100]))).SetHi(ld((*[4]float32)(wb[96:100]))), zero.SetLo(ld((*[4]float32)(wa[100:104]))).SetHi(ld((*[4]float32)(wb[100:104])))
+		x0r, x0i := eveng(a0, a1).Add(eveng(b0, b1)), oddg(a0, a1).Add(oddg(b0, b1))
+		x1r, x1i := eveng(a0, a1).Sub(eveng(b0, b1)), oddg(a0, a1).Sub(oddg(b0, b1))
+		x2r, x2i := eveng(c0, c1).Add(eveng(d0, d1)), oddg(c0, c1).Add(oddg(d0, d1))
+		x3r, x3i := eveng(c0, c1).Sub(eveng(d0, d1)), oddg(c0, c1).Sub(oddg(d0, d1))
+		o0r, o0i, tr, ti := x0r.Add(x2r), x0i.Add(x2i), x0r.Sub(x2r), x0i.Sub(x2i)
+		yr, yi, zr, zi := x1r.Sub(x3i), x1i.Add(x3r), x1r.Add(x3i), x1i.Sub(x3r)
+		o1r, o1i := ld8(&tab[0]).Mul(yr).Add(ld8(&tab[1]).Mul(yi)), ld8(&tab[2]).Mul(yi).Add(ld8(&tab[3]).Mul(yr))
+		o2r, o2i := ld8(&tab[4]).Mul(tr).Add(ld8(&tab[5]).Mul(ti)), ld8(&tab[6]).Mul(ti).Add(ld8(&tab[7]).Mul(tr))
+		o3r, o3i := ld8(&tab[8]).Mul(zr).Add(ld8(&tab[9]).Mul(zi)), ld8(&tab[10]).Mul(zi).Add(ld8(&tab[11]).Mul(zr))
+		soaLane0g(o0r, o1r, o2r, o3r).StoreArray((*[8]float32)(wr[0:8]))
+		soaLane2g(o0r, o1r, o2r, o3r).StoreArray((*[8]float32)(wr[32:40]))
+		soaLane1g(o0r, o1r, o2r, o3r).StoreArray((*[8]float32)(wr[64:72]))
+		soaLane3g(o0r, o1r, o2r, o3r).StoreArray((*[8]float32)(wr[96:104]))
+		soaLane0g(o0i, o1i, o2i, o3i).StoreArray((*[8]float32)(wi[0:8]))
+		soaLane2g(o0i, o1i, o2i, o3i).StoreArray((*[8]float32)(wi[32:40]))
+		soaLane1g(o0i, o1i, o2i, o3i).StoreArray((*[8]float32)(wi[64:72]))
+		soaLane3g(o0i, o1i, o2i, o3i).StoreArray((*[8]float32)(wi[96:104]))
 	}
 	// p = 8*rev2(m).
 	group(0, 0)
@@ -143,21 +147,26 @@ func soaCft1stPackedPair(a, b *[128]float32, t *[256]float32) {
 
 // soaCft1stSplitPair is soaCft1stSplit from s to t.
 func soaCft1stSplitPair(s, t *[256]float32) {
-	inR, inI := soaHalves8(s)
-	outR, outI := soaHalves8(t)
+	inR, inI := (*[128]float32)(s[:128]), (*[128]float32)(s[128:])
+	outR, outI := (*[128]float32)(t[:128]), (*[128]float32)(t[128:])
 	var zero vec8
 	group := func(m, p int) {
 		_ = zero // a captured vector makes the compiler inline the closure
-		wr := (*[104]float32)(inR[8*m : 8*m+104])
-		wi := (*[104]float32)(inI[8*m : 8*m+104])
-		o0r, o0i, tr, ti, yr, yi, zr, zi := soaButterfly8(ld8(q8w104(wr, 0)), ld8(q8w104(wi, 0)), ld8(q8w104(wr, 64)), ld8(q8w104(wi, 64)),
-			ld8(q8w104(wr, 32)), ld8(q8w104(wi, 32)), ld8(q8w104(wr, 96)), ld8(q8w104(wi, 96)))
+		sr, si := (*[104]float32)(inR[8*m:8*m+104]), (*[104]float32)(inI[8*m:8*m+104])
+		wr, wi := (*[104]float32)(outR[p:p+104]), (*[104]float32)(outI[p:p+104])
 		tab := &soaS1x8[m]
-		o2r, o2i := soaRot8(tab, 4, tr, ti)
-		o1r, o1i := soaRot8(tab, 0, yr, yi)
-		o3r, o3i := soaRot8(tab, 8, zr, zi)
-		soaTransposeStore8((*[104]float32)(outR[p:p+104]), o0r, o1r, o2r, o3r)
-		soaTransposeStore8((*[104]float32)(outI[p:p+104]), o0i, o1i, o2i, o3i)
+		o0r, o0i, tr, ti, yr, yi, zr, zi := soaButterfly8(archsimd.LoadFloat32x8Array((*[8]float32)(sr[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(si[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(sr[64:72])), archsimd.LoadFloat32x8Array((*[8]float32)(si[64:72])), archsimd.LoadFloat32x8Array((*[8]float32)(sr[32:40])), archsimd.LoadFloat32x8Array((*[8]float32)(si[32:40])), archsimd.LoadFloat32x8Array((*[8]float32)(sr[96:104])), archsimd.LoadFloat32x8Array((*[8]float32)(si[96:104])))
+		o1r, o1i := ld8(&tab[0]).Mul(yr).Add(ld8(&tab[1]).Mul(yi)), ld8(&tab[2]).Mul(yi).Add(ld8(&tab[3]).Mul(yr))
+		o2r, o2i := ld8(&tab[4]).Mul(tr).Add(ld8(&tab[5]).Mul(ti)), ld8(&tab[6]).Mul(ti).Add(ld8(&tab[7]).Mul(tr))
+		o3r, o3i := ld8(&tab[8]).Mul(zr).Add(ld8(&tab[9]).Mul(zi)), ld8(&tab[10]).Mul(zi).Add(ld8(&tab[11]).Mul(zr))
+		soaLane0g(o0r, o1r, o2r, o3r).StoreArray((*[8]float32)(wr[0:8]))
+		soaLane2g(o0r, o1r, o2r, o3r).StoreArray((*[8]float32)(wr[32:40]))
+		soaLane1g(o0r, o1r, o2r, o3r).StoreArray((*[8]float32)(wr[64:72]))
+		soaLane3g(o0r, o1r, o2r, o3r).StoreArray((*[8]float32)(wr[96:104]))
+		soaLane0g(o0i, o1i, o2i, o3i).StoreArray((*[8]float32)(wi[0:8]))
+		soaLane2g(o0i, o1i, o2i, o3i).StoreArray((*[8]float32)(wi[32:40]))
+		soaLane1g(o0i, o1i, o2i, o3i).StoreArray((*[8]float32)(wi[64:72]))
+		soaLane3g(o0i, o1i, o2i, o3i).StoreArray((*[8]float32)(wi[96:104]))
 	}
 	// p = 8*rev2(m).
 	group(0, 0)
@@ -166,41 +175,37 @@ func soaCft1stSplitPair(s, t *[256]float32) {
 	group(3, 24)
 }
 
-func soaLoad32(p *[32]float32) (v0, v1, v2, v3 vec8) {
-	return ld8(q8w32(p, 0)), ld8(q8w32(p, 8)), ld8(q8w32(p, 16)), ld8(q8w32(p, 24))
-}
-
-func soaStore32(p *[32]float32, v0, v1, v2, v3 vec8) {
-	v0.StoreArray(q8w32(p, 0))
-	v1.StoreArray(q8w32(p, 8))
-	v2.StoreArray(q8w32(p, 16))
-	v3.StoreArray(q8w32(p, 24))
-}
-
 // soaCftmdlPair is soaCftmdl in place: a block loads its eight vectors
 // before it stores into them.
 func soaCftmdlPair(t *[256]float32) {
-	r, i := soaHalves8(t)
+	r, i := (*[128]float32)(t[:128]), (*[128]float32)(t[128:])
 
 	// Block 0: no rotation.
 	{
 		pr, pi := (*[32]float32)(r[0:32]), (*[32]float32)(i[0:32])
-		ar, br, cr, dr := soaLoad32(pr)
-		ai, bi, ci, di := soaLoad32(pi)
-		sr, si, tr, ti, yr, yi, zr, zi := soaButterfly8(ar, ai, br, bi, cr, ci, dr, di)
-		soaStore32(pr, sr, yr, tr, zr)
-		soaStore32(pi, si, yi, ti, zi)
+		sr, si, tr, ti, yr, yi, zr, zi := soaButterfly8(archsimd.LoadFloat32x8Array((*[8]float32)(pr[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[8:16])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[8:16])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[16:24])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[16:24])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[24:32])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[24:32])))
+		sr.StoreArray((*[8]float32)(pr[0:8]))
+		yr.StoreArray((*[8]float32)(pr[8:16]))
+		tr.StoreArray((*[8]float32)(pr[16:24]))
+		zr.StoreArray((*[8]float32)(pr[24:32]))
+		si.StoreArray((*[8]float32)(pi[0:8]))
+		yi.StoreArray((*[8]float32)(pi[8:16]))
+		ti.StoreArray((*[8]float32)(pi[16:24]))
+		zi.StoreArray((*[8]float32)(pi[24:32]))
 	}
 
 	// Block 1: t turns by a quarter, y and z by wk1r.
 	{
 		pr, pi := (*[32]float32)(r[32:64]), (*[32]float32)(i[32:64])
-		ar, br, cr, dr := soaLoad32(pr)
-		ai, bi, ci, di := soaLoad32(pi)
-		sr, si, tr, ti, yr, yi, zr, zi := soaButterfly8(ar, ai, br, bi, cr, ci, dr, di)
-		g0, g1, g2, g3 := ld8(&soaWk1x8[0]), ld8(&soaWk1x8[1]), ld8(&soaWk1x8[2]), ld8(&soaWk1x8[3])
-		soaStore32(pr, sr, g0.Mul(yr.Sub(yi)), neg8(ti), g3.Mul(zr.Add(zi)))
-		soaStore32(pi, si, g1.Mul(yr.Add(yi)), tr, g2.Mul(zr.Sub(zi)))
+		sr, si, tr, ti, yr, yi, zr, zi := soaButterfly8(archsimd.LoadFloat32x8Array((*[8]float32)(pr[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[8:16])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[8:16])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[16:24])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[16:24])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[24:32])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[24:32])))
+		sr.StoreArray((*[8]float32)(pr[0:8]))
+		ld8(&soaWk1x8[0]).Mul(yr.Sub(yi)).StoreArray((*[8]float32)(pr[8:16]))
+		neg8(ti).StoreArray((*[8]float32)(pr[16:24]))
+		ld8(&soaWk1x8[3]).Mul(zr.Add(zi)).StoreArray((*[8]float32)(pr[24:32]))
+		si.StoreArray((*[8]float32)(pi[0:8]))
+		ld8(&soaWk1x8[1]).Mul(yr.Add(yi)).StoreArray((*[8]float32)(pi[8:16]))
+		tr.StoreArray((*[8]float32)(pi[16:24]))
+		ld8(&soaWk1x8[2]).Mul(zr.Sub(zi)).StoreArray((*[8]float32)(pi[24:32]))
 	}
 
 	// Blocks 2 and 3: the rotations of soaS2.
@@ -208,16 +213,19 @@ func soaCftmdlPair(t *[256]float32) {
 	rotated := func(b int) {
 		_ = zero // a captured vector makes the compiler inline the closure
 		tab := &soaS2x8[b]
-		pr := (*[32]float32)(r[64+32*b : 96+32*b])
-		pi := (*[32]float32)(i[64+32*b : 96+32*b])
-		ar, br, cr, dr := soaLoad32(pr)
-		ai, bi, ci, di := soaLoad32(pi)
-		sr, si, tr, ti, yr, yi, zr, zi := soaButterfly8(ar, ai, br, bi, cr, ci, dr, di)
-		o2r, o2i := soaRot8(tab, 4, tr, ti)
-		o1r, o1i := soaRot8(tab, 0, yr, yi)
-		o3r, o3i := soaRot8(tab, 8, zr, zi)
-		soaStore32(pr, sr, o1r, o2r, o3r)
-		soaStore32(pi, si, o1i, o2i, o3i)
+		pr, pi := (*[32]float32)(r[64+32*b:96+32*b]), (*[32]float32)(i[64+32*b:96+32*b])
+		sr, si, tr, ti, yr, yi, zr, zi := soaButterfly8(archsimd.LoadFloat32x8Array((*[8]float32)(pr[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[8:16])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[8:16])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[16:24])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[16:24])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[24:32])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[24:32])))
+		o1r, o1i := ld8(&tab[0]).Mul(yr).Add(ld8(&tab[1]).Mul(yi)), ld8(&tab[2]).Mul(yi).Add(ld8(&tab[3]).Mul(yr))
+		o2r, o2i := ld8(&tab[4]).Mul(tr).Add(ld8(&tab[5]).Mul(ti)), ld8(&tab[6]).Mul(ti).Add(ld8(&tab[7]).Mul(tr))
+		o3r, o3i := ld8(&tab[8]).Mul(zr).Add(ld8(&tab[9]).Mul(zi)), ld8(&tab[10]).Mul(zi).Add(ld8(&tab[11]).Mul(zr))
+		sr.StoreArray((*[8]float32)(pr[0:8]))
+		o1r.StoreArray((*[8]float32)(pr[8:16]))
+		o2r.StoreArray((*[8]float32)(pr[16:24]))
+		o3r.StoreArray((*[8]float32)(pr[24:32]))
+		si.StoreArray((*[8]float32)(pi[0:8]))
+		o1i.StoreArray((*[8]float32)(pi[8:16]))
+		o2i.StoreArray((*[8]float32)(pi[16:24]))
+		o3i.StoreArray((*[8]float32)(pi[24:32]))
 	}
 	rotated(0)
 	rotated(1)
@@ -225,22 +233,20 @@ func soaCftmdlPair(t *[256]float32) {
 
 // soaCftfsubTailPair is soaCftfsubTail in place.
 func soaCftfsubTailPair(t *[256]float32) {
-	r, i := soaHalves8(t)
+	r, i := (*[128]float32)(t[:128]), (*[128]float32)(t[128:])
 	var zero vec8
 	step := func(j int) {
 		_ = zero // a captured vector makes the compiler inline the closure
-		pr := (*[104]float32)(r[j : j+104])
-		pi := (*[104]float32)(i[j : j+104])
-		sr, si, tr, ti, yr, yi, zr, zi := soaButterfly8(ld8(q8w104(pr, 0)), ld8(q8w104(pi, 0)), ld8(q8w104(pr, 32)), ld8(q8w104(pi, 32)),
-			ld8(q8w104(pr, 64)), ld8(q8w104(pi, 64)), ld8(q8w104(pr, 96)), ld8(q8w104(pi, 96)))
-		sr.StoreArray(q8w104(pr, 0))
-		si.StoreArray(q8w104(pi, 0))
-		yr.StoreArray(q8w104(pr, 32))
-		yi.StoreArray(q8w104(pi, 32))
-		tr.StoreArray(q8w104(pr, 64))
-		ti.StoreArray(q8w104(pi, 64))
-		zr.StoreArray(q8w104(pr, 96))
-		zi.StoreArray(q8w104(pi, 96))
+		pr, pi := (*[104]float32)(r[j:j+104]), (*[104]float32)(i[j:j+104])
+		sr, si, tr, ti, yr, yi, zr, zi := soaButterfly8(archsimd.LoadFloat32x8Array((*[8]float32)(pr[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[32:40])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[32:40])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[64:72])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[64:72])), archsimd.LoadFloat32x8Array((*[8]float32)(pr[96:104])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[96:104])))
+		sr.StoreArray((*[8]float32)(pr[0:8]))
+		si.StoreArray((*[8]float32)(pi[0:8]))
+		yr.StoreArray((*[8]float32)(pr[32:40]))
+		yi.StoreArray((*[8]float32)(pi[32:40]))
+		tr.StoreArray((*[8]float32)(pr[64:72]))
+		ti.StoreArray((*[8]float32)(pi[64:72]))
+		zr.StoreArray((*[8]float32)(pr[96:104]))
+		zi.StoreArray((*[8]float32)(pi[96:104]))
 	}
 	step(0)
 	step(8)
@@ -251,29 +257,26 @@ func soaCftfsubTailPair(t *[256]float32) {
 // soaStorePackedPair stores four complex values of each frame as pairs of
 // floats.
 func soaStorePackedPair(pa, pb *[8]float32, r, i vec8) {
-	zl, zh := zipLog(r, i), zipHig(r, i)
-	frameA(zl, zh).StoreArray(pa)
-	frameB(zl, zh).StoreArray(pb)
+	frameA(zipLog(r, i), zipHig(r, i)).StoreArray(pa)
+	frameB(zipLog(r, i), zipHig(r, i)).StoreArray(pb)
 }
 
 // soaCftbsubTailPair is soaCftbsubTail from s into the frames a and b.
 func soaCftbsubTailPair(s *[256]float32, a, b *[128]float32) {
-	inR, inI := soaHalves8(s)
+	inR, inI := (*[128]float32)(s[:128]), (*[128]float32)(s[128:])
 	var zero vec8
 	step := func(j int) {
 		_ = zero // a captured vector makes the compiler inline the closure
-		pr := (*[104]float32)(inR[j : j+104])
-		pi := (*[104]float32)(inI[j : j+104])
-		ar, ai := ld8(q8w104(pr, 0)), neg8(ld8(q8w104(pi, 0)))
-		br, bi := ld8(q8w104(pr, 32)), neg8(ld8(q8w104(pi, 32)))
-		cr, ci := ld8(q8w104(pr, 64)), ld8(q8w104(pi, 64))
-		dr, di := ld8(q8w104(pr, 96)), ld8(q8w104(pi, 96))
+		pr, pi := (*[104]float32)(inR[j:j+104]), (*[104]float32)(inI[j:j+104])
+		ar, ai := archsimd.LoadFloat32x8Array((*[8]float32)(pr[0:8])), neg8(archsimd.LoadFloat32x8Array((*[8]float32)(pi[0:8])))
+		br, bi := archsimd.LoadFloat32x8Array((*[8]float32)(pr[32:40])), neg8(archsimd.LoadFloat32x8Array((*[8]float32)(pi[32:40])))
+		cr, ci := archsimd.LoadFloat32x8Array((*[8]float32)(pr[64:72])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[64:72]))
+		dr, di := archsimd.LoadFloat32x8Array((*[8]float32)(pr[96:104])), archsimd.LoadFloat32x8Array((*[8]float32)(pi[96:104]))
 		x0r, x0i := ar.Add(br), ai.Add(bi)
 		x1r, x1i := ar.Sub(br), ai.Sub(bi)
 		x2r, x2i := cr.Add(dr), neg8(ci.Add(di))
 		x3r, x3i := cr.Sub(dr), ci.Sub(di)
-		oa := (*[104]float32)(a[j : j+104])
-		ob := (*[104]float32)(b[j : j+104])
+		oa, ob := (*[104]float32)(a[j:j+104]), (*[104]float32)(b[j:j+104])
 		soaStorePackedPair((*[8]float32)(oa[0:8]), (*[8]float32)(ob[0:8]), x0r.Add(x2r), x0i.Add(x2i))
 		soaStorePackedPair((*[8]float32)(oa[32:40]), (*[8]float32)(ob[32:40]), x1r.Sub(x3i), x1i.Sub(x3r))
 		soaStorePackedPair((*[8]float32)(oa[64:72]), (*[8]float32)(ob[64:72]), x0r.Sub(x2r), x0i.Sub(x2i))
@@ -286,53 +289,60 @@ func soaCftbsubTailPair(s *[256]float32, a, b *[128]float32) {
 }
 
 // soaRftfsubPair is soaRftfsub on the interleaved frames, two iterations per
-// round, except for bin 64 (see fftSplitPairSoa).
+// round, except for bin 64 (see fftSplitPairSoa). The rounds pair the
+// results of two iterations into one 256-bit store per frame.
 func soaRftfsubPair(t *[256]float32, re0, im0, re1, im1 *[65]float32) {
-	tr, ti := soaHalves8(t)
+	tr, ti := (*[128]float32)(t[:128]), (*[128]float32)(t[128:])
 	trh, tih := (*[64]float32)(tr[64:]), (*[64]float32)(ti[64:])
 	// Lane 0 of dc is a[0] + a[1].
-	dc := ld8((*[8]float32)(tr[0:8])).Add(ld8((*[8]float32)(ti[0:8])))
-	var zero, prevR, prevI, r0, r1, hR, hI vec8
+	dc := archsimd.LoadFloat32x8Array((*[8]float32)(tr[0:8])).Add(archsimd.LoadFloat32x8Array((*[8]float32)(ti[0:8])))
+	// r0 and r1 are the reversed results of the iteration before (bins
+	// 65-4m..68-4m), g0 and g1 those of the one before that.
+	var zero, prevR, prevI, r0, r1, g0, g1 vec8
 	round := func(q int) {
 		u := 3 - q
-		loR := (*[16]float32)(tr[16*q : 16*q+16])
-		loI := (*[16]float32)(ti[16*q : 16*q+16])
-		hiR := (*[16]float32)(trh[16*u : 16*u+16])
-		hiI := (*[16]float32)(tih[16*u : 16*u+16])
-		wr := (*[16]float32)(rftWkr8[16*q : 16*q+16])
-		wi := (*[16]float32)(rftWki8[16*q : 16*q+16])
+		loR, loI := (*[16]float32)(tr[16*q:16*q+16]), (*[16]float32)(ti[16*q:16*q+16])
+		hiR, hiI := (*[16]float32)(trh[16*u:16*u+16]), (*[16]float32)(tih[16*u:16*u+16])
+		wr, wi := (*[16]float32)(rftWkr8[16*q:16*q+16]), (*[16]float32)(rftWki8[16*q:16*q+16])
 
-		// Iteration m = 2q.
-		rhR, rhI := rev4g(ld8((*[8]float32)(hiR[8:16]))), rev4g(ld8((*[8]float32)(hiI[8:16])))
-		p0, p1, k0, k1 := rftfArith8(ld8((*[8]float32)(loR[0:8])), ld8((*[8]float32)(loI[0:8])), ext3g(prevR, rhR), ext3g(prevI, rhI),
-			ld8((*[8]float32)(wr[0:8])), ld8((*[8]float32)(wi[0:8])))
+		// Iteration m = 2q: the bins p and their partners
+		// k = ext3g(prev, rh).
+		p0, p1 := archsimd.LoadFloat32x8Array((*[8]float32)(loR[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(loI[0:8]))
+		rhR, rhI := rev4g(archsimd.LoadFloat32x8Array((*[8]float32)(hiR[8:16]))), rev4g(archsimd.LoadFloat32x8Array((*[8]float32)(hiI[8:16])))
+		wkr, wki := archsimd.LoadFloat32x8Array((*[8]float32)(wr[0:8])), archsimd.LoadFloat32x8Array((*[8]float32)(wi[0:8]))
+		xr, xi := p0.Sub(ext3g(prevR, rhR)), p1.Add(ext3g(prevI, rhI))
+		yr := wkr.Mul(xr).Sub(wki.Mul(xi))
+		yi := wkr.Mul(xi).Add(wki.Mul(xr))
+		p0, p1 = p0.Sub(yr), p1.Sub(yi)
+		k0, k1 := rev4g(ext3g(prevR, rhR).Add(yr)), rev4g(ext3g(prevI, rhI).Sub(yi))
 		prevR, prevI = rhR, rhI
-		k0, k1 = rev4g(k0), rev4g(k1)
 		if q == 0 {
-			p0 = lane0g(dc, p0)
-			p1 = lane0g(zero, p1)
+			// Bin 0 is a[0] + a[1].
+			p0 = dc.ConcatPermuteScalarsGrouped(0, 0, 5, 5, p0).ConcatPermuteScalarsGrouped(0, 2, 6, 7, p0)
+			p1 = zero.ConcatPermuteScalarsGrouped(0, 0, 5, 5, p1).ConcatPermuteScalarsGrouped(0, 2, 6, 7, p1)
 		} else {
 			// Bins 64-8q..71-8q.
-			xr, xi := ext3g(k0, r0), ext3g(k1, r1)
-			frameA(xr, hR).StoreArray(h8(re0, u+1))
-			frameB(xr, hR).StoreArray(h8(re1, u+1))
-			frameA(xi, hI).StoreArray(h8(im0, u+1))
-			frameB(xi, hI).StoreArray(h8(im1, u+1))
+			frameA(ext3g(k0, r0), ext3g(r0, g0)).StoreArray(h8(re0, u+1))
+			frameB(ext3g(k0, r0), ext3g(r0, g0)).StoreArray(h8(re1, u+1))
+			frameA(ext3g(k1, r1), ext3g(r1, g1)).StoreArray(h8(im0, u+1))
+			frameB(ext3g(k1, r1), ext3g(r1, g1)).StoreArray(h8(im1, u+1))
 		}
-		r0, r1 = k0, k1
+		g0, g1 = k0, k1
 
 		// Iteration m = 2q+1.
-		rhR, rhI = rev4g(ld8((*[8]float32)(hiR[0:8]))), rev4g(ld8((*[8]float32)(hiI[0:8])))
-		s0, s1, k0, k1 := rftfArith8(ld8((*[8]float32)(loR[8:16])), ld8((*[8]float32)(loI[8:16])), ext3g(prevR, rhR), ext3g(prevI, rhI),
-			ld8((*[8]float32)(wr[8:16])), ld8((*[8]float32)(wi[8:16])))
+		s0, s1 := archsimd.LoadFloat32x8Array((*[8]float32)(loR[8:16])), archsimd.LoadFloat32x8Array((*[8]float32)(loI[8:16]))
+		rhR, rhI = rev4g(archsimd.LoadFloat32x8Array((*[8]float32)(hiR[0:8]))), rev4g(archsimd.LoadFloat32x8Array((*[8]float32)(hiI[0:8])))
+		wkr, wki = archsimd.LoadFloat32x8Array((*[8]float32)(wr[8:16])), archsimd.LoadFloat32x8Array((*[8]float32)(wi[8:16]))
+		xr, xi = s0.Sub(ext3g(prevR, rhR)), s1.Add(ext3g(prevI, rhI))
+		yr = wkr.Mul(xr).Sub(wki.Mul(xi))
+		yi = wkr.Mul(xi).Add(wki.Mul(xr))
+		s0, s1 = s0.Sub(yr), s1.Sub(yi)
+		r0, r1 = rev4g(ext3g(prevR, rhR).Add(yr)), rev4g(ext3g(prevI, rhI).Sub(yi))
 		prevR, prevI = rhR, rhI
-		k0, k1 = rev4g(k0), rev4g(k1)
 		frameA(p0, s0).StoreArray(b8(re0, q))
 		frameB(p0, s0).StoreArray(b8(re1, q))
 		frameA(p1, s1).StoreArray(b8(im0, q))
 		frameB(p1, s1).StoreArray(b8(im1, q))
-		hR, hI = ext3g(k0, r0), ext3g(k1, r1)
-		r0, r1 = k0, k1
 	}
 	round(0)
 	round(1)
@@ -340,11 +350,10 @@ func soaRftfsubPair(t *[256]float32, re0, im0, re1, im1 *[65]float32) {
 	round(3)
 	// Bins 32..39: bin 32 as the frame has it (the last lane of the reversed
 	// positions 32..35), then the last results.
-	xr, xi := ext3g(prevR, r0), ext3g(prevI, r1)
-	frameA(xr, hR).StoreArray(h8(re0, 0))
-	frameB(xr, hR).StoreArray(h8(re1, 0))
-	frameA(xi, hI).StoreArray(h8(im0, 0))
-	frameB(xi, hI).StoreArray(h8(im1, 0))
+	frameA(ext3g(prevR, r0), ext3g(r0, g0)).StoreArray(h8(re0, 0))
+	frameB(ext3g(prevR, r0), ext3g(r0, g0)).StoreArray(h8(re1, 0))
+	frameA(ext3g(prevI, r1), ext3g(r1, g1)).StoreArray(h8(im0, 0))
+	frameB(ext3g(prevI, r1), ext3g(r1, g1)).StoreArray(h8(im1, 0))
 }
 
 // soaRftbsubPair is soaRftbsub for two sets of bins, into the interleaved
@@ -368,26 +377,28 @@ func soaRftbsubPair(re0, im0, re1, im1 *[65]float32, t *[256]float32) {
 	dcR, dcI := z8.SetLo(dcRa).SetHi(dcRb), z8.SetLo(dcIa).SetHi(dcIb)
 	x32R, x32I := z8.SetLo(xRa).SetHi(xRb), z8.SetLo(xIa).SetHi(xIb)
 
-	tr, ti := soaHalves8(t)
+	tr, ti := (*[128]float32)(t[:128]), (*[128]float32)(t[128:])
 	trh, tih := (*[64]float32)(tr[64:]), (*[64]float32)(ti[64:])
 	var prevR, prevI, r0, r1 vec8
 	step := func(m int) {
 		n := 7 - m
-		p0 := ldPair(lo4(re0, m), lo4(re1, m))
-		p1 := ldPair(lo4(im0, m), lo4(im1, m))
-		rhR := rev4g(ldPair(hi4(re0, n), hi4(re1, n)))
-		rhI := rev4g(ldPair(hi4(im0, n), hi4(im1, n)))
-		wkr := ld8((*[8]float32)(rftWkr8[8*m : 8*m+8]))
-		wki := ld8((*[8]float32)(rftWki8[8*m : 8*m+8]))
-		p0, p1, k0, k1 := rftbArith8(p0, p1, ext3g(prevR, rhR), ext3g(prevI, rhI), wkr, wki)
+		p0, p1 := z8.SetLo(ld(lo4(re0, m))).SetHi(ld(lo4(re1, m))), z8.SetLo(ld(lo4(im0, m))).SetHi(ld(lo4(im1, m)))
+		rhR, rhI := rev4g(z8.SetLo(ld(hi4(re0, n))).SetHi(ld(hi4(re1, n)))), rev4g(z8.SetLo(ld(hi4(im0, n))).SetHi(ld(hi4(im1, n))))
+		wkr, wki := archsimd.LoadFloat32x8Array((*[8]float32)(rftWkr8[8*m:8*m+8])), archsimd.LoadFloat32x8Array((*[8]float32)(rftWki8[8*m:8*m+8]))
+		// The partners are k0 = ext3g(prevR, rhR) and k1 = ext3g(prevI, rhI).
+		xr, xi := p0.Sub(ext3g(prevR, rhR)), p1.Add(ext3g(prevI, rhI))
+		yr := wkr.Mul(xr).Add(wki.Mul(xi))
+		yi := wkr.Mul(xi).Sub(wki.Mul(xr))
+		p0, p1 = p0.Sub(yr), yi.Sub(p1)
+		// Their results, reversed: bins 61-4m..64-4m.
+		k0, k1 := rev4g(ext3g(prevR, rhR).Add(yr)), rev4g(yi.Sub(ext3g(prevI, rhI)))
 		prevR, prevI = rhR, rhI
 		if m == 0 {
-			p0 = lane0g(dcR, p0)
-			p1 = lane0g(dcI, p1)
+			p0 = dcR.ConcatPermuteScalarsGrouped(0, 0, 5, 5, p0).ConcatPermuteScalarsGrouped(0, 2, 6, 7, p0)
+			p1 = dcI.ConcatPermuteScalarsGrouped(0, 0, 5, 5, p1).ConcatPermuteScalarsGrouped(0, 2, 6, 7, p1)
 		}
 		p0.StoreArray((*[8]float32)(tr[8*m : 8*m+8]))
 		p1.StoreArray((*[8]float32)(ti[8*m : 8*m+8]))
-		k0, k1 = rev4g(k0), rev4g(k1) // bins 61-4m..64-4m
 		if m > 0 {
 			// Positions 36+4n..39+4n; the mask changes nothing for n < 7.
 			j := (8*n + 8) & 56

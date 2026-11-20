@@ -89,9 +89,20 @@ func neg(x vec) vec {
 
 var signAll = [4]uint32{0x80000000, 0x80000000, 0x80000000, 0x80000000}
 
-// soaTranspose returns the lanes of r0..r3: lk is {r0[k], r1[k], r2[k],
-// r3[k]}.
-func soaTranspose(r0, r1, r2, r3 vec) (l0, l1, l2, l3 vec) {
-	e0, e1, e2, e3 := lo64(r0, r1), hi64(r0, r1), lo64(r2, r3), hi64(r2, r3)
-	return even(e0, e2), odd(e0, e2), even(e1, e3), odd(e1, e3)
+// soaLane0..3 are the transposition of r0..r3: soaLanek is {r0[k], r1[k],
+// r2[k], r3[k]}.
+func soaLane0(r0, r1, r2, r3 vec) vec {
+	return r0.ConcatPermuteScalars(0, 1, 4, 5, r1).ConcatPermuteScalars(0, 2, 4, 6, r2.ConcatPermuteScalars(0, 1, 4, 5, r3))
+}
+
+func soaLane1(r0, r1, r2, r3 vec) vec {
+	return r0.ConcatPermuteScalars(0, 1, 4, 5, r1).ConcatPermuteScalars(1, 3, 5, 7, r2.ConcatPermuteScalars(0, 1, 4, 5, r3))
+}
+
+func soaLane2(r0, r1, r2, r3 vec) vec {
+	return r0.ConcatPermuteScalars(2, 3, 6, 7, r1).ConcatPermuteScalars(0, 2, 4, 6, r2.ConcatPermuteScalars(2, 3, 6, 7, r3))
+}
+
+func soaLane3(r0, r1, r2, r3 vec) vec {
+	return r0.ConcatPermuteScalars(2, 3, 6, 7, r1).ConcatPermuteScalars(1, 3, 5, 7, r2.ConcatPermuteScalars(2, 3, 6, 7, r3))
 }
