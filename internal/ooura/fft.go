@@ -72,18 +72,6 @@ func pack(re, im *[65]float32, v *[128]float32) {
 	}
 }
 
-// fftSplitFast and inverseFftSplitFast are the split transforms of the
-// builds and CPUs without the archsimd kernel.
-func fftSplitFast(a *[128]float32, re, im *[65]float32) {
-	fftFast(a)
-	unpack(a, re, im)
-}
-
-func inverseFftSplitFast(re, im *[65]float32, a *[128]float32) {
-	pack(re, im, a)
-	inverseFftFast(a)
-}
-
 // fftScalar is the scalar C path of OouraFft::Fft.
 func fftScalar(a *[128]float32) {
 	bitrv2(a)

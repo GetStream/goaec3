@@ -206,6 +206,47 @@ func TestFftSplitMatchesPacked(t *testing.T) {
 	compareSplit(t, "fast", fftSplitFast, inverseFftSplitFast, fftRef, inverseFftRef)
 }
 
+// The split transforms of the builds without archsimd kernels, which run the
+// last passes of the forward transform and the first passes of the inverse
+// as one pass, against the transcriptions with the FftData copy: both lanes
+// in every build, also on frames with NaN and infinities.
+func TestSplitFastMatchesRef(t *testing.T) {
+	compareSplit(t, "lane/neon", fftSplitFastLane, inverseFftSplitFastLane, fftNeonRef, inverseFftNeonRef)
+	compareSplit(t, "lane/sse2", fftSplitFastLane, inverseFftSplitFastLane, fftSSE2Ref, inverseFftSSE2Ref)
+	compareSplit(t, "scalar", fftSplitFastScalar, inverseFftSplitFastScalar, fftScalar, inverseFftScalar)
+
+	lanes := []struct {
+		name string
+		fwd  fftSplitFunc
+		inv  inverseFftSplitFunc
+		f, g fftFunc
+	}{
+		{"lane", fftSplitFastLane, inverseFftSplitFastLane, fftNeonRef, inverseFftNeonRef},
+		{"scalar", fftSplitFastScalar, inverseFftSplitFastScalar, fftScalar, inverseFftScalar},
+	}
+	for _, l := range lanes {
+		for n, a := range nonFiniteInputs() {
+			var re, im, wre, wim [65]float32
+			x, y := a, a
+			l.f(&y)
+			unpack(&y, &wre, &wim)
+			l.fwd(&x, &re, &im)
+			for i := range re {
+				if !same32(re[i], wre[i]) || !same32(im[i], wim[i]) {
+					t.Fatalf("%s fwd non-finite input %d bin %d: got (%v, %v) want (%v, %v)", l.name, n, i, re[i], im[i], wre[i], wim[i])
+				}
+			}
+			unpack(&a, &re, &im)
+			re[64] = a[1]
+			var got, want [128]float32
+			pack(&re, &im, &want)
+			l.g(&want)
+			l.inv(&re, &im, &got)
+			checkSameNaN(t, l.name+" inv non-finite", n, &got, &want)
+		}
+	}
+}
+
 func TestFftRoundTrip(t *testing.T) {
 	rng := rand.New(rand.NewSource(3))
 	var a, orig [128]float32

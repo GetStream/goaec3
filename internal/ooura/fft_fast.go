@@ -529,3 +529,335 @@ func rftbsubFast(a *[128]float32) {
 	}
 	a[65] = -a[65]
 }
+
+// Split transforms.
+//
+// FftSplit ends with cftfsubTail, rftfsub and the copy to bins, and
+// InverseFftSplit starts with the copy from bins, rftbsub and (after
+// bitrv2) cft1st. Run as passes, each loads and stores the whole frame. The
+// functions below run each group of three as one pass that loads every
+// input once and stores every output once, with the float operations of the
+// passes per element.
+//
+// rftfsub and rftbsub work on the bin pairs (k, 64-k), k = 1..31. The last
+// radix-4 butterfly of the forward transform at index c produces the bins c,
+// 16+c, 32+c and 48+c, and the first butterfly of the inverse (after
+// bitrv2) at index c consumes the same four. The partners of these bins are
+// the bins of the butterfly at 16-c, so one step runs the butterflies c and
+// 16-c (c = 1..7) with the four pair operations between them; the
+// butterflies 0 and 8 hold their own partners (16 with 48; 8 with 56 and 24
+// with 40), and the bins 0 and 32 have none.
+
+// rftWk[c] holds the rftfsub/rftbsub factors (wkr, wki) of the bin pairs at
+// k = c, 32-c, 16-c and 16+c: wkr = 0.5 - w[64-k] and wki = w[32+k] with
+// w = rdftW, as the passes compute them.
+var rftWk = makeRftWk()
+
+func makeRftWk() (t [9][8]float32) {
+	for c := range t {
+		for i, k := range [4]int{c, 32 - c, 16 - c, 16 + c} {
+			if k < 1 || k > 31 {
+				continue
+			}
+			t[c][2*i] = 0.5 - rdftW[64-k]
+			t[c][2*i+1] = rdftW[32+k]
+		}
+	}
+	return t
+}
+
+// rftfPair is one iteration of rftfsub_128 on the bins l = k and h = 64-k.
+func rftfPair(wkr, wki, lr, li, hr, hi float32) (float32, float32, float32, float32) {
+	xr := lr - hr
+	xi := li + hi
+	yr := float32(wkr*xr) - float32(wki*xi)
+	yi := float32(wkr*xi) + float32(wki*xr)
+	return lr - yr, li - yi, hr + yr, hi - yi
+}
+
+// rftbPair is one iteration of rftbsub_128 on the bins l = k and h = 64-k.
+func rftbPair(wkr, wki, lr, li, hr, hi float32) (float32, float32, float32, float32) {
+	xr := lr - hr
+	xi := li + hi
+	yr := float32(wkr*xr) + float32(wki*xi)
+	yi := float32(wkr*xi) - float32(wki*xr)
+	return lr - yr, yi - li, yr + hr, yi - hi
+}
+
+func fftSplitFastLane(a *[128]float32, re, im *[65]float32) {
+	var t [128]float32
+	cft1stFastLane(a, &t)
+	cftmdlFastLane(&t, a)
+	tailSplitFast(a, re, im)
+}
+
+func fftSplitFastScalar(a *[128]float32, re, im *[65]float32) {
+	var t [128]float32
+	cft1stFastScalar(a, &t)
+	cftmdlFastScalar(&t, a)
+	tailSplitFast(a, re, im)
+}
+
+func inverseFftSplitFastLane(re, im *[65]float32, a *[128]float32) {
+	var t [128]float32
+	splitCft1stFastLane(re, im, &t)
+	cftmdlFastLane(&t, a)
+	cftbsubTailFast(a)
+}
+
+func inverseFftSplitFastScalar(re, im *[65]float32, a *[128]float32) {
+	pack(re, im, a)
+	inverseFftFastScalar(a)
+}
+
+// tailSplitFast is cftfsubTail, rftfsub, the exchange of a[0] and a[1] that
+// ends the forward transform and FftData::CopyFromPackedArray, from a into
+// re and im.
+//
+// A step computes its eight bins in two halves, each from the frame: the
+// first half takes the sums of butterfly c and the differences of butterfly
+// 16-c (bins c, 32+c, 32-c, 64-c), the second half the rest. A half holds
+// eight values at a time, which fits the float registers of amd64, where
+// the second operand of every sum and difference is read from memory.
+func tailSplitFast(a *[128]float32, re, im *[65]float32) {
+	// Butterfly 0: bins 0, 16, 32, 48.
+	{
+		x0r := a[0] + a[32]
+		x0i := a[1] + a[33]
+		x1r := a[0] - a[32]
+		x1i := a[1] - a[33]
+		x2r := a[64] + a[96]
+		x2i := a[65] + a[97]
+		x3r := a[64] - a[96]
+		x3i := a[65] - a[97]
+		b0r := x0r + x2r
+		b0i := x0i + x2i
+		re[0] = b0r + b0i
+		re[64] = b0r - b0i
+		im[0] = 0
+		im[64] = 0
+		re[32] = x0r - x2r
+		im[32] = x0i - x2i
+		w := &rftWk[0]
+		lr, li, hr, hi := rftfPair(w[6], w[7], x1r-x3i, x1i+x3r, x1r+x3i, x1i-x3r)
+		re[16], im[16], re[48], im[48] = lr, li, hr, hi
+	}
+	// Butterfly 8: bins 8, 24, 40, 56.
+	{
+		x0r := a[16] + a[48]
+		x0i := a[17] + a[49]
+		x1r := a[16] - a[48]
+		x1i := a[17] - a[49]
+		x2r := a[80] + a[112]
+		x2i := a[81] + a[113]
+		x3r := a[80] - a[112]
+		x3i := a[81] - a[113]
+		w := &rftWk[8]
+		lr, li, hr, hi := rftfPair(w[0], w[1], x0r+x2r, x0i+x2i, x1r+x3i, x1i-x3r)
+		re[8], im[8], re[56], im[56] = lr, li, hr, hi
+		lr, li, hr, hi = rftfPair(w[2], w[3], x1r-x3i, x1i+x3r, x0r-x2r, x0i-x2i)
+		re[24], im[24], re[40], im[40] = lr, li, hr, hi
+	}
+	for c := 1; c < 8; c++ {
+		// p[0], p[32], p[64], p[96] are the inputs of butterfly c and q[...]
+		// those of butterfly 16-c; the outputs go to bins c + {0, 16, 32, 48}
+		// and 16-c + {0, 16, 32, 48}.
+		n := (16 - c) & 15
+		p := (*[98]float32)(a[2*c : 2*c+98])
+		q := (*[98]float32)(a[2*n : 2*n+98])
+		rp, ip := (*[49]float32)(re[c:c+49]), (*[49]float32)(im[c:c+49])
+		rq, iq := (*[49]float32)(re[n:n+49]), (*[49]float32)(im[n:n+49])
+		w := &rftWk[c]
+
+		// Sums of c, differences of 16-c.
+		x0r := p[0] + p[32]
+		x0i := p[1] + p[33]
+		x2r := p[64] + p[96]
+		x2i := p[65] + p[97]
+		y1r := q[0] - q[32]
+		y1i := q[1] - q[33]
+		y3r := q[64] - q[96]
+		y3i := q[65] - q[97]
+		// Bins c and 64-c.
+		lr, li, hr, hi := rftfPair(w[0], w[1], x0r+x2r, x0i+x2i, y1r+y3i, y1i-y3r)
+		rp[0], ip[0], rq[48], iq[48] = lr, li, hr, hi
+		// Bins 32-c and 32+c.
+		lr, li, hr, hi = rftfPair(w[2], w[3], y1r-y3i, y1i+y3r, x0r-x2r, x0i-x2i)
+		rq[16], iq[16], rp[32], ip[32] = lr, li, hr, hi
+
+		// Differences of c, sums of 16-c.
+		x1r := p[0] - p[32]
+		x1i := p[1] - p[33]
+		x3r := p[64] - p[96]
+		x3i := p[65] - p[97]
+		y0r := q[0] + q[32]
+		y0i := q[1] + q[33]
+		y2r := q[64] + q[96]
+		y2i := q[65] + q[97]
+		// Bins 16-c and 48+c.
+		lr, li, hr, hi = rftfPair(w[4], w[5], y0r+y2r, y0i+y2i, x1r+x3i, x1i-x3r)
+		rq[0], iq[0], rp[48], ip[48] = lr, li, hr, hi
+		// Bins 16+c and 48-c.
+		lr, li, hr, hi = rftfPair(w[6], w[7], x1r-x3i, x1i+x3r, y0r-y2r, y0i-y2i)
+		rp[16], ip[16], rq[32], iq[32] = lr, li, hr, hi
+	}
+}
+
+// splitCft1stFastLane is FftData::CopyToPackedArray, the first two
+// statements of the inverse transform, rftbsub, bitrv2 and the NEON/SSE2
+// cft1st, from re and im into t. It reads neither im[0] nor im[64].
+//
+// Group s of cft1st (see cft1stFastLane) reads the bins s, s+32, s+16 and
+// s+48 in this order (c0..c3 below) and writes t[16q+8h:] with
+// q = rev3(s&7) and h = s>>3, with the twiddle factors at 4q+2h.
+func splitCft1stFastLane(re, im *[65]float32, t *[128]float32) {
+	// Group 0: bins 0, 32, 16, 48.
+	{
+		a1 := float32(0.5 * (re[0] - re[64]))
+		c0r, c0i := re[0]-a1, -a1
+		c1r, c1i := re[32], -im[32]
+		w := &rftWk[0]
+		c2r, c2i, c3r, c3i := rftbPair(w[6], w[7], re[16], im[16], re[48], im[48])
+		{
+			d, k := (*[8]float32)(t[0:8]), 0
+			w1r, w1i := (*[2]float32)(rdftWk1r[k:k+2]), (*[2]float32)(rdftWk1i[k:k+2])
+			w2r, w2i := (*[2]float32)(rdftWk2r[k:k+2]), (*[2]float32)(rdftWk2i[k:k+2])
+			w3r, w3i := (*[2]float32)(rdftWk3r[k:k+2]), (*[2]float32)(rdftWk3i[k:k+2])
+			x0r := c0r + c1r
+			x0i := c0i + c1i
+			x1r := c0r - c1r
+			x1i := c0i - c1i
+			x2r := c2r + c3r
+			x2i := c2i + c3i
+			x3r := c2r - c3r
+			x3i := c2i - c3i
+			d[0] = x0r + x2r
+			d[1] = x0i + x2i
+			yr := x0r - x2r
+			yi := x0i - x2i
+			d[4] = float32(w2r[0]*yr) + float32(w2i[0]*yi)
+			d[5] = float32(w2r[1]*yi) + float32(w2i[1]*yr)
+			yr = x1r - x3i
+			yi = x1i + x3r
+			d[2] = float32(w1r[0]*yr) + float32(w1i[0]*yi)
+			d[3] = float32(w1r[1]*yi) + float32(w1i[1]*yr)
+			yr = x1r + x3i
+			yi = x1i - x3r
+			d[6] = float32(w3r[0]*yr) + float32(w3i[0]*yi)
+			d[7] = float32(w3r[1]*yi) + float32(w3i[1]*yr)
+		}
+	}
+	// Group 8: bins 8, 40, 24, 56.
+	{
+		w := &rftWk[8]
+		c0r, c0i, c3r, c3i := rftbPair(w[0], w[1], re[8], im[8], re[56], im[56])
+		c2r, c2i, c1r, c1i := rftbPair(w[2], w[3], re[24], im[24], re[40], im[40])
+		{
+			d, k := (*[8]float32)(t[8:16]), 2
+			w1r, w1i := (*[2]float32)(rdftWk1r[k:k+2]), (*[2]float32)(rdftWk1i[k:k+2])
+			w2r, w2i := (*[2]float32)(rdftWk2r[k:k+2]), (*[2]float32)(rdftWk2i[k:k+2])
+			w3r, w3i := (*[2]float32)(rdftWk3r[k:k+2]), (*[2]float32)(rdftWk3i[k:k+2])
+			x0r := c0r + c1r
+			x0i := c0i + c1i
+			x1r := c0r - c1r
+			x1i := c0i - c1i
+			x2r := c2r + c3r
+			x2i := c2i + c3i
+			x3r := c2r - c3r
+			x3i := c2i - c3i
+			d[0] = x0r + x2r
+			d[1] = x0i + x2i
+			yr := x0r - x2r
+			yi := x0i - x2i
+			d[4] = float32(w2r[0]*yr) + float32(w2i[0]*yi)
+			d[5] = float32(w2r[1]*yi) + float32(w2i[1]*yr)
+			yr = x1r - x3i
+			yi = x1i + x3r
+			d[2] = float32(w1r[0]*yr) + float32(w1i[0]*yi)
+			d[3] = float32(w1r[1]*yi) + float32(w1i[1]*yr)
+			yr = x1r + x3i
+			yi = x1i - x3r
+			d[6] = float32(w3r[0]*yr) + float32(w3i[0]*yi)
+			d[7] = float32(w3r[1]*yi) + float32(w3i[1]*yr)
+		}
+	}
+	for s := 1; s < 8; s++ {
+		// Group s reads the bins s + {0, 32, 16, 48} (p0..p3) and group
+		// 16-s the bins 16-s + {0, 32, 16, 48} (q0..q3).
+		n := (16 - s) & 15
+		rp, ip := (*[49]float32)(re[s:s+49]), (*[49]float32)(im[s:s+49])
+		rq, iq := (*[49]float32)(re[n:n+49]), (*[49]float32)(im[n:n+49])
+		w := &rftWk[s]
+		// Bins s and 64-s.
+		p0r, p0i, q3r, q3i := rftbPair(w[0], w[1], rp[0], ip[0], rq[48], iq[48])
+		// Bins 32-s and 32+s.
+		q2r, q2i, p1r, p1i := rftbPair(w[2], w[3], rq[16], iq[16], rp[32], ip[32])
+		// Bins 16-s and 48+s.
+		q0r, q0i, p3r, p3i := rftbPair(w[4], w[5], rq[0], iq[0], rp[48], ip[48])
+		// Bins 16+s and 48-s.
+		p2r, p2i, q1r, q1i := rftbPair(w[6], w[7], rp[16], ip[16], rq[32], iq[32])
+
+		qs := int(rev3[s]) & 7
+		qn := int(rev3[n&7]) & 7
+		// The masks change no value; they bound the windows for the
+		// compiler.
+		os, on := 16*qs, (16*qn+8)&120
+		ks, kn := 4*qs, (4*qn+2)&30
+		{
+			d, k := (*[8]float32)(t[os:os+8]), ks
+			w1r, w1i := (*[2]float32)(rdftWk1r[k:k+2]), (*[2]float32)(rdftWk1i[k:k+2])
+			w2r, w2i := (*[2]float32)(rdftWk2r[k:k+2]), (*[2]float32)(rdftWk2i[k:k+2])
+			w3r, w3i := (*[2]float32)(rdftWk3r[k:k+2]), (*[2]float32)(rdftWk3i[k:k+2])
+			x0r := p0r + p1r
+			x0i := p0i + p1i
+			x1r := p0r - p1r
+			x1i := p0i - p1i
+			x2r := p2r + p3r
+			x2i := p2i + p3i
+			x3r := p2r - p3r
+			x3i := p2i - p3i
+			d[0] = x0r + x2r
+			d[1] = x0i + x2i
+			yr := x0r - x2r
+			yi := x0i - x2i
+			d[4] = float32(w2r[0]*yr) + float32(w2i[0]*yi)
+			d[5] = float32(w2r[1]*yi) + float32(w2i[1]*yr)
+			yr = x1r - x3i
+			yi = x1i + x3r
+			d[2] = float32(w1r[0]*yr) + float32(w1i[0]*yi)
+			d[3] = float32(w1r[1]*yi) + float32(w1i[1]*yr)
+			yr = x1r + x3i
+			yi = x1i - x3r
+			d[6] = float32(w3r[0]*yr) + float32(w3i[0]*yi)
+			d[7] = float32(w3r[1]*yi) + float32(w3i[1]*yr)
+		}
+		{
+			d, k := (*[8]float32)(t[on:on+8]), kn
+			w1r, w1i := (*[2]float32)(rdftWk1r[k:k+2]), (*[2]float32)(rdftWk1i[k:k+2])
+			w2r, w2i := (*[2]float32)(rdftWk2r[k:k+2]), (*[2]float32)(rdftWk2i[k:k+2])
+			w3r, w3i := (*[2]float32)(rdftWk3r[k:k+2]), (*[2]float32)(rdftWk3i[k:k+2])
+			x0r := q0r + q1r
+			x0i := q0i + q1i
+			x1r := q0r - q1r
+			x1i := q0i - q1i
+			x2r := q2r + q3r
+			x2i := q2i + q3i
+			x3r := q2r - q3r
+			x3i := q2i - q3i
+			d[0] = x0r + x2r
+			d[1] = x0i + x2i
+			yr := x0r - x2r
+			yi := x0i - x2i
+			d[4] = float32(w2r[0]*yr) + float32(w2i[0]*yi)
+			d[5] = float32(w2r[1]*yi) + float32(w2i[1]*yr)
+			yr = x1r - x3i
+			yi = x1i + x3r
+			d[2] = float32(w1r[0]*yr) + float32(w1i[0]*yi)
+			d[3] = float32(w1r[1]*yi) + float32(w1i[1]*yr)
+			yr = x1r + x3i
+			yi = x1i - x3r
+			d[6] = float32(w3r[0]*yr) + float32(w3i[0]*yi)
+			d[7] = float32(w3r[1]*yi) + float32(w3i[1]*yr)
+		}
+	}
+}

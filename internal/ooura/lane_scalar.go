@@ -10,3 +10,10 @@ func inverseFftRef(a *[128]float32) { inverseFftScalar(a) }
 
 func fftFast(a *[128]float32)        { fftFastScalar(a) }
 func inverseFftFast(a *[128]float32) { inverseFftFastScalar(a) }
+
+// fftSplitFast and inverseFftSplitFast are the split transforms of the
+// builds and CPUs without the archsimd kernel.
+func fftSplitFast(a *[128]float32, re, im *[65]float32) { fftSplitFastScalar(a, re, im) }
+func inverseFftSplitFast(re, im *[65]float32, a *[128]float32) {
+	inverseFftSplitFastScalar(re, im, a)
+}
