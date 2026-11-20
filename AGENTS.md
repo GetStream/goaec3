@@ -153,7 +153,7 @@ write changelog narrative.
     passes of `fft_simd.go`, which remain the packed transforms and the
     amd64 SSE2 lane.
   - Scalar float code costs per operation what a vector of four costs. The
-    decimation by 4 (`decimator_simd_arm64.go`) runs its four cascaded
+    decimation by 4 (`decimator_simd.go`, arm64 and amd64) runs its four cascaded
     biquad sections as the lanes of one vector, section i two samples behind
     section i-1: ten vector operations per sample instead of 36 scalar ones.
     The two samples keep the path through a lane's input (a shuffle, a

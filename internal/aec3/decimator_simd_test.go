@@ -1,4 +1,4 @@
-//go:build goexperiment.simd && arm64 && !purego
+//go:build goexperiment.simd && (arm64 || amd64) && !purego
 
 package aec3
 
@@ -13,6 +13,9 @@ import (
 // after every block, and a block with a value that is not finite is refused
 // with the states untouched.
 func TestDecimateDs4Kernel(t *testing.T) {
+	if !dlyDs4HasSimd {
+		t.Skip("the CPU does not run the kernel")
+	}
 	rng := rand.New(rand.NewSource(21))
 	got := NewDecimator(4)
 	want := NewDecimator(4)
@@ -71,6 +74,9 @@ func sectionsEqualBits(a, b []BiQuad) bool {
 }
 
 func TestDecimateDs4KernelAllocationFree(t *testing.T) {
+	if !dlyDs4HasSimd {
+		t.Skip("the CPU does not run the kernel")
+	}
 	d := NewDecimator(4)
 	var in [BlockSize]float32
 	var out [BlockSize / 4]float32

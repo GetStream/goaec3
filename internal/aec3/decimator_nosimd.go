@@ -1,4 +1,4 @@
-//go:build !goexperiment.simd || purego || !arm64
+//go:build !goexperiment.simd || purego || !(arm64 || amd64)
 
 package aec3
 
