@@ -304,9 +304,10 @@ its first, and one pointer-free object for its arrays (the arena).
   holds the band-splitting filters and the full-band copies of the public
   package, and the first frames of the render transfer queue. A canceller
   with several render channels sets its block processor up again, at
-  another size, when stereo content starts or ends: its block processor has
-  an arena of its own, which is reused when the new arrays fit and replaced
-  when they do not.
+  another size, when stereo content starts or ends: the new arrays go into
+  the arena when they fit and into a second arena, which lives as long as
+  that block processor, when they do not (stereo content in a canceller
+  that started without).
 - A view made by `NewX` stands alone (`bind(st, bindAlone)`): tests and the
   oracle harness use the components as before.
 - A method of a view reaches a field of the state through the view's
@@ -337,8 +338,7 @@ its first, and one pointer-free object for its arrays (the arena).
   arena of the block processor changes on the capture side.
 - The tests: `TestPointerWords` (the pointer words of the canceller type and
   where the last one ends: the state has none), `TestPointerSlots` (the
-  pointers of a canceller), `TestNewFootprint` (its objects: two, or three
-  with several render channels), `TestArenaClasses`,
+  pointers of a canceller), `TestNewFootprint` (its objects: two), `TestArenaClasses`,
   `TestGCMarkPerCanceller` (the mark time a canceller adds to a cycle) and
   the `Test...PointerFree` tests of `internal/aec3`. `BenchmarkGCMark -cpu 1`
   times a cycle with 1000 cancellers; `net-mark-ns/op` is the mark phase

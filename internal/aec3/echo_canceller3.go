@@ -293,12 +293,12 @@ type EchoCanceller3 struct {
 // run concurrently with the capture side: it reads arena and hpMore, which
 // are set once, and the queue.
 type Ec3Core struct {
-	// arena holds the storage of the canceller and, with one render
-	// channel, after it the arrays of the block processor.
+	// arena holds the storage of the canceller and, after it, the arrays of
+	// the block processor it started with.
 	arena Arena
-	// bpArena holds the arrays of the block processor of a canceller with
-	// several render channels, which sets it up again, at another size, when
-	// stereo content starts or ends; nil otherwise.
+	// bpArena holds the arrays of a block processor that was set up again
+	// and does not fit into arena (stereo content in a canceller that
+	// started without); nil otherwise.
 	bpArena Arena
 	queue   ec3RenderTransferQueue
 	hpMore  []BiQuad
@@ -421,25 +421,23 @@ func (c *Ec3Core) measure(p *BlockProcessor) arenaSizes {
 
 // adopt moves the slices that the init of p allocated into the arena of c,
 // and its pointers into the extras: afterwards a view of c needs nothing
-// else. The first time it allocates the arena with alloc: one for the
-// storage of the canceller and the slices of p, or, when the block processor
-// can be set up again (separate), one for each. Later the slices of a block
-// processor set up again go where those of the last one were, or, when they
-// do not fit, into a new arena that replaces it.
-func (c *Ec3Core) adopt(p *BlockProcessor, alloc func(ArenaSizes) Arena, separate bool) {
+// else. The first time it allocates the arena with alloc, for the storage
+// of the canceller and the slices of p. Later (a canceller with several
+// render channels sets its block processor up again, at another size, when
+// stereo content starts or ends) the slices go into the arena again when
+// they fit and into an arena of their own, which lives as long as that
+// block processor, when they do not.
+func (c *Ec3Core) adopt(p *BlockProcessor, alloc func(ArenaSizes) Arena) {
 	n := c.measure(p)
 	need := ArenaSizes{F32: int(n.f32), Fft: int(n.fft), Spec: int(n.spec), I32: int(n.i32)}
-	switch {
-	case c.arena != nil:
+	if c.arena == nil {
+		need.F32 += c.st.offsets.size
+		c.arena = alloc(need)
+	} else {
+		c.bpArena = nil
 		if a := c.bp(); len(a.f32) < need.F32 || len(a.fft) < need.Fft || len(a.spec) < need.Spec || len(a.i32) < need.I32 {
 			c.bpArena = c.arena.Alloc(need)
 		}
-	case separate:
-		c.arena = alloc(ArenaSizes{F32: c.st.offsets.size})
-		c.bpArena = c.arena.Alloc(need)
-	default:
-		need.F32 += c.st.offsets.size
-		c.arena = alloc(need)
 	}
 	b := binder{mode: bindMove, notView: -1, a: c.bp(), x: &bpExtra{}}
 	p.bind(&c.st.blockProcessor, &b)
@@ -660,9 +658,7 @@ func (e *EchoCanceller3) initialize() {
 
 	e.blockProcessor.init(e.configSelector.ActiveConfig(), e.sampleRateHz,
 		e.numRenderChannelsToAec, e.numCaptureChannels)
-	// A canceller with several render channels sets its block processor up
-	// again when stereo content starts or ends.
-	e.core.adopt(&e.blockProcessor, e.alloc, e.numRenderInputChannels > 1)
+	e.core.adopt(&e.blockProcessor, e.alloc)
 	e.storage = e.core.storage()
 
 	renderBlock := e.renderBlock()

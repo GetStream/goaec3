@@ -31,7 +31,8 @@ func TestArenaClasses(t *testing.T) {
 }
 
 // TestArenaClassOfDefaults checks that the default configs with up to two
-// channels a side get arenas of a class, also while they process stereo.
+// channels a side get one arena, of a class, also when they process stereo
+// from the start.
 func TestArenaClassOfDefaults(t *testing.T) {
 	isClass := func(a aec3.Arena) bool {
 		_, slices := a.(*ecSliceArena)
@@ -51,7 +52,7 @@ func TestArenaClassOfDefaults(t *testing.T) {
 						t.Fatal(err)
 					}
 					arena, bpArena := e.core.ArenasForTesting()
-					if !isClass(arena) || (r > 1) != (bpArena != nil) || (bpArena != nil && !isClass(bpArena)) {
+					if !isClass(arena) || bpArena != nil {
 						t.Errorf("%d Hz, %d render, %d capture channels, stereo %v: arenas %T and %T",
 							rate, r, c, stereo, arena, bpArena)
 					}

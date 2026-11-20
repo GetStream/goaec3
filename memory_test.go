@@ -47,13 +47,12 @@ func footprint(t testing.TB, rate, ch int) (bytes, objects uint64) {
 
 // footprintObjectLimits bounds the heap objects per canceller of each
 // footprintCases entry.
-var footprintObjectLimits = []uint64{2, 2, 3}
+var footprintObjectLimits = []uint64{2, 2, 2}
 
 // TestNewFootprint reports the live heap per canceller and bounds the number
 // of heap objects, which sets the mark cost of a GC cycle with many live
 // cancellers: the canceller itself, of which the garbage collector reads the
-// first few words, and its arena, which has no pointers; with two render
-// channels the block processor has an arena of its own.
+// first few words, and its arena, which has no pointers.
 func TestNewFootprint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
@@ -141,7 +140,7 @@ func hasPointers(t reflect.Type) bool {
 // them: the canceller, and an interface and its pointer per arena. The
 // garbage collector follows one pointer per arena.
 func TestPointerSlots(t *testing.T) {
-	limits := []int{3, 3, 5}
+	limits := []int{3, 3, 3}
 	for i, c := range footprintCases {
 		ec, err := New(DefaultConfig(), c.rate, c.ch, c.ch)
 		if err != nil {

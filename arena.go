@@ -23,14 +23,15 @@ type ecArena interface {
 
 // The array types of the arena classes; s returns the array as a slice.
 type (
-	ecF12k [12288]float32
 	ecF21k [21504]float32
 	ecF25k [25600]float32
 	ecF33k [33792]float32
 	ecF41k [41984]float32
 	ecF47k [47104]float32
 	ecF55k [55296]float32
+	ecF61k [61440]float32
 	ecF76k [76800]float32
+	ecF86k [86016]float32
 
 	ecH0   [0]aec3.FftData
 	ecH200 [200]aec3.FftData
@@ -50,14 +51,15 @@ type (
 	ecP4 [4]bands.ChannelSplitter
 )
 
-func (a *ecF12k) s() []float32 { return a[:] }
 func (a *ecF21k) s() []float32 { return a[:] }
 func (a *ecF25k) s() []float32 { return a[:] }
 func (a *ecF33k) s() []float32 { return a[:] }
 func (a *ecF41k) s() []float32 { return a[:] }
 func (a *ecF47k) s() []float32 { return a[:] }
 func (a *ecF55k) s() []float32 { return a[:] }
+func (a *ecF61k) s() []float32 { return a[:] }
 func (a *ecF76k) s() []float32 { return a[:] }
+func (a *ecF86k) s() []float32 { return a[:] }
 
 func (a *ecH0) s() []aec3.FftData   { return a[:] }
 func (a *ecH200) s() []aec3.FftData { return a[:] }
@@ -69,7 +71,6 @@ func (a *ecS184) s() [][aec3.FftLengthBy2Plus1]float32 { return a[:] }
 func (a *ecS200) s() [][aec3.FftLengthBy2Plus1]float32 { return a[:] }
 func (a *ecS368) s() [][aec3.FftLengthBy2Plus1]float32 { return a[:] }
 
-func (a *ecI0) s() []int32  { return a[:] }
 func (a *ecI2k) s() []int32 { return a[:] }
 
 func (a *ecP0) s() []bands.ChannelSplitter { return a[:] }
@@ -119,17 +120,15 @@ func ecClass[F, H, S, I, P any,
 // of samples, filter coefficients, spectra, histogram bins and
 // band-splitting filters, and how to allocate one. The classes are sized
 // for the default configs with up to two channels a side, with some room:
-// with one render channel, the canceller's samples and the block
-// processor's arrays in one arena, at 16, 32 and 48 kHz, for one and for two
-// capture channels; with two render channels, the canceller's samples
-// alone, and the arrays of its block processor while it runs on one render
-// channel and on two.
+// the canceller's samples and the block processor's arrays in one arena, at
+// 16, 32 and 48 kHz, for one and for two capture channels, for a block
+// processor on one render channel and on two; and the arrays of a block
+// processor alone (the one a canceller sets up when stereo content starts
+// goes into an arena of its own).
 var ecArenaClasses = []struct {
 	f, h, s, i, p int
 	alloc         func() ecArena
 }{
-	{12288, 0, 0, 0, 0, ecClass[ecF12k, ecH0, ecS0, ecI0, ecP0]},
-	{12288, 0, 0, 0, 4, ecClass[ecF12k, ecH0, ecS0, ecI0, ecP4]},
 	{21504, 200, 184, 2624, 0, ecClass[ecF21k, ecH200, ecS184, ecI2k, ecP0]},
 	{25600, 224, 200, 2624, 0, ecClass[ecF25k, ecH224, ecS200, ecI2k, ecP0]},
 	{33792, 224, 200, 2624, 0, ecClass[ecF33k, ecH224, ecS200, ecI2k, ecP0]},
@@ -141,8 +140,11 @@ var ecArenaClasses = []struct {
 	{55296, 224, 200, 2624, 0, ecClass[ecF55k, ecH224, ecS200, ecI2k, ecP0]},
 	{55296, 224, 200, 2624, 4, ecClass[ecF55k, ecH224, ecS200, ecI2k, ecP4]},
 	{33792, 448, 368, 2624, 0, ecClass[ecF33k, ecH448, ecS368, ecI2k, ecP0]},
+	{41984, 448, 368, 2624, 0, ecClass[ecF41k, ecH448, ecS368, ecI2k, ecP0]},
 	{55296, 448, 368, 2624, 0, ecClass[ecF55k, ecH448, ecS368, ecI2k, ecP0]},
+	{61440, 448, 368, 2624, 4, ecClass[ecF61k, ecH448, ecS368, ecI2k, ecP4]},
 	{76800, 448, 368, 2624, 0, ecClass[ecF76k, ecH448, ecS368, ecI2k, ecP0]},
+	{86016, 448, 368, 2624, 4, ecClass[ecF86k, ecH448, ecS368, ecI2k, ecP4]},
 }
 
 // ecSliceArena is the arena of a canceller that fits no class.
