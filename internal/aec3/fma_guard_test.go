@@ -15,8 +15,8 @@ import (
 // multiply-adds: kernels that mirror an FMA in the C++ (AVX2 lanes), and
 // fusions that are exact by construction.
 var fmaAllowed = map[string]string{
-	"internal/aec3.dlyAxpyFma":                            "AVX2 matched filter update (_mm256_fmadd_ps)",
-	"internal/aec3.(*ReverbDecayEstimator).estimateDecay": "2*tailGain is exact",
+	"internal/aec3.dlyAxpyFma":                        "AVX2 matched filter update (_mm256_fmadd_ps)",
+	"internal/aec3.(*reverbDecayState).estimateDecay": "2*tailGain is exact",
 }
 
 // TestNoUnintendedFMA compiles the signal-path packages for arm64 and fails

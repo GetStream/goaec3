@@ -14,20 +14,21 @@ const (
 // extracted with a specified delay (render_delay_buffer.h; this is the
 // RenderDelayBufferImpl of render_delay_buffer.cc).
 type RenderDelayBuffer struct {
-	_                                          noCopy
+	// The rings and the mixer, which hold pointers, come first.
+	blocks      BlockBuffer
+	spectra     SpectrumBuffer
+	ffts        FftBuffer
+	lowRate     DownsampledRenderBuffer
+	renderMixer AlignmentMixer
+
 	optimization                               Aec3Optimization
-	config                                     *EchoCanceller3Config // shared, never modified
+	config                                     EchoCanceller3Config
 	renderLinearAmplitudeGain                  float32
 	downSamplingFactor                         int
 	subBlockSize                               int
-	blocks                                     BlockBuffer
-	spectra                                    SpectrumBuffer
-	ffts                                       FftBuffer
 	delay                                      int
 	hasDelay                                   bool
-	echoRemoverBuffer                          RenderBuffer // over blocks, spectra and ffts
-	lowRate                                    DownsampledRenderBuffer
-	renderMixer                                AlignmentMixer
+	echoRemoverRenderActivity                  bool // of the render buffer for the echo remover
 	renderDecimator                            Decimator
 	fft                                        Aec3Fft
 	fftPair                                    aec3FftPair
@@ -47,20 +48,17 @@ type RenderDelayBuffer struct {
 }
 
 // NewRenderDelayBuffer mirrors RenderDelayBuffer::Create.
-// The result keeps a reference to config, which must not change while it
-// is in use (the C++ copies it).
 func NewRenderDelayBuffer(config *EchoCanceller3Config, sampleRateHz, numRenderChannels int) *RenderDelayBuffer {
 	r := &RenderDelayBuffer{}
 	r.init(config, sampleRateHz, numRenderChannels)
 	return r
 }
 
-// init sets up r in place: its render buffer points at its own rings, so a
-// RenderDelayBuffer must not be copied.
+// init sets up r in place.
 func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, numRenderChannels int) {
 	*r = RenderDelayBuffer{
 		optimization:              DetectOptimization(),
-		config:                    config,
+		config:                    *config,
 		renderLinearAmplitudeGain: Exp10f(config.RenderLevels.RenderPowerGainDb / 20),
 		downSamplingFactor:        config.Delay.DownSamplingFactor,
 		maxObservedJitter:         1,
@@ -80,10 +78,6 @@ func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, num
 	r.spectra = *NewSpectrumBuffer(size, numRenderChannels)
 	r.ffts = *NewFftBuffer(size, numRenderChannels)
 	r.delay, r.hasDelay = config.Delay.DefaultDelay, true
-	r.echoRemoverBuffer = *NewRenderBuffer(&r.blocks, &r.spectra, &r.ffts)
-	// insertBlock writes the FFT and its spectrum to the same slot, and the
-	// indices of the two rings move together.
-	r.echoRemoverBuffer.spectraMatchFfts = true
 	r.lowRate = DownsampledRenderBuffer{ringIndex: ringIndex{Size: lowRateSize}, Buffer: samples[blockSamples:]}
 	m := &config.Delay.RenderAlignmentMixing
 	r.renderMixer.init(numRenderChannels, m.Downmix, m.AdaptiveSelection, m.ActivityPowerThreshold,
@@ -220,7 +214,7 @@ func (r *RenderDelayBuffer) PrepareCaptureProcessing() BufferingEvent {
 		r.incrementReadIndices()
 	}
 
-	r.echoRemoverBuffer.SetRenderActivity(r.renderActivity)
+	r.echoRemoverRenderActivity = r.renderActivity
 	if r.renderActivity {
 		r.renderActivityCounter = 0
 		r.renderActivity = false
@@ -275,8 +269,20 @@ func (r *RenderDelayBuffer) Delay() int { return r.computeDelay() }
 // MaxDelay returns the maximum buffer delay.
 func (r *RenderDelayBuffer) MaxDelay() int { return r.blocks.Size - 1 - r.bufferHeadroom }
 
-// GetRenderBuffer returns the render buffer for the echo remover.
-func (r *RenderDelayBuffer) GetRenderBuffer() *RenderBuffer { return &r.echoRemoverBuffer }
+// GetRenderBuffer returns the render buffer for the echo remover: a view of
+// the rings of r as they are now, to be fetched again after r changes.
+func (r *RenderDelayBuffer) GetRenderBuffer() *RenderBuffer {
+	b := r.renderBuffer()
+	return &b
+}
+
+// renderBuffer returns the render buffer for the echo remover over the
+// rings of r. insertBlock writes the FFT and its spectrum to the same slot,
+// and the indices of the two rings move together.
+func (r *RenderDelayBuffer) renderBuffer() RenderBuffer {
+	return RenderBuffer{blockBuffer: &r.blocks, spectrumBuffer: &r.spectra, fftBuffer: &r.ffts,
+		renderActivity: r.echoRemoverRenderActivity, spectraMatchFfts: true}
+}
 
 // GetDownsampledRenderBuffer returns the downsampled render buffer.
 func (r *RenderDelayBuffer) GetDownsampledRenderBuffer() *DownsampledRenderBuffer { return &r.lowRate }

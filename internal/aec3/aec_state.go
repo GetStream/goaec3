@@ -57,17 +57,17 @@ func (s *stInitialState) Update(activeRender, saturatedCapture bool) {
 	s.transitionTriggered = !s.initialState && prevInitialState
 }
 
-// stFilterDelay mirrors AecState::FilterDelay.
+// stFilterDelay mirrors AecState::FilterDelay. The per-channel delays
+// (filterDelaysBlocks) live with the AecState.
 type stFilterDelay struct {
 	delayHeadroomBlocks   int
 	externalDelayReported bool
-	filterDelaysBlocks    []int
 	minFilterDelay        int
 	externalDelay         DelayEstimate
 	externalDelayValid    bool
 }
 
-func (f *stFilterDelay) Update(analyzerFilterDelayEstimatesBlocks []int, externalDelay *DelayEstimate,
+func (f *stFilterDelay) Update(filterDelaysBlocks, analyzerFilterDelayEstimatesBlocks []int, externalDelay *DelayEstimate,
 	blocksWithProperFilterAdaptation int) {
 	if externalDelay != nil && (!f.externalDelayValid || f.externalDelay.Delay != externalDelay.Delay) {
 		f.externalDelay = *externalDelay
@@ -76,31 +76,32 @@ func (f *stFilterDelay) Update(analyzerFilterDelayEstimatesBlocks []int, externa
 	}
 	delayEstimatorMayNotHaveConverged := blocksWithProperFilterAdaptation < 2*NumBlocksPerSecond
 	if delayEstimatorMayNotHaveConverged && f.externalDelayValid {
-		for i := range f.filterDelaysBlocks {
-			f.filterDelaysBlocks[i] = f.delayHeadroomBlocks
+		for i := range filterDelaysBlocks {
+			filterDelaysBlocks[i] = f.delayHeadroomBlocks
 		}
 	} else {
-		copy(f.filterDelaysBlocks, analyzerFilterDelayEstimatesBlocks)
+		copy(filterDelaysBlocks, analyzerFilterDelayEstimatesBlocks)
 	}
-	m := f.filterDelaysBlocks[0]
-	for _, d := range f.filterDelaysBlocks[1:] {
+	m := filterDelaysBlocks[0]
+	for _, d := range filterDelaysBlocks[1:] {
 		m = min(m, d)
 	}
 	f.minFilterDelay = m
 }
 
 // stFilteringQualityAnalyzer mirrors AecState::FilteringQualityAnalyzer.
+// The per-channel flags (usableLinearFilterEstimates) live with the
+// AecState.
 type stFilteringQualityAnalyzer struct {
 	useLinearFilter              bool
 	overallUsableLinearEstimates bool
 	filterUpdateBlocksSinceReset int
 	filterUpdateBlocksSinceStart int
 	convergenceSeen              bool
-	usableLinearFilterEstimates  []bool
 }
 
-func (f *stFilteringQualityAnalyzer) Reset() {
-	clear(f.usableLinearFilterEstimates)
+func (f *stFilteringQualityAnalyzer) Reset(usableLinearFilterEstimates []bool) {
+	clear(usableLinearFilterEstimates)
 	f.overallUsableLinearEstimates = false
 	f.filterUpdateBlocksSinceReset = 0
 }
@@ -110,7 +111,7 @@ var (
 	stConvergeAtResetBlocks   = stMul(NumBlocksPerSecond, 0.2)
 )
 
-func (f *stFilteringQualityAnalyzer) Update(activeRender, transparentMode, saturatedCapture bool,
+func (f *stFilteringQualityAnalyzer) Update(usableLinearFilterEstimates []bool, activeRender, transparentMode, saturatedCapture bool,
 	externalDelay *DelayEstimate, anyFilterConverged bool) {
 	filterUpdate := activeRender && !saturatedCapture
 	if filterUpdate {
@@ -125,8 +126,8 @@ func (f *stFilteringQualityAnalyzer) Update(activeRender, transparentMode, satur
 	f.overallUsableLinearEstimates = f.overallUsableLinearEstimates && (externalDelay != nil || f.convergenceSeen)
 	f.overallUsableLinearEstimates = f.overallUsableLinearEstimates && !transparentMode
 	if f.useLinearFilter {
-		for i := range f.usableLinearFilterEstimates {
-			f.usableLinearFilterEstimates[i] = f.overallUsableLinearEstimates
+		for i := range usableLinearFilterEstimates {
+			usableLinearFilterEstimates[i] = f.overallUsableLinearEstimates
 		}
 	}
 }
@@ -162,39 +163,122 @@ func (s *stSaturationDetector) Update(x *Block, saturatedCapture, usableLinearEs
 	}
 }
 
+// stTransparentKind selects the transparent mode classifier of an AecState.
+type stTransparentKind uint8
+
+const (
+	stTransparentNone stTransparentKind = iota
+	stTransparentLegacy
+	stTransparentHmm
+)
+
+// stTransparentState is the transparent mode classifier of an AecState: one
+// of the two implementations of TransparentMode, or none.
+type stTransparentState struct {
+	kind   stTransparentKind
+	legacy LegacyTransparentMode
+	hmm    TransparentModeHmm
+}
+
+func (t *stTransparentState) Active() bool {
+	switch t.kind {
+	case stTransparentLegacy:
+		return t.legacy.Active()
+	case stTransparentHmm:
+		return t.hmm.Active()
+	}
+	return false
+}
+
+func (t *stTransparentState) Reset() {
+	switch t.kind {
+	case stTransparentLegacy:
+		t.legacy.Reset()
+	case stTransparentHmm:
+		t.hmm.Reset()
+	}
+}
+
+func (t *stTransparentState) Update(filterDelayBlocks int, anyFilterConsistent, anyFilterConverged,
+	anyCoarseFilterConverged, allFiltersDiverged, activeRender, saturatedCapture bool) {
+	switch t.kind {
+	case stTransparentLegacy:
+		t.legacy.Update(filterDelayBlocks, anyFilterConsistent, anyFilterConverged, anyCoarseFilterConverged,
+			allFiltersDiverged, activeRender, saturatedCapture)
+	case stTransparentHmm:
+		t.hmm.Update(filterDelayBlocks, anyFilterConsistent, anyFilterConverged, anyCoarseFilterConverged,
+			allFiltersDiverged, activeRender, saturatedCapture)
+	}
+}
+
 // AecState mirrors aec_state.h: the state and the conditions for the echo
 // removal functionality. Field trials are at their defaults.
+//
+// The estimators and analyzers are part of the AecState, as is the
+// per-channel state of up to inlineChannels capture channels. Those that
+// hold pointers come first, each with its pointers at its start.
 type AecState struct {
-	_                                           noCopy
-	config                                      *EchoCanceller3Config // shared, never modified
+	more                     *aecMore // with more than inlineChannels channels
+	subtractorOutputAnalyzer SubtractorOutputAnalyzer
+	filterAnalyzer           FilterAnalyzer
+	reverbModelEstimator     ReverbModelEstimator
+	erleEstimator            ErleEstimator
+
+	config                                      EchoCanceller3Config
 	numCaptureChannels                          int
 	deactivateInitialStateResetAtEchoPathChange bool
 	fullResetAtEchoPathChange                   bool
 	subtractorAnalyzerResetAtEchoPathChange     bool
 	initialState                                stInitialState
 	delayState                                  stFilterDelay
-	transparentState                            TransparentMode
+	transparentState                            stTransparentState
 	filterQualityState                          stFilteringQualityAnalyzer
 	saturationDetector                          stSaturationDetector
 	erlEstimator                                ErlEstimator
-	erleEstimator                               ErleEstimator
 	strongNotSaturatedRenderBlocks              int
 	blocksWithActiveRender                      int
 	captureSignalSaturation                     bool
-	filterAnalyzer                              FilterAnalyzer
 	echoAudibility                              EchoAudibility
-	reverbModelEstimator                        ReverbModelEstimator
 	avgRenderReverb                             ReverbModel
-	subtractorOutputAnalyzer                    SubtractorOutputAnalyzer
 
-	// The transparent mode classifier NewAecState selects, and the
-	// per-channel state of delayState and filterQualityState for up to
+	// The per-channel state of delayState and filterQualityState for up to
 	// inlineChannels channels.
-	legacyTransparentMode LegacyTransparentMode
-	inline                struct {
+	inline struct {
 		filterDelaysBlocks          [inlineChannels]int
 		usableLinearFilterEstimates [inlineChannels]bool
 	}
+}
+
+// aecMore is the per-channel state of the delayState and the
+// filterQualityState of an AecState with more than inlineChannels capture
+// channels.
+type aecMore struct {
+	filterDelaysBlocks          []int
+	usableLinearFilterEstimates []bool
+	adjustedFilters             [][]float32 // scratch of Update
+}
+
+// filterDelaysBlocks returns the per-channel delays of delayState.
+func (a *AecState) filterDelaysBlocks() []int {
+	if a.more != nil {
+		return a.more.filterDelaysBlocks
+	}
+	return a.inline.filterDelaysBlocks[:a.numCaptureChannels:a.numCaptureChannels]
+}
+
+// usableLinearFilterEstimates returns the per-channel flags of
+// filterQualityState.
+func (a *AecState) usableLinearFilterEstimates() []bool {
+	if a.more != nil {
+		return a.more.usableLinearFilterEstimates
+	}
+	return a.inline.usableLinearFilterEstimates[:a.numCaptureChannels:a.numCaptureChannels]
+}
+
+// aecStorageSize returns the number of samples an AecState keeps for config:
+// those of its FilterAnalyzer and of its ReverbModelEstimator.
+func aecStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
+	return faStorageSize(config, numCaptureChannels) + rmStorageSize(config, numCaptureChannels)
 }
 
 // NewAecState builds an AecState with the transparent mode classifier of
@@ -203,41 +287,62 @@ type AecState struct {
 // depends on the filter length.
 func NewAecState(config *EchoCanceller3Config, numCaptureChannels int) *AecState {
 	a := &AecState{}
-	a.initDefault(config, numCaptureChannels)
+	a.initDefault(config, numCaptureChannels, make([]float32, aecStorageSize(config, numCaptureChannels)))
 	return a
 }
 
-// initDefault sets up a in place as NewAecState does.
-func (a *AecState) initDefault(config *EchoCanceller3Config, numCaptureChannels int) {
-	a.init(config, numCaptureChannels)
+// initDefault sets up a in place as NewAecState does, over storage, which
+// holds aecStorageSize zeros.
+func (a *AecState) initDefault(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
+	a.init(config, numCaptureChannels, storage)
 	if !config.EpStrength.BoundedErl {
-		a.legacyTransparentMode = *NewLegacyTransparentMode(config)
-		a.transparentState = &a.legacyTransparentMode
+		a.transparentState.kind = stTransparentLegacy
+		a.transparentState.legacy = *NewLegacyTransparentMode(config)
 	}
 }
 
 // NewAecStateWithTransparentMode builds an AecState with an explicit
 // transparent mode classifier (nil disables it), which is what the C++
-// selects through field trials.
-// The result keeps a reference to config, which must not change while it
-// is in use (the C++ copies it).
+// selects through field trials. The AecState continues from a copy of tm,
+// which is a *LegacyTransparentMode or a *TransparentModeHmm.
 func NewAecStateWithTransparentMode(config *EchoCanceller3Config, numCaptureChannels int, tm TransparentMode) *AecState {
 	a := &AecState{}
-	a.init(config, numCaptureChannels)
-	a.transparentState = tm
+	a.init(config, numCaptureChannels, make([]float32, aecStorageSize(config, numCaptureChannels)))
+	switch t := tm.(type) {
+	case nil:
+	case *LegacyTransparentMode:
+		if t != nil {
+			a.transparentState.kind = stTransparentLegacy
+			a.transparentState.legacy = *t
+		}
+	case *TransparentModeHmm:
+		if t != nil {
+			a.transparentState.kind = stTransparentHmm
+			a.transparentState.hmm = *t
+		}
+	default:
+		panic("aec3: unknown TransparentMode implementation")
+	}
 	return a
 }
 
-// init sets up a in place, without a transparent mode classifier; a must not
-// be copied afterwards (see channelSlice).
-func (a *AecState) init(config *EchoCanceller3Config, numCaptureChannels int) {
+// init sets up a in place, without a transparent mode classifier, over
+// storage, which holds aecStorageSize zeros.
+func (a *AecState) init(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
 	*a = AecState{
-		config:                                  config,
+		config:                                  *config,
 		numCaptureChannels:                      numCaptureChannels,
 		fullResetAtEchoPathChange:               true,
 		subtractorAnalyzerResetAtEchoPathChange: true,
 	}
-	c := a.config
+	c := &a.config
+	if n := numCaptureChannels; n > inlineChannelLimit {
+		a.more = &aecMore{
+			filterDelaysBlocks:          make([]int, n),
+			usableLinearFilterEstimates: make([]bool, n),
+			adjustedFilters:             make([][]float32, n),
+		}
+	}
 	a.initialState = stInitialState{
 		conservativeInitialPhase: c.Filter.ConservativeInitialPhase,
 		initialStateSeconds:      c.Filter.InitialStateSeconds,
@@ -246,21 +351,21 @@ func (a *AecState) init(config *EchoCanceller3Config, numCaptureChannels int) {
 	headroom := c.Delay.DelayHeadroomSamples / BlockSize
 	a.delayState = stFilterDelay{
 		delayHeadroomBlocks: headroom,
-		filterDelaysBlocks:  channelSlice(a.inline.filterDelaysBlocks[:], numCaptureChannels),
 		minFilterDelay:      headroom,
 	}
-	for i := range a.delayState.filterDelaysBlocks {
-		a.delayState.filterDelaysBlocks[i] = headroom
+	filterDelaysBlocks := a.filterDelaysBlocks()
+	for i := range filterDelaysBlocks {
+		filterDelaysBlocks[i] = headroom
 	}
 	a.filterQualityState = stFilteringQualityAnalyzer{
-		useLinearFilter:             c.Filter.UseLinearFilter,
-		usableLinearFilterEstimates: channelSlice(a.inline.usableLinearFilterEstimates[:], numCaptureChannels),
+		useLinearFilter: c.Filter.UseLinearFilter,
 	}
 	a.erlEstimator.init(2 * NumBlocksPerSecond)
 	a.erleEstimator.init(2*NumBlocksPerSecond, c, numCaptureChannels)
-	a.filterAnalyzer.init(c, numCaptureChannels)
+	fa := faStorageSize(c, numCaptureChannels)
+	a.filterAnalyzer.init(c, numCaptureChannels, storage[:fa:fa])
 	a.echoAudibility.init(c.EchoAudibility.UseStationarityPropertiesAtInit)
-	a.reverbModelEstimator.init(c, numCaptureChannels)
+	a.reverbModelEstimator.init(c, numCaptureChannels, storage[fa:])
 	a.subtractorOutputAnalyzer = *NewSubtractorOutputAnalyzer(numCaptureChannels)
 }
 
@@ -332,7 +437,7 @@ func (a *AecState) UpdateCaptureSaturation(captureSignalSaturation bool) {
 
 // TransparentModeActive reports whether the transparent mode is active.
 func (a *AecState) TransparentModeActive() bool {
-	return a.transparentState != nil && a.transparentState.Active()
+	return a.transparentState.Active()
 }
 
 // ReverbDecay returns the decay factor for the echo reverberation.
@@ -361,12 +466,10 @@ func (a *AecState) HandleEchoPathChange(echoPathVariability EchoPathVariability)
 		if !a.deactivateInitialStateResetAtEchoPathChange {
 			a.initialState.Reset()
 		}
-		if a.transparentState != nil {
-			a.transparentState.Reset()
-		}
+		a.transparentState.Reset()
 		a.erleEstimator.Reset(true)
 		a.erlEstimator.Reset()
-		a.filterQualityState.Reset()
+		a.filterQualityState.Reset(a.usableLinearFilterEstimates())
 	} else if echoPathVariability.GainChange {
 		a.erleEstimator.Reset(false)
 	}
@@ -413,7 +516,7 @@ func (a *AecState) Update(externalDelay *DelayEstimate, adaptiveFilterFrequencyR
 	anyFilterConsistent, maxEchoPathGain := a.filterAnalyzer.Update(adaptiveFilterImpulseResponses, renderBuffer)
 
 	if a.config.Filter.UseLinearFilter {
-		a.delayState.Update(a.filterAnalyzer.FilterDelaysBlocks(), externalDelay, a.strongNotSaturatedRenderBlocks)
+		a.delayState.Update(a.filterDelaysBlocks(), a.filterAnalyzer.FilterDelaysBlocks(), externalDelay, a.strongNotSaturatedRenderBlocks)
 	}
 
 	alignedRenderBlock := renderBuffer.GetBlock(-a.delayState.minFilterDelay)
@@ -463,17 +566,20 @@ func (a *AecState) Update(externalDelay *DelayEstimate, adaptiveFilterFrequencyR
 
 	a.initialState.Update(activeRender, a.SaturatedCapture())
 
-	if a.transparentState != nil {
-		a.transparentState.Update(a.delayState.minFilterDelay, anyFilterConsistent, anyFilterConverged,
-			anyCoarseFilterConverged, allFiltersDiverged, activeRender, a.SaturatedCapture())
-	}
+	a.transparentState.Update(a.delayState.minFilterDelay, anyFilterConsistent, anyFilterConverged,
+		anyCoarseFilterConverged, allFiltersDiverged, activeRender, a.SaturatedCapture())
 
-	a.filterQualityState.Update(activeRender, a.TransparentModeActive(), a.SaturatedCapture(), externalDelay,
+	a.filterQualityState.Update(a.usableLinearFilterEstimates(), activeRender, a.TransparentModeActive(), a.SaturatedCapture(), externalDelay,
 		anyFilterConverged)
 
 	stationaryBlock := a.config.EchoAudibility.UseStationarityProperties && a.echoAudibility.IsBlockStationary()
 
-	a.reverbModelEstimator.Update(a.filterAnalyzer.GetAdjustedFilters(), adaptiveFilterFrequencyResponses,
-		a.erleEstimator.GetInstLinearQualityEstimates(), a.delayState.filterDelaysBlocks,
-		a.filterQualityState.usableLinearFilterEstimates, stationaryBlock)
+	var adjusted [inlineChannels][]float32
+	adjustedFilters := adjusted[:]
+	if a.more != nil {
+		adjustedFilters = a.more.adjustedFilters
+	}
+	a.reverbModelEstimator.Update(a.filterAnalyzer.adjustedFilters(adjustedFilters), adaptiveFilterFrequencyResponses,
+		a.erleEstimator.GetInstLinearQualityEstimates(), a.filterDelaysBlocks(),
+		a.usableLinearFilterEstimates(), stationaryBlock)
 }

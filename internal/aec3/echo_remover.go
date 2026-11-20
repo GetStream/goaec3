@@ -100,8 +100,7 @@ func NewEchoRemoverWithOptimization(config *EchoCanceller3Config, sampleRateHz, 
 	return e
 }
 
-// init sets up e in place; e must not be copied afterwards (its AecState
-// refers to itself and to the config of e).
+// init sets up e in place.
 func (e *EchoRemover) init(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int, optimization Aec3Optimization) {
 	if !ValidFullBandRate(sampleRateHz) {
@@ -138,7 +137,7 @@ func (e *EchoRemover) init(config *EchoCanceller3Config, sampleRateHz, numRender
 	e.suppressionFilter.init(optimization, sampleRateHz, numCaptureChannels)
 	e.renderSignalAnalyzer = RenderSignalAnalyzer{strongPeakFreezeDuration: config.Filter.Refined.LengthBlocks}
 	e.residualEchoEstimator.init(config, numRenderChannels)
-	e.aecState.initDefault(&e.config, numCaptureChannels)
+	e.aecState.initDefault(&e.config, numCaptureChannels, make([]float32, aecStorageSize(&e.config, numCaptureChannels)))
 }
 
 // GetMetrics returns the current metrics. DelayMs is left at zero; the

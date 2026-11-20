@@ -121,47 +121,89 @@ func (s *stFilterAnalysisState) Reset(defaultGain float32) {
 
 // FilterAnalyzer mirrors filter_analyzer.h: analyzes the adaptive filter
 // impulse responses for delay, gain and consistency.
+//
+// The high-pass filtered impulse responses of all channels share one array
+// (storage), hCap samples per channel.
 type FilterAnalyzer struct {
+	more                 *faChannels // with more than inlineChannels channels
+	storage              []float32
+	numCaptureChannels   int
+	hCap                 int
 	boundedErl           bool
 	defaultGain          float32
-	hHighpass            [][]float32
 	blocksSinceReset     int
 	region               FilterRegion
-	filterAnalysisStates []stFilterAnalysisState
-	filterDelaysBlocks   []int
 	minFilterDelayBlocks int
 
-	// The per-channel state above for up to inlineChannels channels; the
-	// high-pass filtered impulse responses of all channels share one array.
+	// The per-channel state for up to inlineChannels channels.
 	inline struct {
-		hHighpass            [inlineChannels][]float32
+		hLen                 [inlineChannels]int
 		filterAnalysisStates [inlineChannels]stFilterAnalysisState
 		filterDelaysBlocks   [inlineChannels]int
 	}
 }
 
+// faChannels is the per-channel state of a FilterAnalyzer: the length of the
+// high-pass filtered impulse response, the analysis state and the delay.
+type faChannels struct {
+	hLen                 []int
+	filterAnalysisStates []stFilterAnalysisState
+	filterDelaysBlocks   []int
+}
+
+// channels returns the per-channel state: views of f for up to
+// inlineChannels channels.
+func (f *FilterAnalyzer) channels() faChannels {
+	if f.more != nil {
+		return *f.more
+	}
+	n := f.numCaptureChannels
+	return faChannels{
+		hLen:                 f.inline.hLen[:n:n],
+		filterAnalysisStates: f.inline.filterAnalysisStates[:n:n],
+		filterDelaysBlocks:   f.inline.filterDelaysBlocks[:n:n],
+	}
+}
+
+// hHighpass returns the high-pass filtered impulse response of channel ch,
+// which has n samples.
+func (f *FilterAnalyzer) hHighpass(ch, n int) []float32 {
+	return f.storage[ch*f.hCap : ch*f.hCap+n : (ch+1)*f.hCap]
+}
+
 func NewFilterAnalyzer(config *EchoCanceller3Config, numCaptureChannels int) *FilterAnalyzer {
 	f := &FilterAnalyzer{}
-	f.init(config, numCaptureChannels)
+	f.init(config, numCaptureChannels, make([]float32, faStorageSize(config, numCaptureChannels)))
 	return f
 }
 
-// init sets up f in place; f must not be copied afterwards (see
-// channelSlice).
-func (f *FilterAnalyzer) init(config *EchoCanceller3Config, numCaptureChannels int) {
+// faStorageSize returns the number of samples a FilterAnalyzer keeps for
+// config.
+func faStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
+	return numCaptureChannels * GetTimeDomainLength(config.Filter.Refined.LengthBlocks)
+}
+
+// init sets up f in place over storage, which holds faStorageSize zeros.
+func (f *FilterAnalyzer) init(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
 	*f = FilterAnalyzer{
-		boundedErl:  config.EpStrength.BoundedErl,
-		defaultGain: config.EpStrength.DefaultGain,
+		storage:            storage,
+		numCaptureChannels: numCaptureChannels,
+		hCap:               GetTimeDomainLength(config.Filter.Refined.LengthBlocks),
+		boundedErl:         config.EpStrength.BoundedErl,
+		defaultGain:        config.EpStrength.DefaultGain,
 	}
-	f.hHighpass = channelSlice(f.inline.hHighpass[:], numCaptureChannels)
-	f.filterAnalysisStates = channelSlice(f.inline.filterAnalysisStates[:], numCaptureChannels)
-	f.filterDelaysBlocks = channelSlice(f.inline.filterDelaysBlocks[:], numCaptureChannels)
+	if n := numCaptureChannels; n > inlineChannelLimit {
+		f.more = &faChannels{
+			hLen:                 make([]int, n),
+			filterAnalysisStates: make([]stFilterAnalysisState, n),
+			filterDelaysBlocks:   make([]int, n),
+		}
+	}
 	activeRenderLimit := config.RenderLevels.ActiveRenderLimit
-	n := GetTimeDomainLength(config.Filter.Refined.LengthBlocks)
-	hHighpass := make([]float32, numCaptureChannels*n)
+	c := f.channels()
 	for ch := 0; ch < numCaptureChannels; ch++ {
-		f.hHighpass[ch] = hHighpass[ch*n : (ch+1)*n : (ch+1)*n]
-		st := &f.filterAnalysisStates[ch]
+		c.hLen[ch] = f.hCap
+		st := &c.filterAnalysisStates[ch]
 		st.filterLengthBlocks = config.Filter.RefinedInitial.LengthBlocks
 		st.consistentFilterDetector.activeRenderThreshold = activeRenderLimit * activeRenderLimit * FftLengthBy2
 		st.consistentFilterDetector.Reset()
@@ -173,10 +215,11 @@ func (f *FilterAnalyzer) init(config *EchoCanceller3Config, numCaptureChannels i
 func (f *FilterAnalyzer) Reset() {
 	f.blocksSinceReset = 0
 	f.resetRegion()
-	for ch := range f.filterAnalysisStates {
-		f.filterAnalysisStates[ch].Reset(f.defaultGain)
+	c := f.channels()
+	for ch := range c.filterAnalysisStates {
+		c.filterAnalysisStates[ch].Reset(f.defaultGain)
 	}
-	clear(f.filterDelaysBlocks)
+	clear(c.filterDelaysBlocks)
 }
 
 // Update analyzes the filters and returns whether any filter is consistent
@@ -184,47 +227,62 @@ func (f *FilterAnalyzer) Reset() {
 func (f *FilterAnalyzer) Update(filtersTimeDomain [][]float32, renderBuffer *RenderBuffer) (anyFilterConsistent bool, maxEchoPathGain float32) {
 	f.blocksSinceReset++
 	f.SetRegionToAnalyze(len(filtersTimeDomain[0]))
-	f.analyzeRegion(filtersTimeDomain, renderBuffer)
-	stCh0 := &f.filterAnalysisStates[0]
+	c := f.channels()
+	f.analyzeRegion(c, filtersTimeDomain, renderBuffer)
+	stCh0 := &c.filterAnalysisStates[0]
 	anyFilterConsistent = stCh0.consistentEstimate
 	maxEchoPathGain = stCh0.gain
-	f.minFilterDelayBlocks = f.filterDelaysBlocks[0]
+	f.minFilterDelayBlocks = c.filterDelaysBlocks[0]
 	for ch := 1; ch < len(filtersTimeDomain); ch++ {
-		stCh := &f.filterAnalysisStates[ch]
+		stCh := &c.filterAnalysisStates[ch]
 		anyFilterConsistent = anyFilterConsistent || stCh.consistentEstimate
 		maxEchoPathGain = stdMax(maxEchoPathGain, stCh.gain)
-		f.minFilterDelayBlocks = min(f.minFilterDelayBlocks, f.filterDelaysBlocks[ch])
+		f.minFilterDelayBlocks = min(f.minFilterDelayBlocks, c.filterDelaysBlocks[ch])
 	}
 	return
 }
 
 // FilterDelaysBlocks returns the per-channel filter delays.
-func (f *FilterAnalyzer) FilterDelaysBlocks() []int { return f.filterDelaysBlocks }
+func (f *FilterAnalyzer) FilterDelaysBlocks() []int { return f.channels().filterDelaysBlocks }
 
 // MinFilterDelayBlocks returns the minimum delay over channels.
 func (f *FilterAnalyzer) MinFilterDelayBlocks() int { return f.minFilterDelayBlocks }
 
 // FilterLengthBlocks returns the filter length of channel 0.
 func (f *FilterAnalyzer) FilterLengthBlocks() int {
-	return f.filterAnalysisStates[0].filterLengthBlocks
+	return f.channels().filterAnalysisStates[0].filterLengthBlocks
 }
 
 // GetAdjustedFilters returns the high-pass filtered impulse responses.
-func (f *FilterAnalyzer) GetAdjustedFilters() [][]float32 { return f.hHighpass }
+func (f *FilterAnalyzer) GetAdjustedFilters() [][]float32 {
+	return f.adjustedFilters(make([][]float32, f.numCaptureChannels))
+}
 
-func (f *FilterAnalyzer) analyzeRegion(filtersTimeDomain [][]float32, renderBuffer *RenderBuffer) {
-	f.preProcessFilters(filtersTimeDomain)
+// adjustedFilters returns the high-pass filtered impulse responses in dst,
+// which has room for one per channel.
+func (f *FilterAnalyzer) adjustedFilters(dst [][]float32) [][]float32 {
+	c := f.channels()
+	dst = dst[:f.numCaptureChannels]
+	for ch := range dst {
+		dst[ch] = f.hHighpass(ch, c.hLen[ch])
+	}
+	return dst
+}
+
+func (f *FilterAnalyzer) analyzeRegion(c faChannels, filtersTimeDomain [][]float32, renderBuffer *RenderBuffer) {
+	f.preProcessFilters(c, filtersTimeDomain)
 	const oneByBlockSize float32 = 1.0 / BlockSize
 	for ch := range filtersTimeDomain {
-		stCh := &f.filterAnalysisStates[ch]
-		stCh.peakIndex = min(stCh.peakIndex, len(f.hHighpass[ch])-1)
-		stCh.peakIndex = stFindPeakIndex(f.hHighpass[ch], stCh.peakIndex, f.region.StartSample, f.region.EndSample)
-		f.filterDelaysBlocks[ch] = stCh.peakIndex >> BlockSizeLog2
-		f.updateFilterGain(f.hHighpass[ch], stCh)
+		stCh := &c.filterAnalysisStates[ch]
+		hp := f.hHighpass(ch, c.hLen[ch])
+		stCh.peakIndex = min(stCh.peakIndex, len(hp)-1)
+		stCh.peakIndex = stFindPeakIndex(hp, stCh.peakIndex, f.region.StartSample, f.region.EndSample)
+		c.filterDelaysBlocks[ch] = stCh.peakIndex >> BlockSizeLog2
+		f.updateFilterGain(hp, stCh)
 		stCh.filterLengthBlocks = int(float32(len(filtersTimeDomain[ch])) * oneByBlockSize)
-		xBlock := renderBuffer.GetBlock(-f.filterDelaysBlocks[ch])
-		stCh.consistentEstimate = stCh.consistentFilterDetector.Detect(f.hHighpass[ch], f.region,
-			&xBlock, stCh.peakIndex, f.filterDelaysBlocks[ch])
+		xBlock := renderBuffer.GetBlock(-c.filterDelaysBlocks[ch])
+		stCh.consistentEstimate = stCh.consistentFilterDetector.Detect(hp, f.region,
+			&xBlock, stCh.peakIndex, c.filterDelaysBlocks[ch])
 	}
 }
 
@@ -244,22 +302,28 @@ func (f *FilterAnalyzer) updateFilterGain(filterTimeDomain []float32, st *stFilt
 
 var stHighpassCoeffs = [3]float32{0.7929742, -0.36072128, -0.47047766}
 
-func (f *FilterAnalyzer) preProcessFilters(filtersTimeDomain [][]float32) {
+// grow gives every channel room for n samples.
+func (f *FilterAnalyzer) grow(c faChannels, n int) {
+	storage := make([]float32, f.numCaptureChannels*n)
+	for ch := range c.hLen {
+		copy(storage[ch*n:(ch+1)*n], f.hHighpass(ch, c.hLen[ch]))
+	}
+	f.storage, f.hCap = storage, n
+}
+
+func (f *FilterAnalyzer) preProcessFilters(c faChannels, filtersTimeDomain [][]float32) {
 	for ch := range filtersTimeDomain {
 		n := len(filtersTimeDomain[ch])
-		old := len(f.hHighpass[ch])
-		if n <= cap(f.hHighpass[ch]) {
-			f.hHighpass[ch] = f.hHighpass[ch][:n]
-		} else {
-			grown := make([]float32, n)
-			copy(grown, f.hHighpass[ch])
-			f.hHighpass[ch] = grown
+		old := c.hLen[ch]
+		if n > f.hCap {
+			f.grow(c, n)
 		}
+		c.hLen[ch] = n
+		hp := f.hHighpass(ch, n)
 		if n > old {
-			clear(f.hHighpass[ch][old:])
+			clear(hp[old:])
 		}
 		h := &stHighpassCoeffs
-		hp := f.hHighpass[ch]
 		clear(hp[f.region.StartSample : f.region.EndSample+1])
 		x := filtersTimeDomain[ch]
 		// hp[k] was cleared above, so each output is +0 plus the three

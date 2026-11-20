@@ -17,8 +17,8 @@ type BlockProcessorEchoRemover interface {
 // block_processor.cc). Metrics reporting is not ported.
 //
 // The render delay buffer, the delay controller and the echo remover that
-// NewBlockProcessor creates are part of the BlockProcessor, which must not
-// be copied (its components refer to it).
+// NewBlockProcessor creates are part of the BlockProcessor, which is not
+// copied once it is set up.
 type BlockProcessor struct {
 	_ noCopy
 	// The components of NewBlockProcessorWithComponents; nil otherwise.
@@ -199,11 +199,21 @@ func (p *BlockProcessor) ProcessCapture(echoPathGainChange, captureSignalSaturat
 			externalDelay = &p.estimatedDelay
 		}
 		if p.injected != nil {
+			// The injected remover is called through an interface, which
+			// would move the blocks of every caller to the heap: it gets
+			// copies of the block headers, which share the samples.
+			capture := *captureBlock
+			var linear *Block
+			if linearOutput != nil {
+				l := *linearOutput
+				linear = &l
+			}
 			p.injected.echoRemover.ProcessCapture(echoPathVariability, captureSignalSaturation, externalDelay,
-				p.renderBuffer().GetRenderBuffer(), linearOutput, captureBlock)
+				p.renderBuffer().GetRenderBuffer(), linear, &capture)
 		} else {
+			renderBuffer := p.ownRenderBuffer.renderBuffer()
 			p.ownEchoRemover.ProcessCapture(echoPathVariability, captureSignalSaturation, externalDelay,
-				p.ownRenderBuffer.GetRenderBuffer(), linearOutput, captureBlock)
+				&renderBuffer, linearOutput, captureBlock)
 		}
 	}
 }

@@ -93,19 +93,40 @@ func (e *stErleInstantaneous) updateQualityEstimate() {
 // FullBandErleEstimator mirrors fullband_erle_estimator.h: estimates the
 // fullband ERLE and the linear filter quality.
 type FullBandErleEstimator struct {
-	minErleLog2                   float32
-	maxErleLfLog2                 float32
-	holdCountersInstantaneousErle []int
-	erleTimeDomainLog2            []float32
-	instantaneousErle             []stErleInstantaneous
-	linearFiltersQualities        []LinearFilterQuality
+	more               *fbErleChannels // with more than inlineChannels channels
+	numCaptureChannels int
+	minErleLog2        float32
+	maxErleLfLog2      float32
 
-	// The per-channel state above for up to inlineChannels channels.
+	// The per-channel state for up to inlineChannels channels.
 	inline struct {
 		holdCountersInstantaneousErle [inlineChannels]int
 		erleTimeDomainLog2            [inlineChannels]float32
 		instantaneousErle             [inlineChannels]stErleInstantaneous
 		linearFiltersQualities        [inlineChannels]LinearFilterQuality
+	}
+}
+
+// fbErleChannels is the per-channel state of a FullBandErleEstimator.
+type fbErleChannels struct {
+	holdCountersInstantaneousErle []int
+	erleTimeDomainLog2            []float32
+	instantaneousErle             []stErleInstantaneous
+	linearFiltersQualities        []LinearFilterQuality
+}
+
+// channels returns the per-channel state: views of f for up to
+// inlineChannels channels.
+func (f *FullBandErleEstimator) channels() fbErleChannels {
+	if f.more != nil {
+		return *f.more
+	}
+	n := f.numCaptureChannels
+	return fbErleChannels{
+		holdCountersInstantaneousErle: f.inline.holdCountersInstantaneousErle[:n:n],
+		erleTimeDomainLog2:            f.inline.erleTimeDomainLog2[:n:n],
+		instantaneousErle:             f.inline.instantaneousErle[:n:n],
+		linearFiltersQualities:        f.inline.linearFiltersQualities[:n:n],
 	}
 }
 
@@ -115,40 +136,47 @@ func NewFullBandErleEstimator(config *EchoCanceller3Config, numCaptureChannels i
 	return f
 }
 
-// init sets up f in place; f must not be copied afterwards (see
-// channelSlice).
+// init sets up f in place.
 func (f *FullBandErleEstimator) init(config *EchoCanceller3Config, numCaptureChannels int) {
 	*f = FullBandErleEstimator{
-		minErleLog2:   FastApproxLog2f(config.Erle.Min + stErleEpsilon),
-		maxErleLfLog2: FastApproxLog2f(config.Erle.MaxL + stErleEpsilon),
+		numCaptureChannels: numCaptureChannels,
+		minErleLog2:        FastApproxLog2f(config.Erle.Min + stErleEpsilon),
+		maxErleLfLog2:      FastApproxLog2f(config.Erle.MaxL + stErleEpsilon),
 	}
-	f.holdCountersInstantaneousErle = channelSlice(f.inline.holdCountersInstantaneousErle[:], numCaptureChannels)
-	f.erleTimeDomainLog2 = channelSlice(f.inline.erleTimeDomainLog2[:], numCaptureChannels)
-	f.instantaneousErle = channelSlice(f.inline.instantaneousErle[:], numCaptureChannels)
-	f.linearFiltersQualities = channelSlice(f.inline.linearFiltersQualities[:], numCaptureChannels)
-	for ch := range f.instantaneousErle {
-		f.instantaneousErle[ch] = stErleInstantaneous{
+	if n := numCaptureChannels; n > inlineChannelLimit {
+		f.more = &fbErleChannels{
+			holdCountersInstantaneousErle: make([]int, n),
+			erleTimeDomainLog2:            make([]float32, n),
+			instantaneousErle:             make([]stErleInstantaneous, n),
+			linearFiltersQualities:        make([]LinearFilterQuality, n),
+		}
+	}
+	c := f.channels()
+	for ch := range c.instantaneousErle {
+		c.instantaneousErle[ch] = stErleInstantaneous{
 			clampInstQualityToZero: config.Erle.ClampQualityEstimateToZero,
 			clampInstQualityToOne:  config.Erle.ClampQualityEstimateToOne,
 		}
-		f.instantaneousErle[ch].Reset()
+		c.instantaneousErle[ch].Reset()
 	}
 	f.Reset()
 }
 
 func (f *FullBandErleEstimator) Reset() {
-	for ch := range f.instantaneousErle {
-		f.instantaneousErle[ch].Reset()
+	c := f.channels()
+	for ch := range c.instantaneousErle {
+		c.instantaneousErle[ch].Reset()
 	}
-	f.updateQualityEstimates()
-	for ch := range f.erleTimeDomainLog2 {
-		f.erleTimeDomainLog2[ch] = f.minErleLog2
+	f.updateQualityEstimates(c)
+	for ch := range c.erleTimeDomainLog2 {
+		c.erleTimeDomainLog2[ch] = f.minErleLog2
 	}
-	clear(f.holdCountersInstantaneousErle)
+	clear(c.holdCountersInstantaneousErle)
 }
 
 // Update updates the ERLE estimates.
 func (f *FullBandErleEstimator) Update(X2 []float32, Y2, E2 [][FftLengthBy2Plus1]float32, convergedFilters []bool) {
+	c := f.channels()
 	for ch := range Y2 {
 		if convergedFilters[ch] {
 			// The three sums accumulate in bin order. The capture and
@@ -168,37 +196,38 @@ func (f *FullBandErleEstimator) Update(X2 []float32, Y2, E2 [][FftLengthBy2Plus1
 				E2Sum = stAccumulate(E2[ch][:])
 			}
 			if X2Sum > stX2BandEnergyThreshold*float32(len(X2)) {
-				if f.instantaneousErle[ch].Update(Y2Sum, E2Sum) {
-					f.holdCountersInstantaneousErle[ch] = stBlocksToHoldErle
-					f.erleTimeDomainLog2[ch] += float32(0.05 * (f.instantaneousErle[ch].erleLog2.Value - f.erleTimeDomainLog2[ch]))
-					f.erleTimeDomainLog2[ch] = stdMax(f.erleTimeDomainLog2[ch], f.minErleLog2)
+				if c.instantaneousErle[ch].Update(Y2Sum, E2Sum) {
+					c.holdCountersInstantaneousErle[ch] = stBlocksToHoldErle
+					c.erleTimeDomainLog2[ch] += float32(0.05 * (c.instantaneousErle[ch].erleLog2.Value - c.erleTimeDomainLog2[ch]))
+					c.erleTimeDomainLog2[ch] = stdMax(c.erleTimeDomainLog2[ch], f.minErleLog2)
 				}
 			}
 		}
-		f.holdCountersInstantaneousErle[ch]--
-		if f.holdCountersInstantaneousErle[ch] == 0 {
-			f.instantaneousErle[ch].ResetAccumulators()
+		c.holdCountersInstantaneousErle[ch]--
+		if c.holdCountersInstantaneousErle[ch] == 0 {
+			c.instantaneousErle[ch].ResetAccumulators()
 		}
 	}
-	f.updateQualityEstimates()
+	f.updateQualityEstimates(c)
 }
 
 // FullbandErleLog2 returns the minimum fullband ERLE over channels (log2).
 func (f *FullBandErleEstimator) FullbandErleLog2() float32 {
-	minErle := f.erleTimeDomainLog2[0]
-	for ch := 1; ch < len(f.erleTimeDomainLog2); ch++ {
-		minErle = stdMin(minErle, f.erleTimeDomainLog2[ch])
+	erle := f.channels().erleTimeDomainLog2
+	minErle := erle[0]
+	for ch := 1; ch < len(erle); ch++ {
+		minErle = stdMin(minErle, erle[ch])
 	}
 	return minErle
 }
 
 // GetInstLinearQualityEstimates returns the per-channel linear filter quality.
 func (f *FullBandErleEstimator) GetInstLinearQualityEstimates() []LinearFilterQuality {
-	return f.linearFiltersQualities
+	return f.channels().linearFiltersQualities
 }
 
-func (f *FullBandErleEstimator) updateQualityEstimates() {
-	for ch := range f.instantaneousErle {
-		f.linearFiltersQualities[ch] = f.instantaneousErle[ch].GetQualityEstimate()
+func (f *FullBandErleEstimator) updateQualityEstimates(c fbErleChannels) {
+	for ch := range c.instantaneousErle {
+		c.linearFiltersQualities[ch] = c.instantaneousErle[ch].GetQualityEstimate()
 	}
 }

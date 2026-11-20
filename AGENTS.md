@@ -278,14 +278,25 @@ the mark phase alone).
   pointers of a canceller sit together at its start and the rest is never
   read.
 - Per-channel state of up to `inlineChannels` capture channels lives in
-  arrays of the component's own struct; the component derives the slice on
-  use (`channelState`) and keeps no pointer to it. What more channels need is
-  allocated behind one pointer (`more`) at the start of the component.
+  arrays of the component's own struct; the component derives the slices on
+  use (`channelState`, or a `channels()` method that returns them all) and
+  keeps no pointer to them. What more channels need is allocated behind one
+  pointer (`more`) at the start of the component.
   `TestEc3ChannelStateStorage` runs both forms against each other. Buffers
-  whose size depends on the config share one allocation per component.
-- The components that still hold a slice of their own struct
-  (`channelSlice`: the estimators of `AecState`, the alignment mixer) or a
-  pointer to themselves must not be copied once set up.
+  whose size depends on the config share one allocation per component, which
+  its parent hands to `init` (`AecState` for its analyzers).
+- No component points at itself or at a sibling. A view that would
+  (`RenderBuffer` over the rings of `RenderDelayBuffer`, the frames, blocks
+  and framing components of `EchoCanceller3` over its storage) is built on
+  the stack when it is used, from offsets and counters the owner keeps. A
+  view handed to an interface escapes: the caller on that path passes a
+  copy (`BlockProcessor.ProcessCapture` with an injected echo remover).
+- An optional implementation is a tagged value, not an interface
+  (`stTransparentState`).
+- What a cycle costs per canceller, measured with 1000 of them: about 15 to
+  30 ns per heap object, 5 ns per KB up to the last pointer word, 2 to 6 ns
+  per pointer word and 8 to 17 ns more when it is not nil. A pointer-free
+  object is marked without being read, whatever its size.
 
 ## Build and test
 

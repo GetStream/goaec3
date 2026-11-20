@@ -52,19 +52,6 @@ const inlineChannels = 2
 // with few channels allocates its per-channel state as one with many does.
 var inlineChannelLimit = inlineChannels
 
-// channelSlice returns n elements of state (usually one per capture
-// channel): inline[:n] when they fit and a new array otherwise. inline is an
-// array of the struct that keeps the result, so that the state of a
-// component lives in the heap object of the component, and a struct that
-// holds such a slice must not be copied once it is set up (the copy would
-// share the state of the original).
-func channelSlice[T any](inline []T, n int) []T {
-	if n <= len(inline) {
-		return inline[:n:n]
-	}
-	return make([]T, n)
-}
-
 // channelState returns n elements of per-channel state of a component:
 // inline[:n], an array of the component's own struct, for up to
 // inlineChannels elements, and otherwise more, which the component
@@ -91,7 +78,7 @@ func moreChannels[T any](n int) []T {
 	return nil
 }
 
-// noCopy marks a struct that must not be copied once it is set up, because
+// noCopy marks a struct that is not copied once it is set up, because
 // it holds pointers to itself: go vet (copylocks) reports the copies.
 type noCopy struct{}
 

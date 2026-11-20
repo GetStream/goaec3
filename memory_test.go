@@ -46,7 +46,7 @@ func footprint(t testing.TB, rate, ch int) (bytes, objects uint64) {
 
 // footprintObjectLimits bounds the heap objects per canceller of each
 // footprintCases entry.
-var footprintObjectLimits = []uint64{13, 16, 16}
+var footprintObjectLimits = []uint64{12, 15, 15}
 
 // TestNewFootprint reports the live heap per canceller and bounds the number
 // of heap objects, which sets most of the mark cost of a GC cycle with many
@@ -138,11 +138,10 @@ func hasPointers(t reflect.Type) bool {
 // TestPointerSlots bounds the pointers the garbage collector follows per
 // canceller. The frames, the framing buffers, the render rings, the matched
 // filters and the adaptive filter coefficients are pointer-free arrays with
-// computed views, so the count does not grow with the buffer sizes. Some of
-// the remaining pointers are slices of a component over arrays of its own
-// struct (see channelSlice in internal/aec3), which lead to no other object.
+// computed views, so the count does not grow with the buffer sizes, and no
+// component points at itself.
 func TestPointerSlots(t *testing.T) {
-	limits := []int{60, 64, 77}
+	limits := []int{16, 20, 24}
 	for i, c := range footprintCases {
 		ec, err := New(DefaultConfig(), c.rate, c.ch, c.ch)
 		if err != nil {
@@ -193,7 +192,7 @@ func TestPointerWords(t *testing.T) {
 	}
 	// The sizes depend on the build (the FFT scratch does), so the end of
 	// the pointers is bounded relative to the size.
-	const maxWords, maxEndPercent = 84, 60
+	const maxWords, maxEndPercent = 44, 60
 	typ := reflect.TypeOf(EchoCanceller{})
 	words, end := pointerWords(typ)
 	t.Logf("%d pointer words, the last one ends at byte %d of %d", words, end, typ.Size())

@@ -28,24 +28,44 @@ func ec3ChooseHighPassCoefficients(sampleRateHz int) []BiQuadCoefficients {
 }
 
 // HighPassFilter is the 100 Hz second order high-pass filter of
-// modules/audio_processing/high_pass_filter.h, one cascaded biquad filter per
-// channel. The sections of every channel share one pointer-free backing
-// array. The AudioBuffer overload of Process is not ported; Process takes
-// the channels directly.
+// modules/audio_processing/high_pass_filter.h, one cascaded biquad filter
+// (of one section) per channel. The sections of up to inlineChannels
+// channels are part of the filter; those of more channels share one
+// pointer-free backing array. The AudioBuffer overload of Process is not
+// ported; Process takes the channels directly.
 type HighPassFilter struct {
+	more         []BiQuad // [channel], with more than inlineChannels channels
 	sampleRateHz int
-	numSections  int      // per channel
-	sections     []BiQuad // [channel][numSections]
+	numChannels  int
+	inline       [inlineChannels]BiQuad
 }
 
-// newHighPassSections returns the sections of numChannels filters.
-func newHighPassSections(coefficients []BiQuadCoefficients, numChannels int) []BiQuad {
-	n := len(coefficients)
-	sections := make([]BiQuad, numChannels*n)
-	for k := range sections {
-		sections[k] = BiQuad{Coefficients: coefficients[k%n]}
+// sections returns the section of every channel.
+func (f *HighPassFilter) sections() []BiQuad {
+	if f.more != nil {
+		return f.more
 	}
-	return sections
+	return f.inline[:f.numChannels]
+}
+
+// setChannels gives f numChannels channels, keeping the sections of the
+// channels it has and adding new ones.
+func (f *HighPassFilter) setChannels(numChannels int) {
+	old := f.sections()
+	sections := f.inline[:min(numChannels, len(f.inline))]
+	if numChannels > len(f.inline) {
+		sections = make([]BiQuad, numChannels)
+	}
+	copy(sections, old) // onto itself when the sections stay inline
+	c := ec3ChooseHighPassCoefficients(f.sampleRateHz)[0]
+	for k := len(old); k < numChannels; k++ {
+		sections[k] = BiQuad{Coefficients: c}
+	}
+	f.more = nil
+	if numChannels > len(f.inline) {
+		f.more = sections
+	}
+	f.numChannels = numChannels
 }
 
 // NewHighPassFilter returns a filter for numChannels channels at
@@ -57,9 +77,8 @@ func NewHighPassFilter(sampleRateHz, numChannels int) *HighPassFilter {
 }
 
 func (f *HighPassFilter) init(sampleRateHz, numChannels int) {
-	coefficients := ec3ChooseHighPassCoefficients(sampleRateHz)
-	*f = HighPassFilter{sampleRateHz: sampleRateHz, numSections: len(coefficients),
-		sections: newHighPassSections(coefficients, numChannels)}
+	*f = HighPassFilter{sampleRateHz: sampleRateHz}
+	f.setChannels(numChannels)
 }
 
 // Process filters audio[channel] in place.
@@ -74,32 +93,25 @@ func (f *HighPassFilter) Process(audio [][]float32) {
 
 // ProcessChannel filters the samples of one channel in place.
 func (f *HighPassFilter) ProcessChannel(channel int, audio []float32) {
-	n := f.numSections
-	dlyApplyBiQuadCascade(audio, audio, f.sections[channel*n:(channel+1)*n])
+	dlyApplyBiQuadCascade(audio, audio, f.sections()[channel:channel+1])
 }
 
 // Reset resets the filter states.
 func (f *HighPassFilter) Reset() {
-	for k := range f.sections {
-		f.sections[k].Reset()
+	sections := f.sections()
+	for k := range sections {
+		sections[k].Reset()
 	}
 }
 
 // ResetChannels resets the filter states and changes the number of channels.
 func (f *HighPassFilter) ResetChannels(numChannels int) {
-	oldNumChannels := f.NumChannels()
-	if numChannels <= oldNumChannels {
-		f.sections = f.sections[:numChannels*f.numSections]
-		f.Reset()
-		return
-	}
 	f.Reset()
-	f.sections = append(f.sections, newHighPassSections(ec3ChooseHighPassCoefficients(f.sampleRateHz),
-		numChannels-oldNumChannels)...)
+	f.setChannels(numChannels)
 }
 
 // SampleRateHz returns the sample rate the filter was created for.
 func (f *HighPassFilter) SampleRateHz() int { return f.sampleRateHz }
 
 // NumChannels returns the number of channels.
-func (f *HighPassFilter) NumChannels() int { return len(f.sections) / f.numSections }
+func (f *HighPassFilter) NumChannels() int { return f.numChannels }

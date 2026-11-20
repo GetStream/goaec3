@@ -25,13 +25,13 @@ func dlyChooseMixingVariant(downmix, adaptiveSelection bool, numChannels int) Al
 // AlignmentMixer converts the channels to mono to provide a decent input for
 // the delay estimation (alignment_mixer.h).
 type AlignmentMixer struct {
+	moreEnergies              []float32 // cumulativeEnergies of more than inlineChannels channels
 	numChannels               int
 	oneByNumChannels          float32
 	excitationEnergyThreshold float32
 	preferFirstTwoChannels    bool
 	selectionVariant          AlignmentMixerMixingVariant
 	strongBlockCounters       [2]int
-	cumulativeEnergies        []float32
 	inlineEnergies            [inlineChannels]float32 // cumulativeEnergies of up to inlineChannels channels
 	selectedChannel           int
 	blockCounter              int
@@ -51,8 +51,7 @@ func NewAlignmentMixerWithParams(numChannels int, downmix, adaptiveSelection boo
 	return m
 }
 
-// init sets up m in place; m must not be copied afterwards (see
-// channelSlice).
+// init sets up m in place.
 func (m *AlignmentMixer) init(numChannels int, downmix, adaptiveSelection bool, activityPowerThreshold float32,
 	preferFirstTwoChannels bool) {
 	*m = AlignmentMixer{
@@ -63,7 +62,7 @@ func (m *AlignmentMixer) init(numChannels int, downmix, adaptiveSelection bool, 
 		selectionVariant:          dlyChooseMixingVariant(downmix, adaptiveSelection, numChannels),
 	}
 	if m.selectionVariant == MixingVariantAdaptive {
-		m.cumulativeEnergies = channelSlice(m.inlineEnergies[:], numChannels)
+		m.moreEnergies = moreChannels[float32](numChannels)
 	}
 }
 
@@ -96,6 +95,7 @@ func (m *AlignmentMixer) downmix(x *Block, y []float32) {
 }
 
 func (m *AlignmentMixer) selectChannel(x *Block) int {
+	energies := channelState(&m.inlineEnergies, m.numChannels, m.moreEnergies)
 	const blocksToChooseLeftOrRight = int(0.5 * NumBlocksPerSecond)
 	goodSignalInLeftOrRight := m.preferFirstTwoChannels &&
 		(m.strongBlockCounters[0] > blocksToChooseLeftOrRight || m.strongBlockCounters[1] > blocksToChooseLeftOrRight)
@@ -120,10 +120,10 @@ func (m *AlignmentMixer) selectChannel(x *Block) int {
 		}
 
 		if m.blockCounter <= numBlocksBeforeEnergySmoothing {
-			m.cumulativeEnergies[ch] += x2Sum
+			energies[ch] += x2Sum
 		} else {
 			const smoothing = float32(1.0 / (10 * NumBlocksPerSecond))
-			m.cumulativeEnergies[ch] += float32(smoothing * (x2Sum - m.cumulativeEnergies[ch]))
+			energies[ch] += float32(smoothing * (x2Sum - energies[ch]))
 		}
 	}
 
@@ -132,19 +132,19 @@ func (m *AlignmentMixer) selectChannel(x *Block) int {
 	if m.blockCounter == numBlocksBeforeEnergySmoothing {
 		const oneByNumBlocksBeforeEnergySmoothing = float32(1.0 / numBlocksBeforeEnergySmoothing)
 		for ch := 0; ch < numChToAnalyze; ch++ {
-			m.cumulativeEnergies[ch] *= oneByNumBlocksBeforeEnergySmoothing
+			energies[ch] *= oneByNumBlocksBeforeEnergySmoothing
 		}
 	}
 
 	strongestCh := 0
 	for ch := 0; ch < numChToAnalyze; ch++ {
-		if m.cumulativeEnergies[ch] > m.cumulativeEnergies[strongestCh] {
+		if energies[ch] > energies[strongestCh] {
 			strongestCh = ch
 		}
 	}
 
 	if (goodSignalInLeftOrRight && m.selectedChannel > 1) ||
-		m.cumulativeEnergies[strongestCh] > 2*m.cumulativeEnergies[m.selectedChannel] {
+		energies[strongestCh] > 2*energies[m.selectedChannel] {
 		m.selectedChannel = strongestCh
 	}
 	return m.selectedChannel

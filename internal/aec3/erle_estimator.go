@@ -3,10 +3,10 @@ package aec3
 // ErleEstimator mirrors erle_estimator.h: combines the fullband, subband and
 // (when erle.num_sections > 1) signal dependent ERLE estimators.
 type ErleEstimator struct {
-	startupPhaseLengthBlocks     int
+	signalDependentErleEstimator *SignalDependentErleEstimator
 	fullbandErleEstimator        FullBandErleEstimator
 	subbandErleEstimator         SubbandErleEstimator
-	signalDependentErleEstimator *SignalDependentErleEstimator
+	startupPhaseLengthBlocks     int
 	blocksSinceReset             int
 }
 
@@ -16,8 +16,7 @@ func NewErleEstimator(startupPhaseLengthBlocks int, config *EchoCanceller3Config
 	return e
 }
 
-// init sets up e in place; e must not be copied afterwards (see
-// channelSlice).
+// init sets up e in place.
 func (e *ErleEstimator) init(startupPhaseLengthBlocks int, config *EchoCanceller3Config, numCaptureChannels int) {
 	*e = ErleEstimator{startupPhaseLengthBlocks: startupPhaseLengthBlocks}
 	e.fullbandErleEstimator.init(config, numCaptureChannels)

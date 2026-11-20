@@ -408,7 +408,7 @@ func TestEc3StereoDetectionSwitch(t *testing.T) {
 	if !ec.StereoRenderProcessingActiveForTesting() || ec.GetActiveConfigForTesting().Filter.Coarse.LengthBlocks != 11 {
 		t.Fatal("stereo not detected")
 	}
-	if ec.renderBlock.NumChannels() != 2 || ec.numRenderChannelsToAec != 2 {
+	if ec.renderBlock().NumChannels() != 2 || ec.numRenderChannelsToAec != 2 {
 		t.Fatal("render path not reconfigured to two channels")
 	}
 }
@@ -561,26 +561,6 @@ func TestEc3AllocationFree(t *testing.T) {
 		if a := testing.AllocsPerRun(100, step); a != 0 {
 			t.Fatalf("rate %d: %v allocations per frame", rate, a)
 		}
-	}
-}
-
-// TestChannelSlice checks that per-channel state of up to the inline number
-// of channels lives in the given array and is allocated beyond.
-func TestChannelSlice(t *testing.T) {
-	var inline [inlineChannels]int
-	for n := 0; n <= inlineChannels+2; n++ {
-		s := channelSlice(inline[:], n)
-		if len(s) != n || cap(s) != n {
-			t.Fatalf("%d channels: len %d cap %d", n, len(s), cap(s))
-		}
-		if n == 0 {
-			continue
-		}
-		s[0] = 7
-		if wantInline := n <= inlineChannels; (inline[0] == 7) != wantInline {
-			t.Fatalf("%d channels: inline %v, want %v", n, inline[0] == 7, wantInline)
-		}
-		inline[0] = 0
 	}
 }
 

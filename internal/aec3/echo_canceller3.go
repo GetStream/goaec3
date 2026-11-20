@@ -104,10 +104,10 @@ func (f Frame) CopyTo(frame [][][]float32) {
 // deepest burst so far. It is safe for one inserting and one removing
 // goroutine.
 type ec3RenderTransferQueue struct {
+	buffer         []float32 // [frame][band][channel][SplitBandSize]
 	mu             sync.Mutex
 	frameSize      int // samples per frame
 	maxFrames      int
-	buffer         []float32 // [frame][band][channel][SplitBandSize]
 	nextWriteIndex int
 	nextReadIndex  int
 	numElements    int
@@ -176,18 +176,16 @@ func (q *ec3RenderTransferQueue) Remove(output Frame) bool {
 	return true
 }
 
-// ec3RenderWriter is EchoCanceller3::RenderWriter: it holds the split-band
-// render frame that goes into the transfer queue, optionally high-pass
-// filtering its lowest band first.
+// ec3RenderWriter is EchoCanceller3::RenderWriter: it moves the split-band
+// render frame (which the canceller holds) into the transfer queue,
+// optionally high-pass filtering its lowest band first.
 type ec3RenderWriter struct {
-	hasHighPassFilter     bool
-	highPassFilter        HighPassFilter
-	renderQueueInputFrame Frame
+	highPassFilter    HighPassFilter
+	hasHighPassFilter bool
 }
 
-// init sets up w; the frame keeps its samples in storage.
-func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numBands, numChannels int, storage []float32) {
-	*w = ec3RenderWriter{renderQueueInputFrame: ec3FrameOver(numBands, numChannels, storage)}
+func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numChannels int) {
+	*w = ec3RenderWriter{}
 	if config.Filter.HighPassFilterEchoReference {
 		w.hasHighPassFilter = true
 		w.highPassFilter.init(16000, numChannels)
@@ -195,14 +193,14 @@ func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numBands, numChanne
 }
 
 // Insert moves renderQueueInputFrame into the transfer queue.
-func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue) {
+func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue, renderQueueInputFrame Frame) {
 	if w.hasHighPassFilter {
-		for channel := 0; channel < w.renderQueueInputFrame.numChannels; channel++ {
-			w.highPassFilter.ProcessChannel(channel, w.renderQueueInputFrame.View(0, channel))
+		for channel := 0; channel < renderQueueInputFrame.numChannels; channel++ {
+			w.highPassFilter.ProcessChannel(channel, renderQueueInputFrame.View(0, channel))
 		}
 	}
 
-	_ = renderTransferQueue.Insert(w.renderQueueInputFrame)
+	_ = renderTransferQueue.Insert(renderQueueInputFrame)
 }
 
 // EchoCanceller3 is the main AEC3 class (echo_canceller3.h). It receives
@@ -225,25 +223,16 @@ func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue) {
 // not be called concurrently with each other.
 //
 // The frames, blocks and framing buffers are views of one pointer-free
-// array, and the framing components and the block processor are held by
-// value, so the garbage collector follows few pointers per canceller.
+// array (storage), computed from their offsets on use, and the block
+// processor is held by value, so the garbage collector follows few pointers
+// per canceller.
 type EchoCanceller3 struct {
 	// The fields that hold pointers come first, the block processor (whose
 	// own come first too) after them and the pointer-free state last: the
 	// garbage collector reads a canceller up to its last pointer.
-	renderWriter             ec3RenderWriter
-	linearOutputFramer       BlockFramer
-	outputFramer             BlockFramer
-	captureBlocker           FrameBlocker
-	renderBlocker            FrameBlocker
+	storage                  []float32 // every sample buffer but the transfer queue
 	renderTransferQueue      ec3RenderTransferQueue
-	renderQueueOutputFrame   Frame
-	captureFrame             Frame
-	linearOutputFrame        Frame // [1][channel][SplitBandSize]
-	renderBlock              Block
-	linearOutputBlock        Block
-	captureBlock             Block
-	blockDelayBuffer         BlockDelayBuffer
+	renderWriter             ec3RenderWriter
 	blockProcessorForTesting *BlockProcessor // set by SetBlockProcessorForTesting
 	blockProcessor           BlockProcessor
 
@@ -258,6 +247,100 @@ type EchoCanceller3 struct {
 	hasLinearOutput             bool
 	saturatedMicrophoneSignal   bool
 	hasBlockDelayBuffer         bool
+
+	// Where the buffers start in storage, and what the framing components
+	// keep besides their samples.
+	offsets                ec3Offsets
+	outputFramerFill       int
+	captureBlockerFill     int
+	renderBlockerFill      int
+	linearOutputFramerFill int
+	blockDelay             int
+	blockDelayLastInsert   int
+}
+
+// ec3Offsets is where each buffer of an EchoCanceller3 starts in its
+// storage.
+type ec3Offsets struct {
+	outputFramer           int // [band][capture channel][BlockSize]
+	captureBlocker         int // [band][capture channel][BlockSize]
+	renderQueueOutputFrame int // [band][render channel][SplitBandSize]
+	captureFrame           int // [band][capture channel][SplitBandSize]
+	renderBlock            int // [band][render channel][BlockSize]
+	captureBlock           int // [band][capture channel][BlockSize]
+	renderBlocker          int // [band][render channel][BlockSize]
+	blockDelayBuffer       int // [capture channel][band][delay]
+	linearOutputFramer     int // [capture channel][BlockSize]
+	linearOutputBlock      int // [capture channel][BlockSize]
+	linearOutputFrame      int // [capture channel][SplitBandSize]
+	renderQueueInputFrame  int // [band][render channel][SplitBandSize]
+}
+
+// The views below are the frames, blocks and framing components of e over
+// its storage. A framing component is a copy: its fill is stored back after
+// use.
+
+func (e *EchoCanceller3) renderQueueInputFrame() Frame {
+	return ec3FrameOver(e.numBands, e.numRenderInputChannels, e.storage[e.offsets.renderQueueInputFrame:])
+}
+
+func (e *EchoCanceller3) renderQueueOutputFrame() Frame {
+	return ec3FrameOver(e.numBands, e.numRenderInputChannels, e.storage[e.offsets.renderQueueOutputFrame:])
+}
+
+func (e *EchoCanceller3) captureFrame() Frame {
+	return ec3FrameOver(e.numBands, e.numCaptureChannels, e.storage[e.offsets.captureFrame:])
+}
+
+func (e *EchoCanceller3) linearOutputFrame() Frame {
+	if !e.hasLinearOutput {
+		return Frame{}
+	}
+	return ec3FrameOver(1, e.numCaptureChannels, e.storage[e.offsets.linearOutputFrame:])
+}
+
+func (e *EchoCanceller3) renderBlock() Block {
+	return ec3BlockOver(e.numBands, e.numRenderChannelsToAec, e.storage[e.offsets.renderBlock:])
+}
+
+func (e *EchoCanceller3) captureBlock() Block {
+	return ec3BlockOver(e.numBands, e.numCaptureChannels, e.storage[e.offsets.captureBlock:])
+}
+
+// linearOutputBlock returns the block that receives the linear filter
+// output; ok is false without Filter.ExportLinearAecOutput.
+func (e *EchoCanceller3) linearOutputBlock() (block Block, ok bool) {
+	if !e.hasLinearOutput {
+		return Block{}, false
+	}
+	return ec3BlockOver(1, e.numCaptureChannels, e.storage[e.offsets.linearOutputBlock:]), true
+}
+
+func (e *EchoCanceller3) outputFramer() BlockFramer {
+	return BlockFramer{numBands: e.numBands, numChannels: e.numCaptureChannels, fill: e.outputFramerFill,
+		buffer: e.storage[e.offsets.outputFramer:][:e.numBands*e.numCaptureChannels*BlockSize]}
+}
+
+func (e *EchoCanceller3) linearOutputFramer() BlockFramer {
+	return BlockFramer{numBands: 1, numChannels: e.numCaptureChannels, fill: e.linearOutputFramerFill,
+		buffer: e.storage[e.offsets.linearOutputFramer:][:e.numCaptureChannels*BlockSize]}
+}
+
+func (e *EchoCanceller3) captureBlocker() FrameBlocker {
+	return FrameBlocker{numBands: e.numBands, numChannels: e.numCaptureChannels, fill: e.captureBlockerFill,
+		buffer: e.storage[e.offsets.captureBlocker:][:e.numBands*e.numCaptureChannels*BlockSize]}
+}
+
+// renderBlocker serves numRenderChannelsToAec channels, at most all of them.
+func (e *EchoCanceller3) renderBlocker() FrameBlocker {
+	return FrameBlocker{numBands: e.numBands, numChannels: e.numRenderChannelsToAec, fill: e.renderBlockerFill,
+		buffer: e.storage[e.offsets.renderBlocker:][:e.numBands*e.numRenderChannelsToAec*BlockSize]}
+}
+
+func (e *EchoCanceller3) blockDelayBuffer() BlockDelayBuffer {
+	return BlockDelayBuffer{numChannels: e.numCaptureChannels, numBands: e.numBands, frameLength: SplitBandSize,
+		delay: e.blockDelay, lastInsert: e.blockDelayLastInsert,
+		buf: e.storage[e.offsets.blockDelayBuffer:][:e.numCaptureChannels*e.numBands*e.blockDelay]}
 }
 
 // NewEchoCanceller3 creates an echo canceller. multichannelConfig is the
@@ -296,41 +379,37 @@ func (e *EchoCanceller3) Init(config, multichannelConfig *EchoCanceller3Config, 
 	// render frame, which the render side writes, comes last.
 	renderViews := e.numBands * e.numRenderInputChannels
 	captureViews := e.numBands * e.numCaptureChannels
-	n := renderViews*(2*SplitBandSize+2*BlockSize) + captureViews*(SplitBandSize+3*BlockSize)
-	if e.hasLinearOutput {
-		n += e.numCaptureChannels * (SplitBandSize + 2*BlockSize)
+	n := 0
+	take := func(size int) int {
+		offset := n
+		n += size
+		return offset
 	}
-	storage := make([]float32, n)
-	take := func(n int) []float32 {
-		s := storage[:n:n]
-		storage = storage[n:]
-		return s
-	}
-
-	e.outputFramer.init(e.numBands, e.numCaptureChannels, take(captureViews*BlockSize))
-	e.captureBlocker.init(e.numBands, e.numCaptureChannels, take(captureViews*BlockSize))
-	e.renderTransferQueue.init(RenderTransferQueueSizeFrames, e.numBands, e.numRenderInputChannels)
-	e.renderQueueOutputFrame = ec3FrameOver(e.numBands, e.numRenderInputChannels, take(renderViews*SplitBandSize))
-	e.captureFrame = ec3FrameOver(e.numBands, e.numCaptureChannels, take(captureViews*SplitBandSize))
-	e.renderBlock = ec3BlockOver(e.numBands, e.numRenderInputChannels, take(renderViews*BlockSize))
-	e.captureBlock = ec3BlockOver(e.numBands, e.numCaptureChannels, take(captureViews*BlockSize))
-	// The render blocker serves numRenderChannelsToAec channels, at most
-	// all of them.
-	e.renderBlocker.init(e.numBands, e.numRenderInputChannels, take(renderViews*BlockSize))
-
+	e.offsets.outputFramer = take(captureViews * BlockSize)
+	e.offsets.captureBlocker = take(captureViews * BlockSize)
+	e.offsets.renderQueueOutputFrame = take(renderViews * SplitBandSize)
+	e.offsets.captureFrame = take(captureViews * SplitBandSize)
+	e.offsets.renderBlock = take(renderViews * BlockSize)
+	e.offsets.captureBlock = take(captureViews * BlockSize)
+	e.offsets.renderBlocker = take(renderViews * BlockSize)
 	if active.Delay.FixedCaptureDelaySamples > 0 {
 		e.hasBlockDelayBuffer = true
-		e.blockDelayBuffer.init(e.numCaptureChannels, e.numBands, SplitBandSize,
-			e.config.Delay.FixedCaptureDelaySamples)
+		e.blockDelay = e.config.Delay.FixedCaptureDelaySamples
+		e.offsets.blockDelayBuffer = take(captureViews * e.blockDelay)
 	}
-
 	if e.hasLinearOutput {
-		e.linearOutputFramer.init(1, e.numCaptureChannels, take(e.numCaptureChannels*BlockSize))
-		e.linearOutputBlock = ec3BlockOver(1, e.numCaptureChannels, take(e.numCaptureChannels*BlockSize))
-		e.linearOutputFrame = ec3FrameOver(1, e.numCaptureChannels, take(e.numCaptureChannels*SplitBandSize))
+		e.offsets.linearOutputFramer = take(e.numCaptureChannels * BlockSize)
+		e.offsets.linearOutputBlock = take(e.numCaptureChannels * BlockSize)
+		e.offsets.linearOutputFrame = take(e.numCaptureChannels * SplitBandSize)
 	}
+	e.offsets.renderQueueInputFrame = take(renderViews * SplitBandSize)
+	e.storage = make([]float32, n)
 
-	e.renderWriter.init(active, e.numBands, e.numRenderInputChannels, take(renderViews*SplitBandSize))
+	// The framers start with BlockSize zeros, the blockers empty.
+	e.outputFramerFill = BlockSize
+	e.linearOutputFramerFill = BlockSize
+	e.renderTransferQueue.init(RenderTransferQueueSizeFrames, e.numBands, e.numRenderInputChannels)
+	e.renderWriter.init(active, e.numRenderInputChannels)
 
 	e.initialize()
 }
@@ -351,10 +430,11 @@ func (e *EchoCanceller3) initialize() {
 
 	e.configSelector.Update(e.multichannelContentDetector.IsProperMultiChannelContentDetected())
 
-	e.renderBlock.SetNumChannels(e.numRenderChannelsToAec)
+	renderBlock := e.renderBlock()
+	clear(renderBlock.data)
 
 	// An empty blocker over the same storage.
-	e.renderBlocker.init(e.numBands, e.numRenderChannelsToAec, e.renderBlocker.buffer[:cap(e.renderBlocker.buffer)])
+	e.renderBlockerFill = 0
 
 	e.blockProcessor.init(e.configSelector.ActiveConfig(), e.sampleRateHz,
 		e.numRenderChannelsToAec, e.numCaptureChannels)
@@ -392,12 +472,12 @@ func (e *EchoCanceller3) GetActiveConfigForTesting() *EchoCanceller3Config {
 
 // RenderFrame returns the split-band render frame that AnalyzeRenderFrame
 // consumes. The caller fills every band and channel before each call.
-func (e *EchoCanceller3) RenderFrame() Frame { return e.renderWriter.renderQueueInputFrame }
+func (e *EchoCanceller3) RenderFrame() Frame { return e.renderQueueInputFrame() }
 
 // AnalyzeRenderFrame analyzes and stores an internal copy of RenderFrame,
 // whose contents are unspecified afterwards.
 func (e *EchoCanceller3) AnalyzeRenderFrame() {
-	e.renderWriter.Insert(&e.renderTransferQueue)
+	e.renderWriter.Insert(&e.renderTransferQueue, e.renderQueueInputFrame())
 }
 
 // AnalyzeRender analyzes and stores an internal copy of the split-band
@@ -409,7 +489,7 @@ func (e *EchoCanceller3) AnalyzeRender(render [][][]float32) {
 	if e.numBands != len(render) {
 		return
 	}
-	e.renderWriter.renderQueueInputFrame.CopyFrom(render)
+	e.renderQueueInputFrame().CopyFrom(render)
 	e.AnalyzeRenderFrame()
 }
 
@@ -433,12 +513,12 @@ func (e *EchoCanceller3) AnalyzeCaptureSamples(capture []float32) {
 
 // CaptureFrame returns the split-band capture frame that ProcessCaptureFrame
 // processes in place.
-func (e *EchoCanceller3) CaptureFrame() Frame { return e.captureFrame }
+func (e *EchoCanceller3) CaptureFrame() Frame { return e.captureFrame() }
 
 // LinearOutputFrame returns the frame ([1][channel][SplitBandSize], 16 kHz)
 // that receives the linear filter output. It is the zero Frame without
 // Filter.ExportLinearAecOutput.
-func (e *EchoCanceller3) LinearOutputFrame() Frame { return e.linearOutputFrame }
+func (e *EchoCanceller3) LinearOutputFrame() Frame { return e.linearOutputFrame() }
 
 // ProcessCapture removes the echo from the split-band capture signal
 // ([band][channel][SplitBandSize]) in place. linearOutput, when non-nil,
@@ -449,12 +529,14 @@ func (e *EchoCanceller3) ProcessCapture(capture [][][]float32, linearOutput [][]
 	if len(capture) != e.numBands || len(capture[0]) != e.numCaptureChannels {
 		panic("aec3: EchoCanceller3.ProcessCapture capture shape mismatch")
 	}
-	e.captureFrame.CopyFrom(capture)
+	captureFrame := e.captureFrame()
+	captureFrame.CopyFrom(capture)
 	e.ProcessCaptureFrame(linearOutput != nil, levelChange)
-	e.captureFrame.CopyTo(capture)
+	captureFrame.CopyTo(capture)
 	if linearOutput != nil {
+		linearOutputFrame := e.linearOutputFrame()
 		for channel := range linearOutput {
-			copy(linearOutput[channel][:SplitBandSize], e.linearOutputFrame.View(0, channel))
+			copy(linearOutput[channel][:SplitBandSize], linearOutputFrame.View(0, channel))
 		}
 	}
 }
@@ -473,7 +555,9 @@ func (e *EchoCanceller3) ProcessCaptureFrame(linearOutput, levelChange bool) {
 		if !e.hasBlockDelayBuffer {
 			panic("aec3: fixed capture delay enabled by a config switch")
 		}
-		e.blockDelayBuffer.DelaySignal(e.captureFrame)
+		blockDelayBuffer := e.blockDelayBuffer()
+		blockDelayBuffer.DelaySignal(e.captureFrame())
+		e.blockDelayLastInsert = blockDelayBuffer.lastInsert
 	}
 
 	e.emptyRenderQueue()
@@ -515,61 +599,83 @@ func ec3DownmixRenderSubFrame(properDownmixNeeded bool, frame Frame, subFrameInd
 	}
 }
 
-// linearBlock returns the block that receives the linear filter output, nil
-// without Filter.ExportLinearAecOutput.
-func (e *EchoCanceller3) linearBlock() *Block {
-	if !e.hasLinearOutput {
-		return nil
-	}
-	return &e.linearOutputBlock
-}
-
 func (e *EchoCanceller3) processCaptureFrameContent(linearOutput, levelChange, aecReferenceIsDownmixedStereo bool,
 	subFrameIndex int) {
-	e.captureBlocker.InsertSubFrameAndExtractBlock(e.captureFrame, subFrameIndex, &e.captureBlock)
+	captureFrame, captureBlock := e.captureFrame(), e.captureBlock()
+	linearOutputBlock, hasLinearBlock := e.linearOutputBlock()
+	var linearBlock *Block
+	if hasLinearBlock {
+		linearBlock = &linearOutputBlock
+	}
+	captureBlocker := e.captureBlocker()
+	captureBlocker.InsertSubFrameAndExtractBlock(captureFrame, subFrameIndex, &captureBlock)
+	e.captureBlockerFill = captureBlocker.fill
 	e.processor().ProcessCapture(levelChange || aecReferenceIsDownmixedStereo,
-		e.saturatedMicrophoneSignal, e.linearBlock(), &e.captureBlock)
-	e.outputFramer.InsertBlockAndExtractSubFrame(&e.captureBlock, e.captureFrame, subFrameIndex)
+		e.saturatedMicrophoneSignal, linearBlock, &captureBlock)
+	outputFramer := e.outputFramer()
+	outputFramer.InsertBlockAndExtractSubFrame(&captureBlock, captureFrame, subFrameIndex)
+	e.outputFramerFill = outputFramer.fill
 
 	if linearOutput {
-		e.linearOutputFramer.InsertBlockAndExtractSubFrame(&e.linearOutputBlock, e.linearOutputFrame, subFrameIndex)
+		linearOutputFramer := e.linearOutputFramer()
+		linearOutputFramer.InsertBlockAndExtractSubFrame(&linearOutputBlock, e.linearOutputFrame(), subFrameIndex)
+		e.linearOutputFramerFill = linearOutputFramer.fill
 	}
 }
 
 func (e *EchoCanceller3) processRemainingCaptureFrameContent(levelChange, aecReferenceIsDownmixedStereo bool) {
-	if !e.captureBlocker.IsBlockAvailable() {
+	captureBlocker := e.captureBlocker()
+	if !captureBlocker.IsBlockAvailable() {
 		return
 	}
 
-	e.captureBlocker.ExtractBlock(&e.captureBlock)
+	captureBlock := e.captureBlock()
+	linearOutputBlock, hasLinearBlock := e.linearOutputBlock()
+	var linearBlock *Block
+	if hasLinearBlock {
+		linearBlock = &linearOutputBlock
+	}
+	captureBlocker.ExtractBlock(&captureBlock)
+	e.captureBlockerFill = captureBlocker.fill
 	e.processor().ProcessCapture(levelChange || aecReferenceIsDownmixedStereo,
-		e.saturatedMicrophoneSignal, e.linearBlock(), &e.captureBlock)
-	e.outputFramer.InsertBlock(&e.captureBlock)
+		e.saturatedMicrophoneSignal, linearBlock, &captureBlock)
+	outputFramer := e.outputFramer()
+	outputFramer.InsertBlock(&captureBlock)
+	e.outputFramerFill = outputFramer.fill
 
 	if e.hasLinearOutput {
-		e.linearOutputFramer.InsertBlock(&e.linearOutputBlock)
+		linearOutputFramer := e.linearOutputFramer()
+		linearOutputFramer.InsertBlock(&linearOutputBlock)
+		e.linearOutputFramerFill = linearOutputFramer.fill
 	}
 }
 
 func (e *EchoCanceller3) bufferRenderFrameContent(properDownmixNeeded bool, subFrameIndex int) {
-	ec3DownmixRenderSubFrame(properDownmixNeeded, e.renderQueueOutputFrame, subFrameIndex, e.numRenderChannelsToAec)
-	e.renderBlocker.InsertSubFrameAndExtractBlock(e.renderQueueOutputFrame, subFrameIndex, &e.renderBlock)
-	e.processor().BufferRender(&e.renderBlock)
+	renderQueueOutputFrame, renderBlock := e.renderQueueOutputFrame(), e.renderBlock()
+	ec3DownmixRenderSubFrame(properDownmixNeeded, renderQueueOutputFrame, subFrameIndex, e.numRenderChannelsToAec)
+	renderBlocker := e.renderBlocker()
+	renderBlocker.InsertSubFrameAndExtractBlock(renderQueueOutputFrame, subFrameIndex, &renderBlock)
+	e.renderBlockerFill = renderBlocker.fill
+	e.processor().BufferRender(&renderBlock)
 }
 
 func (e *EchoCanceller3) bufferRemainingRenderFrameContent() {
-	if !e.renderBlocker.IsBlockAvailable() {
+	renderBlocker := e.renderBlocker()
+	if !renderBlocker.IsBlockAvailable() {
 		return
 	}
-	e.renderBlocker.ExtractBlock(&e.renderBlock)
-	e.processor().BufferRender(&e.renderBlock)
+	renderBlock := e.renderBlock()
+	renderBlocker.ExtractBlock(&renderBlock)
+	e.renderBlockerFill = renderBlocker.fill
+	e.processor().BufferRender(&renderBlock)
 }
 
 // emptyRenderQueue empties the render transfer queue.
 func (e *EchoCanceller3) emptyRenderQueue() {
-	frameToBuffer := e.renderTransferQueue.Remove(e.renderQueueOutputFrame)
+	renderQueueOutputFrame := e.renderQueueOutputFrame()
+	frameToBuffer := e.renderTransferQueue.Remove(renderQueueOutputFrame)
 	for frameToBuffer {
-		if e.multichannelContentDetector.UpdateDetection(e.renderQueueOutputFrame) {
+		if e.multichannelContentDetector.UpdateDetection(renderQueueOutputFrame) {
 			// Reinitialize the AEC when proper stereo is detected.
 			e.initialize()
 		}
@@ -579,7 +685,7 @@ func (e *EchoCanceller3) emptyRenderQueue() {
 		e.bufferRenderFrameContent(e.multichannelContentDetector.IsTemporaryMultiChannelContentDetected(), 1)
 		e.bufferRemainingRenderFrameContent()
 
-		frameToBuffer = e.renderTransferQueue.Remove(e.renderQueueOutputFrame)
+		frameToBuffer = e.renderTransferQueue.Remove(renderQueueOutputFrame)
 	}
 }
 
