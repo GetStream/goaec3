@@ -712,11 +712,10 @@ func dlyCoreLaneKernel(g int, xStartIndex int, x2SumThreshold, smoothing float32
 
 // dlyCoreSimple runs the MatchedFilterCore loop of the SSE2 (g = 8) or AVX2
 // (g = 16) lane on one filter. The update of a sample is deferred and fused
-// into the next sample's dot product when neither sample wraps around the
-// circular buffer and h is a whole number of groups, so one update-and-dot
-// kernel call covers all of h. Otherwise the pending update runs as its own
-// pass first and the dot product follows the C++ chunk loop. The update of
-// every element is the same operation either way.
+// into the next sample's dot product: when neither sample wraps around the
+// circular buffer and h is a whole number of groups, one update-and-dot
+// kernel call covers all of h; the other samples run dlyWrapSample. The
+// update of every element is the same operation either way.
 //
 // dlyCoreLaneKernel admits g = 16 only with dlyUseFma; the AVX2 kernels are
 // called behind their own test of it so that every 256-bit instruction
@@ -728,13 +727,11 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 	var pend dlyPendingAxpy
 	pendWhole := false // the pending update covers h with one x stretch at pendStart
 	pendStart, pendChunk1 := 0, 0
-	var acc [32]float32
 	for i := range y {
 		var x2Sum, s float32
 		chunk1 := min(hSize, xSize-xStartIndex)
 		chunk2 := hSize - chunk1
 		v1 := chunk1 &^ (g - 1)
-		reduced := false
 		if v1 == hSize {
 			// One stretch, no tails: the Sum kernels reduce in registers.
 			xb := x[xStartIndex : xStartIndex+hSize]
@@ -756,33 +753,8 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 					s, x2Sum = dlyDotAvx2Sum(h, xb)
 				}
 			}
-			reduced = true
 		} else {
-			dlyZeroAcc32(&acc)
-			if pend.active {
-				pend.set(pendStart, pendChunk1, hSize, pend.alpha, g == 16)
-				pend.apply(h, x, 0, hSize)
-			}
-			dlyLaneDotX2(g, h[:v1], x[xStartIndex:xStartIndex+v1], &acc)
-			for k := v1; k < chunk1; k++ {
-				xk := x[xStartIndex+k]
-				x2Sum += float32(xk * xk)
-				s += float32(h[k] * xk)
-			}
-			v2 := chunk2 &^ (g - 1)
-			dlyLaneDotX2(g, h[chunk1:chunk1+v2], x[:v2], &acc)
-			for k := chunk1 + v2; k < hSize; k++ {
-				xk := x[k-chunk1]
-				x2Sum += float32(xk * xk)
-				s += float32(h[k] * xk)
-			}
-		}
-		switch {
-		case reduced:
-		case g == 8:
-			s, x2Sum = dlyReduceSse2((*[16]float32)(acc[:16]), s, x2Sum)
-		case dlyUseFma:
-			s, x2Sum = dlyReduceAvx2(&acc, s, x2Sum)
+			s, x2Sum = dlyWrapSample(g, h, x, xStartIndex, chunk1, v1, chunk2&^(g-1), &pend, pendStart, pendChunk1)
 		}
 
 		e := y[i] - s
@@ -808,90 +780,6 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 	}
 }
 
-// dlyLaneDotX2 runs the dot kernel of the lane with group size g on the
-// lane's accumulators, which occupy the front of acc.
-func dlyLaneDotX2(g int, h, x []float32, acc *[32]float32) {
-	if g == 8 {
-		dlyDotSse2(h, x, (*[16]float32)(acc[:16]))
-		return
-	}
-	if dlyUseFma {
-		dlyDotAvx2(h, x, acc)
-	}
-}
-
-func dlyDotSse2(h, x []float32, acc *[16]float32) {
-	n := len(h)
-	x = x[:n:n]
-	s := dlyLd4((*[4]float32)(acc[0:4]))
-	s4 := dlyLd4((*[4]float32)(acc[4:8]))
-	x2 := dlyLd4((*[4]float32)(acc[8:12]))
-	x24 := dlyLd4((*[4]float32)(acc[12:16]))
-	for i := 0; i < n-7; i += 8 {
-		hh := (*[8]float32)(h[i : i+8])
-		xx := (*[8]float32)(x[i : i+8])
-		xk := dlyLd4((*[4]float32)(xx[0:4]))
-		xk4 := dlyLd4((*[4]float32)(xx[4:8]))
-		x2 = x2.Add(xk.Mul(xk))
-		x24 = x24.Add(xk4.Mul(xk4))
-		s = s.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(xk))
-		s4 = s4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(xk4))
-	}
-	s.StoreArray((*[4]float32)(acc[0:4]))
-	s4.StoreArray((*[4]float32)(acc[4:8]))
-	x2.StoreArray((*[4]float32)(acc[8:12]))
-	x24.StoreArray((*[4]float32)(acc[12:16]))
-}
-
-func dlyDotAvx2(h, x []float32, acc *[32]float32) {
-	n := len(h)
-	x = x[:n:n]
-	s := dlyLd8((*[8]float32)(acc[0:8]))
-	s8 := dlyLd8((*[8]float32)(acc[8:16]))
-	x2 := dlyLd8((*[8]float32)(acc[16:24]))
-	x28 := dlyLd8((*[8]float32)(acc[24:32]))
-	for i := 0; i < n-15; i += 16 {
-		hh := (*[16]float32)(h[i : i+16])
-		xx := (*[16]float32)(x[i : i+16])
-		xk := dlyLd8((*[8]float32)(xx[0:8]))
-		xk8 := dlyLd8((*[8]float32)(xx[8:16]))
-		s = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(xk, s)
-		s8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(xk8, s8)
-		x2 = xk.MulAdd(xk, x2)
-		x28 = xk8.MulAdd(xk8, x28)
-	}
-	s.StoreArray((*[8]float32)(acc[0:8]))
-	s8.StoreArray((*[8]float32)(acc[8:16]))
-	x2.StoreArray((*[8]float32)(acc[16:24]))
-	x28.StoreArray((*[8]float32)(acc[24:32]))
-	archsimd.ClearAVXUpperBits()
-}
-
-// dlyZeroAcc32 clears the lane accumulators with 256-bit stores. The AVX2
-// kernels load them as 256-bit vectors, and a load cannot be forwarded from
-// the two narrower stores a Go zero value is written with: it would wait
-// for them to reach the cache at the start of every capture sample.
-//
-// It does not inline, so its ClearAVXUpperBits does not make the caller's
-// float32 values cross a VZEROUPPER (see dlyReduceAvx2Lanes).
-//
-//go:noinline
-func dlyZeroAcc32(acc *[32]float32) {
-	if !kernHasAVX2 {
-		// AVX without AVX2 (the SSE2 lane's kernels): the SSE2 lane uses
-		// the first sixteen elements.
-		dlyZeroAcc((*[16]float32)(acc[0:16]))
-		dlyZeroAcc((*[16]float32)(acc[16:32]))
-		return
-	}
-	var z archsimd.Float32x8
-	z.StoreArray((*[8]float32)(acc[0:8]))
-	z.StoreArray((*[8]float32)(acc[8:16]))
-	z.StoreArray((*[8]float32)(acc[16:24]))
-	z.StoreArray((*[8]float32)(acc[24:32]))
-	archsimd.ClearAVXUpperBits()
-}
-
 // dlyHsumSse2 reduces the SSE2 lane accumulators as dlyReduceSse2Ref does,
 // with the x2 and s sums side by side: lanes 0 and 1 of the result run
 // ((v0 + v1) + v2) + v3 for x2 and for s.
@@ -914,33 +802,6 @@ func dlyHsumAvx2(s, s8, x2, x28 archsimd.Float32x8) archsimd.Float32x4 {
 	// t lanes: (a01 + a23), (b01 + b23), (a45 + a67), (b45 + b67).
 	t := lo.ConcatPermuteScalars(0, 2, 4, 6, hi).Add(lo.ConcatPermuteScalars(1, 3, 5, 7, hi))
 	return t.Add(t.ConcatPermuteScalars(2, 3, 6, 7, t))
-}
-
-func dlyReduceSse2(acc *[16]float32, s, x2Sum float32) (float32, float32) {
-	t := dlyHsumSse2(dlyLd4((*[4]float32)(acc[0:4])), dlyLd4((*[4]float32)(acc[4:8])),
-		dlyLd4((*[4]float32)(acc[8:12])), dlyLd4((*[4]float32)(acc[12:16])))
-	r0, r1 := t.GetElem(0), t.GetElem(1)
-	return s + r1, x2Sum + r0
-}
-
-func dlyReduceAvx2(acc *[32]float32, s, x2Sum float32) (float32, float32) {
-	var r [4]float32
-	dlyReduceAvx2Lanes(acc, &r)
-	return s + r[1], x2Sum + r[0]
-}
-
-// dlyReduceAvx2Lanes stores dlyHsumAvx2 of the accumulators in r.
-//
-// The 256-bit kernels that produce a float32 store it to the caller's
-// memory and return nothing: a float32 live across ClearAVXUpperBits is
-// spilled with a 4-byte store and restored with a 16-byte load, which the
-// CPU cannot forward from that store.
-//
-//go:noinline
-func dlyReduceAvx2Lanes(acc *[32]float32, r *[4]float32) {
-	dlyHsumAvx2(dlyLd8((*[8]float32)(acc[0:8])), dlyLd8((*[8]float32)(acc[8:16])),
-		dlyLd8((*[8]float32)(acc[16:24])), dlyLd8((*[8]float32)(acc[24:32]))).StoreArray(r)
-	archsimd.ClearAVXUpperBits()
 }
 
 // The Sum kernels run over blocks of 64 elements with the slices advanced
@@ -1062,8 +923,8 @@ func dlyDotAvx2Sum(h, x []float32) (s, x2Sum float32) {
 	return 0 + r[1], 0 + r[0]
 }
 
-// dlyDotAvx2SumLanes stores the reduced lane sums of dlyDotAvx2Sum in r
-// (see dlyReduceAvx2Lanes).
+// dlyDotAvx2SumLanes stores the reduced lane sums of dlyDotAvx2Sum in r: a
+// float32 result would cross the VZEROUPPER (see the head of the file).
 //
 //go:noinline
 func dlyDotAvx2SumLanes(h, x []float32, r *[4]float32) {
@@ -1112,7 +973,7 @@ func dlyAxpyFmaDotAvx2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32)
 }
 
 // dlyAxpyFmaDotAvx2SumLanes stores the reduced lane sums of
-// dlyAxpyFmaDotAvx2Sum in r (see dlyReduceAvx2Lanes).
+// dlyAxpyFmaDotAvx2Sum in r (see dlyDotAvx2SumLanes).
 //
 //go:noinline
 func dlyAxpyFmaDotAvx2SumLanes(h, xa, xb []float32, alpha float32, r *[4]float32) {
@@ -1167,6 +1028,339 @@ func dlyAxpyFmaDotAvx2SumLanes(h, xa, xb []float32, alpha float32, r *[4]float32
 		h = h[16:]
 		xa = xa[16:]
 		xb = xb[16:]
+	}
+	dlyHsumAvx2(sv, s8, x2, x28).StoreArray(r)
+	archsimd.ClearAVXUpperBits()
+}
+
+// Samples whose window wraps around the circular buffer, or whose filter is
+// not a whole number of groups.
+//
+// The C++ loop runs such a sample as two chunks (up to the end of the
+// buffer, then from its start): the whole groups of each chunk in the lane
+// accumulators and the rest of each chunk in two scalars. The update of the
+// sample before it is pending and has its own two chunks, one element
+// apart. dlyWrapSample applies that update to the scalar tails and to the
+// groups that the lane's vector update does not cover alike (the tails of
+// the update's chunks, a group that straddles them) with the small update
+// routines, takes the scalar sums of the tails, and hands the groups to one
+// kernel that keeps the accumulators of both chunks in registers and fuses
+// the update into the groups it covers.
+
+// fused returns the length n of the whole groups from a, within [a, b),
+// that one stretch of the pending update covers with the vector update of
+// the lane with group size g, and the offset off of that stretch: the
+// update of h[k] reads x[k+off].
+func (p *dlyPendingAxpy) fused(g, a, b int) (n, off int) {
+	for i := 0; i < p.n; i++ {
+		r := &p.runs[i]
+		if r.fma == (g == 16) && r.start <= a && a < r.end {
+			return (min(b, r.end) - a) &^ (g - 1), r.off
+		}
+	}
+	return 0, 0
+}
+
+// applySmall is apply for stretches of a few elements.
+func (p *dlyPendingAxpy) applySmall(h, x []float32, a, b int) {
+	for i := 0; i < p.n; i++ {
+		r := &p.runs[i]
+		lo, hi := max(a, r.start), min(b, r.end)
+		if lo >= hi {
+			continue
+		}
+		if r.fma {
+			dlyAxpyFma128(h[lo:hi], x[lo+r.off:hi+r.off], p.alpha)
+		} else {
+			dlyAxpy(h[lo:hi], x[lo+r.off:hi+r.off], p.alpha)
+		}
+	}
+}
+
+// dlyAxpyFma128 is dlyAxpyFma with 128-bit vectors, for a few elements: it
+// leaves the upper halves of the registers clean. The last vector of a
+// length that is not a multiple of four overlaps the one before it; both
+// are computed from the elements as they were, so the elements they share
+// are updated once.
+func dlyAxpyFma128(h, x []float32, alpha float32) {
+	if !dlyUseFma {
+		dlyAxpyFmaRef(h, x, alpha)
+		return
+	}
+	n := len(h)
+	x = x[:n:n]
+	if n < 4 {
+		for i := range h {
+			h[i] = fmaf(x[i], alpha, h[i])
+		}
+		return
+	}
+	a := kernSplat4(alpha)
+	i := 0
+	for ; i < n-7; i += 4 {
+		hp := (*[4]float32)(h[i : i+4])
+		dlyLd4((*[4]float32)(x[i:i+4])).MulAdd(a, dlyLd4(hp)).StoreArray(hp)
+	}
+	// Four to seven elements are left.
+	h, x = h[i:], x[i:]
+	m := len(h)
+	if m < 4 || len(x) < m {
+		return
+	}
+	h0 := (*[4]float32)(h[0:4])
+	h1 := (*[4]float32)(h[m-4 : m])
+	u0 := dlyLd4((*[4]float32)(x[0:4])).MulAdd(a, dlyLd4(h0))
+	u1 := dlyLd4((*[4]float32)(x[m-4:m])).MulAdd(a, dlyLd4(h1))
+	u0.StoreArray(h0)
+	u1.StoreArray(h1)
+}
+
+// dlyWrapSample computes the filter output s and the x*x sum of the sample
+// with start index xs, whose first chunk has c elements, v1 of them in whole
+// groups, and whose second chunk has v2 elements in whole groups. It applies
+// the pending update, of the sample with start index pendStart and a first
+// chunk of pendChunk1 elements, to all of h.
+func dlyWrapSample(g int, h, x []float32, xs, c, v1, v2 int, pend *dlyPendingAxpy, pendStart, pendChunk1 int) (s, x2Sum float32) {
+	hSize := len(h)
+	nA, offA, nB, offB := 0, 0, 0, 0
+	var alpha float32
+	if pend.active {
+		alpha = pend.alpha
+		if pendChunk1 == c-1 && pendStart == xs+1 && c >= 2 && c <= hSize && xs+c <= len(x) {
+			// The sample before this one, one element further on in x.
+			offA, offB = xs+1, 1-c
+			if g == 8 {
+				nA, nB = dlyWrapPendSse2(h, x, xs, c, v1, v2, alpha)
+			} else {
+				nA, nB = dlyWrapPendAvx2(h, x, xs, c, v1, v2, alpha)
+			}
+		} else {
+			pend.set(pendStart, pendChunk1, hSize, alpha, g == 16)
+			nA, offA = pend.fused(g, 0, v1)
+			nB, offB = pend.fused(g, c, c+v2)
+			pend.applySmall(h, x, nA, c)
+			pend.applySmall(h, x, c+nB, hSize)
+		}
+	}
+	for k := v1; k < c; k++ {
+		xk := x[xs+k]
+		x2Sum += float32(xk * xk)
+		s += float32(h[k] * xk)
+	}
+	for k := c + v2; k < hSize; k++ {
+		xk := x[k-c]
+		x2Sum += float32(xk * xk)
+		s += float32(h[k] * xk)
+	}
+	if g == 8 {
+		r0, r1 := dlyWrapSse2(h, x, xs, c, v1, v2, nA, offA, nB, offB, alpha)
+		return s + r1, x2Sum + r0
+	}
+	if dlyUseFma {
+		var r [4]float32
+		dlyWrapAvx2(h, x, xs, c, v1, v2, nA, offA, nB, offB, alpha, &r)
+		return s + r[1], x2Sum + r[0]
+	}
+	return s, x2Sum
+}
+
+// dlyWrapPendSse2 applies the update of the sample before the one with
+// start index xs and first chunk c, whose first chunk has c-1 elements, to
+// the elements of h that dlyWrapSse2 does not update, and returns the
+// lengths nA and nB of the groups it does: the update of h[k] reads
+// x[xs+1+k] below c-1 and x[k-c+1] from there on, and is the same operation
+// for every element in this lane.
+func dlyWrapPendSse2(h, x []float32, xs, c, v1, v2 int, alpha float32) (nA, nB int) {
+	nA = min(v1, (c-1)&^7)
+	xa := x[xs+1 : xs+c]
+	hh := h[:c-1]
+	for k := nA; k < len(hh) && k < len(xa); k++ {
+		hh[k] += float32(alpha * xa[k])
+	}
+	h[c-1] += float32(alpha * x[0])
+	hh = h[c:]
+	xa = x[1:]
+	for k := v2; k < len(hh) && k < len(xa); k++ {
+		hh[k] += float32(alpha * xa[k])
+	}
+	return nA, v2
+}
+
+// dlyWrapPendAvx2 is dlyWrapPendSse2 for the AVX2 lane, whose update is
+// fused over the whole groups of eight of each chunk of its sample and
+// unfused over the rest of the chunk.
+func dlyWrapPendAvx2(h, x []float32, xs, c, v1, v2 int, alpha float32) (nA, nB int) {
+	p1 := (c - 1) &^ 7
+	p2 := (len(h) - c + 1) &^ 7
+	nA = min(v1, p1&^15)
+	xa := x[xs+1 : xs+c]
+	hh := h[:c-1]
+	if nA < p1 {
+		dlyAxpyFma128(hh[nA:p1], xa[nA:p1], alpha)
+	}
+	for k := p1; k < len(hh) && k < len(xa); k++ {
+		hh[k] += float32(alpha * xa[k])
+	}
+	// The second chunk of the update starts at c-1; its fused part has p2
+	// elements.
+	hh = h[c-1:]
+	xa = x[:len(hh)]
+	if p2 > 0 {
+		nB = min(v2, (p2-1)&^15)
+		hh[0] = fmaf(xa[0], alpha, hh[0])
+		if 1+nB < p2 {
+			dlyAxpyFma128(hh[1+nB:p2], xa[1+nB:p2], alpha)
+		}
+	}
+	for k := p2; k < len(hh); k++ {
+		hh[k] += float32(alpha * xa[k])
+	}
+	return nA, nB
+}
+
+// dlyWrapSse2 accumulates h*x and x*x over the whole groups of the two
+// chunks of a sample: h[:v1] against x[xs:] and h[c:c+v2] against x[0:]. The
+// first nA elements of the first stretch and the first nB of the second are
+// updated first, h[k] += alpha*x[k+offA] (x[k+offB]). It returns the reduced
+// x*x sum and the reduced h*x sum.
+func dlyWrapSse2(h, x []float32, xs, c, v1, v2, nA, offA, nB, offB int, alpha float32) (r0, r1 float32) {
+	hA, aA, bA := h[:nA:nA], x[offA:][:nA:nA], x[xs:][:nA:nA]
+	hP, bP := h[nA:v1], x[xs+nA:xs+v1]
+	hB, aB, bB := h[c:][:nB:nB], x[c+offB:][:nB:nB], x[:nB:nB]
+	hQ, bQ := h[c+nB:c+v2], x[nB:v2]
+	a := kernSplat4(alpha)
+	var sv, s4, x2, x24 archsimd.Float32x4
+	fused := func(hh, aa, bb *[8]float32) {
+		h0 := (*[4]float32)(hh[0:4])
+		h4 := (*[4]float32)(hh[4:8])
+		hk := dlyLd4(h0).Add(a.Mul(dlyLd4((*[4]float32)(aa[0:4]))))
+		hk4 := dlyLd4(h4).Add(a.Mul(dlyLd4((*[4]float32)(aa[4:8]))))
+		hk.StoreArray(h0)
+		hk4.StoreArray(h4)
+		xk := dlyLd4((*[4]float32)(bb[0:4]))
+		xk4 := dlyLd4((*[4]float32)(bb[4:8]))
+		x2 = x2.Add(xk.Mul(xk))
+		x24 = x24.Add(xk4.Mul(xk4))
+		sv = sv.Add(hk.Mul(xk))
+		s4 = s4.Add(hk4.Mul(xk4))
+	}
+	plain := func(hh, bb *[8]float32) {
+		xk := dlyLd4((*[4]float32)(bb[0:4]))
+		xk4 := dlyLd4((*[4]float32)(bb[4:8]))
+		x2 = x2.Add(xk.Mul(xk))
+		x24 = x24.Add(xk4.Mul(xk4))
+		sv = sv.Add(dlyLd4((*[4]float32)(hh[0:4])).Mul(xk))
+		s4 = s4.Add(dlyLd4((*[4]float32)(hh[4:8])).Mul(xk4))
+	}
+	for len(hA) >= 32 && len(aA) >= 32 && len(bA) >= 32 {
+		hh := (*[32]float32)(hA)
+		aa := (*[32]float32)(aA)
+		bb := (*[32]float32)(bA)
+		fused((*[8]float32)(hh[0:8]), (*[8]float32)(aa[0:8]), (*[8]float32)(bb[0:8]))
+		fused((*[8]float32)(hh[8:16]), (*[8]float32)(aa[8:16]), (*[8]float32)(bb[8:16]))
+		fused((*[8]float32)(hh[16:24]), (*[8]float32)(aa[16:24]), (*[8]float32)(bb[16:24]))
+		fused((*[8]float32)(hh[24:32]), (*[8]float32)(aa[24:32]), (*[8]float32)(bb[24:32]))
+		hA, aA, bA = hA[32:], aA[32:], bA[32:]
+	}
+	for len(hA) >= 8 && len(aA) >= 8 && len(bA) >= 8 {
+		fused((*[8]float32)(hA), (*[8]float32)(aA), (*[8]float32)(bA))
+		hA, aA, bA = hA[8:], aA[8:], bA[8:]
+	}
+	for len(hP) >= 8 && len(bP) >= 8 {
+		plain((*[8]float32)(hP), (*[8]float32)(bP))
+		hP, bP = hP[8:], bP[8:]
+	}
+	for len(hB) >= 32 && len(aB) >= 32 && len(bB) >= 32 {
+		hh := (*[32]float32)(hB)
+		aa := (*[32]float32)(aB)
+		bb := (*[32]float32)(bB)
+		fused((*[8]float32)(hh[0:8]), (*[8]float32)(aa[0:8]), (*[8]float32)(bb[0:8]))
+		fused((*[8]float32)(hh[8:16]), (*[8]float32)(aa[8:16]), (*[8]float32)(bb[8:16]))
+		fused((*[8]float32)(hh[16:24]), (*[8]float32)(aa[16:24]), (*[8]float32)(bb[16:24]))
+		fused((*[8]float32)(hh[24:32]), (*[8]float32)(aa[24:32]), (*[8]float32)(bb[24:32]))
+		hB, aB, bB = hB[32:], aB[32:], bB[32:]
+	}
+	for len(hB) >= 8 && len(aB) >= 8 && len(bB) >= 8 {
+		fused((*[8]float32)(hB), (*[8]float32)(aB), (*[8]float32)(bB))
+		hB, aB, bB = hB[8:], aB[8:], bB[8:]
+	}
+	for len(hQ) >= 8 && len(bQ) >= 8 {
+		plain((*[8]float32)(hQ), (*[8]float32)(bQ))
+		hQ, bQ = hQ[8:], bQ[8:]
+	}
+	t := dlyHsumSse2(sv, s4, x2, x24)
+	return t.GetElem(0), t.GetElem(1)
+}
+
+// dlyWrapAvx2 is dlyWrapSse2 for the AVX2 lane, with the update
+// h[k] = fma(x[k+off], alpha, h[k]). It stores the reduced x*x sum in r[0]
+// and the reduced h*x sum in r[1] (see dlyDotAvx2SumLanes).
+//
+//go:noinline
+func dlyWrapAvx2(h, x []float32, xs, c, v1, v2, nA, offA, nB, offB int, alpha float32, r *[4]float32) {
+	hA, aA, bA := h[:nA:nA], x[offA:][:nA:nA], x[xs:][:nA:nA]
+	hP, bP := h[nA:v1], x[xs+nA:xs+v1]
+	hB, aB, bB := h[c:][:nB:nB], x[c+offB:][:nB:nB], x[:nB:nB]
+	hQ, bQ := h[c+nB:c+v2], x[nB:v2]
+	a := archsimd.BroadcastFloat32x8(alpha)
+	var sv, s8, x2, x28 archsimd.Float32x8
+	fused := func(hh, aa, bb *[16]float32) {
+		h0 := (*[8]float32)(hh[0:8])
+		h8 := (*[8]float32)(hh[8:16])
+		hk := dlyLd8((*[8]float32)(aa[0:8])).MulAdd(a, dlyLd8(h0))
+		hk8 := dlyLd8((*[8]float32)(aa[8:16])).MulAdd(a, dlyLd8(h8))
+		hk.StoreArray(h0)
+		hk8.StoreArray(h8)
+		xk := dlyLd8((*[8]float32)(bb[0:8]))
+		xk8 := dlyLd8((*[8]float32)(bb[8:16]))
+		sv = hk.MulAdd(xk, sv)
+		s8 = hk8.MulAdd(xk8, s8)
+		x2 = xk.MulAdd(xk, x2)
+		x28 = xk8.MulAdd(xk8, x28)
+	}
+	plain := func(hh, bb *[16]float32) {
+		xk := dlyLd8((*[8]float32)(bb[0:8]))
+		xk8 := dlyLd8((*[8]float32)(bb[8:16]))
+		sv = dlyLd8((*[8]float32)(hh[0:8])).MulAdd(xk, sv)
+		s8 = dlyLd8((*[8]float32)(hh[8:16])).MulAdd(xk8, s8)
+		x2 = xk.MulAdd(xk, x2)
+		x28 = xk8.MulAdd(xk8, x28)
+	}
+	for len(hA) >= 64 && len(aA) >= 64 && len(bA) >= 64 {
+		hh := (*[64]float32)(hA)
+		aa := (*[64]float32)(aA)
+		bb := (*[64]float32)(bA)
+		fused((*[16]float32)(hh[0:16]), (*[16]float32)(aa[0:16]), (*[16]float32)(bb[0:16]))
+		fused((*[16]float32)(hh[16:32]), (*[16]float32)(aa[16:32]), (*[16]float32)(bb[16:32]))
+		fused((*[16]float32)(hh[32:48]), (*[16]float32)(aa[32:48]), (*[16]float32)(bb[32:48]))
+		fused((*[16]float32)(hh[48:64]), (*[16]float32)(aa[48:64]), (*[16]float32)(bb[48:64]))
+		hA, aA, bA = hA[64:], aA[64:], bA[64:]
+	}
+	for len(hA) >= 16 && len(aA) >= 16 && len(bA) >= 16 {
+		fused((*[16]float32)(hA), (*[16]float32)(aA), (*[16]float32)(bA))
+		hA, aA, bA = hA[16:], aA[16:], bA[16:]
+	}
+	for len(hP) >= 16 && len(bP) >= 16 {
+		plain((*[16]float32)(hP), (*[16]float32)(bP))
+		hP, bP = hP[16:], bP[16:]
+	}
+	for len(hB) >= 64 && len(aB) >= 64 && len(bB) >= 64 {
+		hh := (*[64]float32)(hB)
+		aa := (*[64]float32)(aB)
+		bb := (*[64]float32)(bB)
+		fused((*[16]float32)(hh[0:16]), (*[16]float32)(aa[0:16]), (*[16]float32)(bb[0:16]))
+		fused((*[16]float32)(hh[16:32]), (*[16]float32)(aa[16:32]), (*[16]float32)(bb[16:32]))
+		fused((*[16]float32)(hh[32:48]), (*[16]float32)(aa[32:48]), (*[16]float32)(bb[32:48]))
+		fused((*[16]float32)(hh[48:64]), (*[16]float32)(aa[48:64]), (*[16]float32)(bb[48:64]))
+		hB, aB, bB = hB[64:], aB[64:], bB[64:]
+	}
+	for len(hB) >= 16 && len(aB) >= 16 && len(bB) >= 16 {
+		fused((*[16]float32)(hB), (*[16]float32)(aB), (*[16]float32)(bB))
+		hB, aB, bB = hB[16:], aB[16:], bB[16:]
+	}
+	for len(hQ) >= 16 && len(bQ) >= 16 {
+		plain((*[16]float32)(hQ), (*[16]float32)(bQ))
+		hQ, bQ = hQ[16:], bQ[16:]
 	}
 	dlyHsumAvx2(sv, s8, x2, x28).StoreArray(r)
 	archsimd.ClearAVXUpperBits()
