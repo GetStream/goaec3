@@ -69,3 +69,33 @@ func afirFreqRespBlockAvx2From(h *FftData, h2 *[FftLengthBy2Plus1]float32, from 
 		h2[j] = sseMax(h2[j], fmaf(h.Im[j], h.Im[j], float32(h.Re[j]*h.Re[j])))
 	}
 }
+
+// afirFreqRespFirstAvx2Go is afirFreqRespBlockAvx2Go on stored maxima of +0
+// (see afirFreqRespFirstGo): it stores fma(im, im, re*re) for bins 0..63.
+func afirFreqRespFirstAvx2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
+	hre, him := &h.Re, &h.Im
+	for j := 0; j < FftLengthBy2; j += 4 {
+		re := (*[4]float32)(hre[j : j+4])
+		im := (*[4]float32)(him[j : j+4])
+		o := (*[4]float32)(h2[j : j+4])
+		q0 := fmafSum(im[0], im[0], float32(re[0]*re[0]))
+		q1 := fmafSum(im[1], im[1], float32(re[1]*re[1]))
+		q2 := fmafSum(im[2], im[2], float32(re[2]*re[2]))
+		q3 := fmafSum(im[3], im[3], float32(re[3]*re[3]))
+		if fmafHard(q0) || fmafHard(q1) || fmafHard(q2) || fmafHard(q3) {
+			afirFreqRespFirstAvx2From(h, h2, j)
+			return
+		}
+		o[0], o[1], o[2], o[3] = float32(q0), float32(q1), float32(q2), float32(q3)
+	}
+}
+
+// afirFreqRespFirstAvx2From is afirFreqRespFirstAvx2Go for bins from..63,
+// one fmaf per bin.
+//
+//go:noinline
+func afirFreqRespFirstAvx2From(h *FftData, h2 *[FftLengthBy2Plus1]float32, from int) {
+	for j := from; j < FftLengthBy2; j++ {
+		h2[j] = fmaf(h.Im[j], h.Im[j], float32(h.Re[j]*h.Re[j]))
+	}
+}

@@ -441,3 +441,45 @@ func TestAfirFreqRespBlockFastMax(t *testing.T) {
 		kernCheckExact(t, "avx2 freqresp block", got[:], want[:])
 	}
 }
+
+// The frequency-response block of the first channel, which stores the
+// powers, against the lane blocks on stored maxima of +0, with NaN,
+// infinities and zeros of both signs among the coefficients and with sums
+// on the slow path of fmaf.
+func TestAfirFreqRespFirst(t *testing.T) {
+	rng := rand.New(rand.NewSource(78))
+	im := float32(4097.0 / 4096.0)
+	for trial := 0; trial < 3000; trial++ {
+		var h FftData
+		if trial%2 == 0 {
+			afirTestRandFft(rng, &h, 0.1)
+		} else {
+			mmEdgeFft(rng, &h)
+		}
+		if trial%3 == 0 {
+			j := rng.Intn(FftLengthBy2)
+			h.Im[j] = im
+			h.Re[j] = float32(1e-17 * float64(rng.Intn(3)))
+		}
+		lanes := []struct {
+			opt Aec3Optimization
+			ref func(*FftData, *[FftLengthBy2Plus1]float32)
+		}{
+			{OptNone, func(h *FftData, h2 *[FftLengthBy2Plus1]float32) { afirFreqRespBinsGo(h, h2, 0, FftLengthBy2) }},
+			{OptNeon, afirFreqRespBlockNeonGo},
+			{OptSse2, afirFreqRespBlockSse2Go},
+			{OptAvx2, func(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
+				for j := 0; j < FftLengthBy2; j++ {
+					h2[j] = sseMax(h2[j], fmaf(h.Im[j], h.Im[j], float32(h.Re[j]*h.Re[j])))
+				}
+			}},
+		}
+		for _, l := range lanes {
+			var got, want [FftLengthBy2Plus1]float32
+			copy(got[:], kernEdgeVec(rng, FftLengthBy2Plus1)) // must be overwritten
+			afirFreqRespFirstGo(l.opt, &h, &got)
+			l.ref(&h, &want)
+			kernCheckExact(t, "freqresp first", got[:], want[:])
+		}
+	}
+}

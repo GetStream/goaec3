@@ -59,17 +59,55 @@ func afirComputeFrequencyResponseSimd(opt Aec3Optimization, numPartitions int, H
 		}
 		return
 	}
-	for i := range H2 {
-		H2[i] = [FftLengthBy2Plus1]float32{}
-	}
 	numRenderChannels := H.NumChannels()
+	if numRenderChannels == 0 {
+		numPartitions = 0
+	}
 	for p := 0; p < numPartitions; p++ {
 		h2 := &H2[p]
-		for ch := 0; ch < numRenderChannels; ch++ {
-			hp := &H.At(p)[ch]
-			afirFreqRespBlock(opt, hp, h2)
-			afirFreqRespBinsGo(hp, h2, FftLengthBy2, FftLengthBy2Plus1)
+		hp := H.At(p)
+		// The C++ clears H2 and takes the maximum with every channel; the
+		// first channel is the maximum with +0.
+		afirFreqRespFirstGo(opt, &hp[0], h2)
+		afirFreqRespBinsGo(&hp[0], h2, FftLengthBy2, FftLengthBy2Plus1)
+		for ch := 1; ch < numRenderChannels; ch++ {
+			afirFreqRespBlock(opt, &hp[ch], h2)
+			afirFreqRespBinsGo(&hp[ch], h2, FftLengthBy2, FftLengthBy2Plus1)
 		}
+	}
+	for i := numPartitions; i < len(H2); i++ {
+		H2[i] = [FftLengthBy2Plus1]float32{}
+	}
+}
+
+// afirFreqRespFirstGo is *h2 = 0 followed by afirFreqRespBlock(opt, h, h2):
+// the 64-bin frequency-response block of the first channel, whose stored
+// maximum is +0. The power of a bin is +0, positive, +Inf or NaN, and the
+// maximum of +0 and such a value is the value in the three SIMD lanes
+// (vmaxq_f32 returns a NaN operand, _mm_max_ps its second operand unless
+// the first is greater), so the block stores the powers. It leaves
+// h2[FftLengthBy2] at +0.
+func afirFreqRespFirstGo(opt Aec3Optimization, h *FftData, h2 *[FftLengthBy2Plus1]float32) {
+	switch opt {
+	case OptNeon, OptSse2:
+		hre, him := &h.Re, &h.Im
+		for j := 0; j < FftLengthBy2; j += 4 {
+			re := (*[4]float32)(hre[j : j+4])
+			im := (*[4]float32)(him[j : j+4])
+			o := (*[4]float32)(h2[j : j+4])
+			t0 := float32(re[0]*re[0]) + float32(im[0]*im[0])
+			t1 := float32(re[1]*re[1]) + float32(im[1]*im[1])
+			t2 := float32(re[2]*re[2]) + float32(im[2]*im[2])
+			t3 := float32(re[3]*re[3]) + float32(im[3]*im[3])
+			o[0], o[1], o[2], o[3] = t0, t1, t2, t3
+		}
+		h2[FftLengthBy2] = 0
+	case OptAvx2:
+		afirFreqRespFirstAvx2Go(h, h2)
+		h2[FftLengthBy2] = 0
+	default:
+		*h2 = [FftLengthBy2Plus1]float32{}
+		afirFreqRespBlock(opt, h, h2)
 	}
 }
 
