@@ -3,10 +3,17 @@ package aec3
 // EchoPathDelayEstimator estimates the delay of the echo path
 // (echo_path_delay_estimator.h).
 type EchoPathDelayEstimator struct {
+	*echoPathDelayEstimatorState
+	captureMixer AlignmentMixer
+}
+
+// echoPathDelayEstimatorState is the state of an EchoPathDelayEstimator but
+// the slice of its mixer. The matched filter and the lag aggregator are
+// part of it as they are, with their slices.
+type echoPathDelayEstimatorState struct {
 	downSamplingFactor         int
 	subBlockSize               int
-	captureMixer               AlignmentMixer // bound to captureMixerState by init
-	captureMixerState          alignmentMixerState
+	captureMixer               alignmentMixerState
 	captureDecimator           Decimator
 	matchedFilter              MatchedFilter
 	matchedFilterLagAggregator MatchedFilterLagAggregator
@@ -20,8 +27,15 @@ type EchoPathDelayEstimator struct {
 // dumper). The matched filter kernel follows DetectOptimization().
 func NewEchoPathDelayEstimator(config *EchoCanceller3Config, numCaptureChannels int) *EchoPathDelayEstimator {
 	e := &EchoPathDelayEstimator{}
+	e.bind(&echoPathDelayEstimatorState{}, nil)
 	e.init(config, numCaptureChannels)
 	return e
+}
+
+// bind makes e the view of st.
+func (e *EchoPathDelayEstimator) bind(st *echoPathDelayEstimatorState, b *binder) {
+	e.echoPathDelayEstimatorState = st
+	e.captureMixer.bind(&st.captureMixer, b)
 }
 
 func (e *EchoPathDelayEstimator) init(config *EchoCanceller3Config, numCaptureChannels int) {
@@ -31,7 +45,6 @@ func (e *EchoPathDelayEstimator) init(config *EchoCanceller3Config, numCaptureCh
 		e.subBlockSize = BlockSize / e.downSamplingFactor
 	}
 	m := &config.Delay.CaptureAlignmentMixing
-	e.captureMixer.bind(&e.captureMixerState, nil)
 	e.captureMixer.init(numCaptureChannels, m.Downmix, m.AdaptiveSelection, m.ActivityPowerThreshold,
 		m.PreferFirstTwoChannels)
 	e.captureDecimator.init(e.downSamplingFactor)

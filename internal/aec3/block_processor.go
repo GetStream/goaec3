@@ -25,8 +25,9 @@ type BlockProcessor struct {
 	// view bound to a canceller has none.
 	injected *blockProcessorComponents
 
-	ownRenderBuffer RenderDelayBuffer
-	ownEchoRemover  EchoRemover
+	ownRenderBuffer    RenderDelayBuffer
+	ownDelayController RenderDelayController
+	ownEchoRemover     EchoRemover
 }
 
 // blockProcessorState is the state of a BlockProcessor but its pointers.
@@ -34,7 +35,7 @@ type blockProcessorState struct {
 	_ noCopy
 
 	ownRenderBuffer    renderDelayBufferState
-	ownDelayController RenderDelayController
+	ownDelayController renderDelayControllerState
 	ownEchoRemover     echoRemoverState
 
 	config                 EchoCanceller3Config
@@ -75,6 +76,7 @@ func NewBlockProcessor(config *EchoCanceller3Config, sampleRateHz, numRenderChan
 func (p *BlockProcessor) bind(st *blockProcessorState, b *binder) {
 	p.blockProcessorState = st
 	p.ownRenderBuffer.bind(&st.ownRenderBuffer, b)
+	p.ownDelayController.bind(&st.ownDelayController, b)
 	p.ownEchoRemover.bind(&st.ownEchoRemover, b)
 }
 

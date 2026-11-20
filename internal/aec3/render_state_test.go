@@ -28,7 +28,9 @@ func statePointers(t reflect.Type, path string, skip map[reflect.Type]bool, foun
 }
 
 // TestRenderStatesPointerFree checks that the states of the render delay
-// buffer, its rings and the alignment mixer hold no pointer.
+// buffer, its rings and the alignment mixer hold no pointer, and those of
+// the delay controller and its estimator none outside the matched filter
+// and the lag aggregator.
 func TestRenderStatesPointerFree(t *testing.T) {
 	for _, tc := range []struct {
 		state any
@@ -40,6 +42,8 @@ func TestRenderStatesPointerFree(t *testing.T) {
 		{state: fftBufferState{}},
 		{state: downsampledRenderBufferState{}},
 		{state: alignmentMixerState{}},
+		{state: renderDelayControllerState{}, skip: []any{MatchedFilter{}, MatchedFilterLagAggregator{}}},
+		{state: echoPathDelayEstimatorState{}, skip: []any{MatchedFilter{}, MatchedFilterLagAggregator{}}},
 	} {
 		skip := map[reflect.Type]bool{}
 		for _, s := range tc.skip {

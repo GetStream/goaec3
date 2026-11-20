@@ -22,10 +22,17 @@ func dlyComputeBufferDelay(currentDelay DelayEstimate, hasCurrentDelay bool, hys
 // RenderDelayControllerImpl of render_delay_controller.cc). Metrics
 // reporting is not ported.
 type RenderDelayController struct {
+	*renderDelayControllerState
+	delayEstimator EchoPathDelayEstimator
+}
+
+// renderDelayControllerState is the state of a RenderDelayController but
+// what the view of its delay estimator holds.
+type renderDelayControllerState struct {
 	hysteresisLimitBlocks    int
 	delay                    DelayEstimate
 	hasDelay                 bool
-	delayEstimator           EchoPathDelayEstimator
+	delayEstimator           echoPathDelayEstimatorState
 	delaySamples             DelayEstimate
 	hasDelaySamples          bool
 	captureCallCounter       int
@@ -36,18 +43,28 @@ type RenderDelayController struct {
 // NewRenderDelayController mirrors RenderDelayController::Create.
 func NewRenderDelayController(config *EchoCanceller3Config, sampleRateHz, numCaptureChannels int) *RenderDelayController {
 	c := &RenderDelayController{}
+	c.bind(&renderDelayControllerState{}, nil)
 	c.init(config, sampleRateHz, numCaptureChannels)
 	return c
+}
+
+// bind makes c the view of st.
+func (c *RenderDelayController) bind(st *renderDelayControllerState, b *binder) {
+	c.renderDelayControllerState = st
+	c.delayEstimator.bind(&st.delayEstimator, b)
 }
 
 func (c *RenderDelayController) init(config *EchoCanceller3Config, sampleRateHz, numCaptureChannels int) {
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate for RenderDelayController")
 	}
-	*c = RenderDelayController{
+	st := c.renderDelayControllerState
+	*st = renderDelayControllerState{
 		hysteresisLimitBlocks:    config.Delay.HysteresisLimitBlocks,
 		lastDelayEstimateQuality: DelayQualityCoarse,
 	}
+	*c = RenderDelayController{}
+	c.bind(st, nil)
 	c.delayEstimator.init(config, numCaptureChannels)
 }
 
