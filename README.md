@@ -69,7 +69,7 @@ libwebrtc, others on GitHub runners ([bench.yml](.github/workflows/bench.yml)).
 
 - Quiet far end: 53–70% of libwebrtc's time.
 - Pure Go (no `GOEXPERIMENT=simd`): 1.4–2.3× libwebrtc's time.
-- GC: ~0.8 ms per cycle for 1000 live cancellers.
+- GC: a canceller is 5–6 objects with no pointers in its state.
 
 ## Parity
 
