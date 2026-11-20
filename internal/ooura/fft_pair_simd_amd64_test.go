@@ -32,10 +32,25 @@ func TestPairMatchesSingle(t *testing.T) {
 	comparePairs(t, "nonfinite", nonFiniteInputs(), true, fftSplitPairSimd, inverseFftSplitPairSimd, simdFftSplit, simdInverseFftSplit)
 }
 
+// TestSoaPairMatchesSingle checks the split-form 256-bit pair kernel the
+// same way.
+func TestSoaPairMatchesSingle(t *testing.T) {
+	if !usePair {
+		t.Skip("no AVX2")
+	}
+	comparePairs(t, "simd", testInputs(), false, fftSplitPairSoa, inverseFftSplitPairSoa, simdFftSplit, simdInverseFftSplit)
+	comparePairs(t, "soa", testInputs(), false, fftSplitPairSoa, inverseFftSplitPairSoa, soaFftSplit, soaInverseFftSplit)
+	comparePairs(t, "sse2", testInputs(), false, fftSplitPairSoa, inverseFftSplitPairSoa,
+		func(a *[128]float32, re, im *[65]float32) { fftSSE2Ref(a); unpack(a, re, im) },
+		func(re, im *[65]float32, a *[128]float32) { pack(re, im, a); inverseFftSSE2Ref(a) })
+	comparePairs(t, "nonfinite", nonFiniteInputs(), true, fftSplitPairSoa, inverseFftSplitPairSoa, simdFftSplit, simdInverseFftSplit)
+}
+
 func BenchmarkFftSplitPairSimd(b *testing.B) {
 	if !usePair {
 		b.Skip("no AVX2")
 	}
 	b.Run("pair", func(b *testing.B) { benchSplitPair(b, fftSplitPairSimd, inverseFftSplitPairSimd) })
+	b.Run("soa", func(b *testing.B) { benchSplitPair(b, fftSplitPairSoa, inverseFftSplitPairSoa) })
 	b.Run("two", func(b *testing.B) { benchSplitPair(b, twoSplits(simdFftSplit), twoInverseSplits(simdInverseFftSplit)) })
 }

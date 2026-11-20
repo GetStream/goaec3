@@ -41,7 +41,7 @@ var usePair = archsimd.X86.AVX2()
 
 func fftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairScratch) {
 	if usePair {
-		fftSplitPairSimd(a, b, re0, im0, re1, im1, s)
+		fftSplitPairSoa(a, b, re0, im0, re1, im1, s)
 		return
 	}
 	fftSplit(a, re0, im0, s.single())
@@ -50,7 +50,7 @@ func fftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairSc
 
 func inverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
 	if usePair {
-		inverseFftSplitPairSimd(re0, im0, re1, im1, a, b, s)
+		inverseFftSplitPairSoa(re0, im0, re1, im1, a, b, s)
 		return
 	}
 	inverseFftSplit(re0, im0, a, s.single())
@@ -132,6 +132,7 @@ func initPairTables() {
 	dup(rftWkr8[:], wkr[:])
 	dup(rftWki8[:], rdftW[32:64])
 	initSoaTables()
+	initSoaPairTables()
 }
 
 // tab8 is the repeated t[k2:k2+4] of the 128-bit tables; k is 2*k2 in
