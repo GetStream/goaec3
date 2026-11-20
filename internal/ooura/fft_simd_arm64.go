@@ -61,8 +61,13 @@ func hi64(x, y vec) vec {
 	return x.ToBits().ReshapeToUint64s().InterleaveHi(y.ToBits().ReshapeToUint64s()).ReshapeToUint32s().BitsToFloat32()
 }
 
-// rev4 is {x3, x2, x1, x0}.
-func rev4(x vec) vec { return swap64(rev64(x)) }
+// rev4 is {x3, x2, x1, x0}: swap64(rev64(x)), written without calls so that
+// no line of it is a call alone (fft_soa_simd.go).
+func rev4(x vec) vec {
+	u := x.ToBits()
+	b := u.InterleaveOdd(u.InterleaveEven(u)).ReshapeToUint8s()
+	return b.ConcatShiftBytesRight(b, 8).ReshapeToUint32s().BitsToFloat32()
+}
 
 // revEven is {hi2, hi0, lo2, lo0}; revOdd is {hi3, hi1, lo3, lo1}: the even
 // (odd) lanes of lo followed by hi, reversed.
@@ -86,14 +91,21 @@ func loHi(x, y vec) vec {
 // neg is the negation of every lane.
 func neg(x vec) vec { return x.Neg() }
 
-// trn1 is {x0, y0, x2, y2}; trn2 is {x1, y1, x3, y3}.
-func trn1(x, y vec) vec { return x.ToBits().InterleaveEven(y.ToBits()).BitsToFloat32() }
+// soaLane0..3 are the transposition of r0..r3: soaLanek is {r0[k], r1[k],
+// r2[k], r3[k]}. TRN1 of two vectors is {x0, y0, x2, y2} and TRN2 is {x1,
+// y1, x3, y3}; the lanes are the low or the high halves of two of them.
+func soaLane0(r0, r1, r2, r3 vec) vec {
+	return r0.ToBits().InterleaveEven(r1.ToBits()).ReshapeToUint64s().InterleaveLo(r2.ToBits().InterleaveEven(r3.ToBits()).ReshapeToUint64s()).ReshapeToUint32s().BitsToFloat32()
+}
 
-func trn2(x, y vec) vec { return x.ToBits().InterleaveOdd(y.ToBits()).BitsToFloat32() }
+func soaLane1(r0, r1, r2, r3 vec) vec {
+	return r0.ToBits().InterleaveOdd(r1.ToBits()).ReshapeToUint64s().InterleaveLo(r2.ToBits().InterleaveOdd(r3.ToBits()).ReshapeToUint64s()).ReshapeToUint32s().BitsToFloat32()
+}
 
-// soaTranspose returns the lanes of r0..r3: lk is {r0[k], r1[k], r2[k],
-// r3[k]}.
-func soaTranspose(r0, r1, r2, r3 vec) (l0, l1, l2, l3 vec) {
-	e0, e1, e2, e3 := trn1(r0, r1), trn2(r0, r1), trn1(r2, r3), trn2(r2, r3)
-	return lo64(e0, e2), lo64(e1, e3), hi64(e0, e2), hi64(e1, e3)
+func soaLane2(r0, r1, r2, r3 vec) vec {
+	return r0.ToBits().InterleaveEven(r1.ToBits()).ReshapeToUint64s().InterleaveHi(r2.ToBits().InterleaveEven(r3.ToBits()).ReshapeToUint64s()).ReshapeToUint32s().BitsToFloat32()
+}
+
+func soaLane3(r0, r1, r2, r3 vec) vec {
+	return r0.ToBits().InterleaveOdd(r1.ToBits()).ReshapeToUint64s().InterleaveHi(r2.ToBits().InterleaveOdd(r3.ToBits()).ReshapeToUint64s()).ReshapeToUint32s().BitsToFloat32()
 }

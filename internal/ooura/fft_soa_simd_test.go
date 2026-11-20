@@ -60,14 +60,14 @@ func TestSoaShuffles(t *testing.T) {
 		t.Skip("no AVX")
 	}
 	var got [4][4]float32
-	l0, l1, l2, l3 := soaTranspose(ld(&[4]float32{0, 1, 2, 3}), ld(&[4]float32{4, 5, 6, 7}),
-		ld(&[4]float32{8, 9, 10, 11}), ld(&[4]float32{12, 13, 14, 15}))
-	l0.StoreArray(&got[0])
-	l1.StoreArray(&got[1])
-	l2.StoreArray(&got[2])
-	l3.StoreArray(&got[3])
+	r0, r1 := ld(&[4]float32{0, 1, 2, 3}), ld(&[4]float32{4, 5, 6, 7})
+	r2, r3 := ld(&[4]float32{8, 9, 10, 11}), ld(&[4]float32{12, 13, 14, 15})
+	soaLane0(r0, r1, r2, r3).StoreArray(&got[0])
+	soaLane1(r0, r1, r2, r3).StoreArray(&got[1])
+	soaLane2(r0, r1, r2, r3).StoreArray(&got[2])
+	soaLane3(r0, r1, r2, r3).StoreArray(&got[3])
 	if want := [4][4]float32{{0, 4, 8, 12}, {1, 5, 9, 13}, {2, 6, 10, 14}, {3, 7, 11, 15}}; got != want {
-		t.Errorf("soaTranspose = %v, want %v", got, want)
+		t.Errorf("soaLane0..3 = %v, want %v", got, want)
 	}
 	neg(ld(&[4]float32{0, 1, -2, 3})).StoreArray(&got[0])
 	if want := [4]float32{float32(math.Copysign(0, -1)), -1, 2, -3}; math.Float32bits(got[0][0]) != math.Float32bits(want[0]) || got[0] != want {
