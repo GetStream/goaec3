@@ -219,7 +219,7 @@ func (a *MatchedFilterLagAggregator) bind(st *lagAggregatorState, b *binder) {
 // NewMatchedFilterLagAggregator mirrors the C++ constructor.
 func NewMatchedFilterLagAggregator(maxFilterLag int, config *DelayConfig) *MatchedFilterLagAggregator {
 	a := &MatchedFilterLagAggregator{}
-	a.bind(&lagAggregatorState{}, nil)
+	a.bind(&lagAggregatorState{}, bindAlone)
 	a.init(maxFilterLag, config)
 	return a
 }
@@ -232,7 +232,7 @@ func (a *MatchedFilterLagAggregator) init(maxFilterLag int, d *DelayConfig) {
 		headroom:            d.DelayHeadroomSamples / d.DownSamplingFactor,
 	}
 	*a = MatchedFilterLagAggregator{}
-	a.bind(st, nil)
+	a.bind(st, bindAlone)
 	// The two histograms share one array.
 	n, nPreEcho := maxFilterLag+1, 0
 	if d.DetectPreEcho {

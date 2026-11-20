@@ -206,7 +206,7 @@ func (s *SuppressionGain) bind(st *suppressionGainState, b *binder) {
 func NewSuppressionGain(config *EchoCanceller3Config, optimization Aec3Optimization, sampleRateHz int,
 	numCaptureChannels int) *SuppressionGain {
 	s := &SuppressionGain{}
-	s.bind(&suppressionGainState{}, nil)
+	s.bind(&suppressionGainState{}, bindAlone)
 	s.init(config, optimization, sampleRateHz, numCaptureChannels)
 	return s
 }
@@ -218,7 +218,7 @@ func (s *SuppressionGain) init(config *EchoCanceller3Config, optimization Aec3Op
 	st := s.suppressionGainState
 	*st = suppressionGainState{}
 	*s = SuppressionGain{}
-	s.bind(st, nil)
+	s.bind(st, bindAlone)
 	s.optimization = optimization
 	s.config = *config
 	s.numCaptureChannels = numCaptureChannels
@@ -255,7 +255,7 @@ func (s *SuppressionGain) init(config *EchoCanceller3Config, optimization Aec3Op
 }
 
 // channelStates returns the state of every capture channel.
-func (s *SuppressionGain) channelStates() []sgChannel {
+func (s SuppressionGain) channelStates() []sgChannel {
 	var more []sgChannel
 	if s.more != nil {
 		more = s.more.channels
@@ -264,7 +264,7 @@ func (s *SuppressionGain) channelStates() []sgChannel {
 }
 
 // smootherMemory returns the memory of the nearend smoother of a channel.
-func (s *SuppressionGain) smootherMemory(ch int) []float32 {
+func (s SuppressionGain) smootherMemory(ch int) []float32 {
 	n := s.nearendMemorySize
 	if s.more != nil {
 		return s.more.nearendMemory[ch*n : (ch+1)*n]
@@ -274,7 +274,7 @@ func (s *SuppressionGain) smootherMemory(ch int) []float32 {
 
 // IsDominantNearend returns whether the nearend detector is in the nearend
 // state.
-func (s *SuppressionGain) IsDominantNearend() bool {
+func (s SuppressionGain) IsDominantNearend() bool {
 	if s.subbandNearendDetector != nil {
 		return s.subbandNearendDetector.IsNearendState()
 	}
@@ -282,7 +282,7 @@ func (s *SuppressionGain) IsDominantNearend() bool {
 }
 
 // SetInitialState toggles the usage of the initial state.
-func (s *SuppressionGain) SetInitialState(state bool) {
+func (s SuppressionGain) SetInitialState(state bool) {
 	s.initialState = state
 	if state {
 		s.initialStateChangeCounter = s.stateChangeDurationBlocks
@@ -293,7 +293,7 @@ func (s *SuppressionGain) SetInitialState(state bool) {
 
 // GetGain computes the low band gain (amplitude domain) and the gain for the
 // bands above the first band.
-func (s *SuppressionGain) GetGain(nearendSpectrum, echoSpectrum, residualEchoSpectrum,
+func (s SuppressionGain) GetGain(nearendSpectrum, echoSpectrum, residualEchoSpectrum,
 	residualEchoSpectrumUnbounded, comfortNoiseSpectrum [][FftLengthBy2Plus1]float32,
 	renderSignalAnalyzer *RenderSignalAnalyzer, aecState *AecState, render *Block, clockDrift bool,
 	highBandsGain *float32, lowBandGain *[FftLengthBy2Plus1]float32) {
@@ -324,7 +324,7 @@ func (s *SuppressionGain) GetGain(nearendSpectrum, echoSpectrum, residualEchoSpe
 
 // UpperBandsGain computes the gain to apply for the bands beyond the first
 // band.
-func (s *SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][FftLengthBy2Plus1]float32,
+func (s SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][FftLengthBy2Plus1]float32,
 	narrowPeakBand int, hasNarrowPeakBand bool, saturatedEcho bool, render *Block,
 	lowBandGain *[FftLengthBy2Plus1]float32) float32 {
 	if render.NumBands() == 1 {
@@ -381,7 +381,7 @@ func (s *SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][F
 	return stdMin(stdMin(gainBelow8Khz, antiHowlingGain), gainBound)
 }
 
-func (s *SuppressionGain) params() *sgGainParameters {
+func (s SuppressionGain) params() *sgGainParameters {
 	if s.IsDominantNearend() {
 		return &s.nearendParams
 	}
@@ -390,14 +390,14 @@ func (s *SuppressionGain) params() *sgGainParameters {
 
 // GainToNoAudibleEcho computes the gain to reduce the echo to a non audible
 // level.
-func (s *SuppressionGain) GainToNoAudibleEcho(nearend, echo, masker, gain *[FftLengthBy2Plus1]float32) {
+func (s SuppressionGain) GainToNoAudibleEcho(nearend, echo, masker, gain *[FftLengthBy2Plus1]float32) {
 	p := s.params()
 	kernNoAudibleEcho(nearend, echo, masker, &p.enrTransparent, &p.enrSuppress, &p.emrTransparent, gain)
 }
 
 // GetMinGain computes the minimum gain as the attenuating gain to put the
 // signal just above the zero sample values.
-func (s *SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho *[FftLengthBy2Plus1]float32,
+func (s SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho *[FftLengthBy2Plus1]float32,
 	lowNoiseRender, saturatedEcho bool, minGain *[FftLengthBy2Plus1]float32) {
 	if saturatedEcho {
 		*minGain = [FftLengthBy2Plus1]float32{}
@@ -425,7 +425,7 @@ func (s *SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho
 
 // GetMaxGain computes the maximum gain by limiting the gain increase from the
 // previous gain.
-func (s *SuppressionGain) GetMaxGain(maxGain *[FftLengthBy2Plus1]float32) {
+func (s SuppressionGain) GetMaxGain(maxGain *[FftLengthBy2Plus1]float32) {
 	inc := s.params().maxIncFactor
 	floor := s.config.Suppressor.FloorFirstIncrease
 	// maxGain = std::min(std::max(lastGain*inc, floor), 1.f).
@@ -434,7 +434,7 @@ func (s *SuppressionGain) GetMaxGain(maxGain *[FftLengthBy2Plus1]float32) {
 }
 
 // LowerBandGain computes the gain for the first band.
-func (s *SuppressionGain) LowerBandGain(lowNoiseRender bool, aecState *AecState,
+func (s SuppressionGain) LowerBandGain(lowNoiseRender bool, aecState *AecState,
 	suppressorInput, residualEcho, comfortNoise [][FftLengthBy2Plus1]float32, clockDrift bool,
 	gain *[FftLengthBy2Plus1]float32) {
 	for k := range gain {

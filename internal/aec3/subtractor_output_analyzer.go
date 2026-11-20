@@ -30,7 +30,7 @@ func (s *SubtractorOutputAnalyzer) bind(st *subtractorOutputAnalyzerState, b *bi
 
 func NewSubtractorOutputAnalyzer(numCaptureChannels int) *SubtractorOutputAnalyzer {
 	s := &SubtractorOutputAnalyzer{}
-	s.bind(&subtractorOutputAnalyzerState{}, nil)
+	s.bind(&subtractorOutputAnalyzerState{}, bindAlone)
 	s.init(numCaptureChannels)
 	return s
 }
@@ -40,14 +40,14 @@ func (s *SubtractorOutputAnalyzer) init(numCaptureChannels int) {
 	st := s.subtractorOutputAnalyzerState
 	*st = subtractorOutputAnalyzerState{numCaptureChannels: numCaptureChannels}
 	*s = SubtractorOutputAnalyzer{}
-	s.bind(st, nil)
+	s.bind(st, bindAlone)
 	if numCaptureChannels > inlineChannelLimit {
 		s.more = &soaMore{filtersConverged: make([]bool, numCaptureChannels)}
 	}
 }
 
 // Update analyzes the subtractor output.
-func (s *SubtractorOutputAnalyzer) Update(subtractorOutput []SubtractorOutput) (anyFilterConverged, anyCoarseFilterConverged, allFiltersDiverged bool) {
+func (s SubtractorOutputAnalyzer) Update(subtractorOutput []SubtractorOutput) (anyFilterConverged, anyCoarseFilterConverged, allFiltersDiverged bool) {
 	allFiltersDiverged = true
 	filtersConverged := s.ConvergedFilters()
 	for ch := range subtractorOutput {
@@ -70,7 +70,7 @@ func (s *SubtractorOutputAnalyzer) Update(subtractorOutput []SubtractorOutput) (
 }
 
 // ConvergedFilters returns the per-channel convergence flags.
-func (s *SubtractorOutputAnalyzer) ConvergedFilters() []bool {
+func (s SubtractorOutputAnalyzer) ConvergedFilters() []bool {
 	if s.more != nil {
 		return s.more.filtersConverged
 	}
@@ -78,4 +78,4 @@ func (s *SubtractorOutputAnalyzer) ConvergedFilters() []bool {
 }
 
 // HandleEchoPathChange clears the convergence flags.
-func (s *SubtractorOutputAnalyzer) HandleEchoPathChange() { clear(s.ConvergedFilters()) }
+func (s SubtractorOutputAnalyzer) HandleEchoPathChange() { clear(s.ConvergedFilters()) }

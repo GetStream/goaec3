@@ -21,12 +21,12 @@ package aec3
 //		x.child.bind(&st.child, b)
 //	}
 //
-// A view made by NewX stands alone: bind(st, nil) attaches it to a state
+// A view made by NewX stands alone: bind(st, bindAlone) attaches it to a state
 // and to nothing else, and init allocates its slices.
 
 // span is where a slice of a view lies in its arena; off is negative for a
 // nil slice.
-type span struct{ off, n int32 }
+type span struct{ off, end int }
 
 // bindMode is what a binder does with the slices and pointers it is shown.
 type bindMode uint8
@@ -78,38 +78,84 @@ type bpExtra struct {
 // bpNoExtra is what a view binds to without extras; it is never written.
 var bpNoExtra bpExtra
 
+// bindAlone is the binder of a view that stands alone: it attaches the view
+// to its state and to nothing else. It is never written.
+var bindAlone = &binder{notView: -1, x: &bpNoExtra}
+
 // binder binds the views of a block processor to its state.
 type binder struct {
 	mode bindMode
-	a    bpArenas
-	n    arenaSizes
-	x    *bpExtra
+	// notView is 0 in a binder with the mode bindView and -1 in every other,
+	// so that one test tells a slice to bind for a call (r.off|notView >= 0)
+	// from a nil slice and from the other modes.
+	notView int
+	a       bpArenas
+	n       arenaSizes
+	x       *bpExtra
 	// hasExtra is set by bindMove when a pointer it moved is not nil.
 	hasExtra bool
 }
 
+// The binding of a view for a call is the part that inlines; the rest is in
+// the Slow methods.
+//
 // f32, fft, spec and i32 bind the slice s of a view, which lies at r in the
-// arena of its type. They do nothing for a view that stands alone
-// (b == nil).
+// arena of its type. They do nothing for a view that stands alone.
 func (b *binder) f32(s *[]float32, r *span) {
+	if r.off|b.notView < 0 {
+		b.f32Slow(s, r)
+		return
+	}
+	*s = b.a.f32[r.off:r.end:r.end]
+}
+
+//go:noinline
+func (b *binder) f32Slow(s *[]float32, r *span) {
 	if b != nil {
 		bindSlice(b.mode, s, r, b.a.f32, &b.n.f32)
 	}
 }
 
 func (b *binder) fft(s *[]FftData, r *span) {
+	if r.off|b.notView < 0 {
+		b.fftSlow(s, r)
+		return
+	}
+	*s = b.a.fft[r.off:r.end:r.end]
+}
+
+//go:noinline
+func (b *binder) fftSlow(s *[]FftData, r *span) {
 	if b != nil {
 		bindSlice(b.mode, s, r, b.a.fft, &b.n.fft)
 	}
 }
 
 func (b *binder) spec(s *[][FftLengthBy2Plus1]float32, r *span) {
+	if r.off|b.notView < 0 {
+		b.specSlow(s, r)
+		return
+	}
+	*s = b.a.spec[r.off:r.end:r.end]
+}
+
+//go:noinline
+func (b *binder) specSlow(s *[][FftLengthBy2Plus1]float32, r *span) {
 	if b != nil {
 		bindSlice(b.mode, s, r, b.a.spec, &b.n.spec)
 	}
 }
 
 func (b *binder) i32(s *[]int32, r *span) {
+	if r.off|b.notView < 0 {
+		b.i32Slow(s, r)
+		return
+	}
+	*s = b.a.i32[r.off:r.end:r.end]
+}
+
+//go:noinline
+func (b *binder) i32Slow(s *[]int32, r *span) {
 	if b != nil {
 		bindSlice(b.mode, s, r, b.a.i32, &b.n.i32)
 	}
@@ -122,19 +168,19 @@ func bindSlice[T any](mode bindMode, s *[]T, r *span, arena []T, n *int32) {
 			*s = nil
 			return
 		}
-		*s = arena[r.off : r.off+r.n : r.off+r.n]
+		*s = arena[r.off:r.end:r.end]
 	case bindMeasure:
 		if *s == nil {
 			*r = span{off: -1}
 			return
 		}
-		*r = span{off: *n, n: int32(len(*s))}
-		*n += r.n
+		*r = span{off: int(*n), end: int(*n) + len(*s)}
+		*n = int32(r.end)
 	case bindMove:
 		if r.off < 0 {
 			return
 		}
-		d := arena[r.off : r.off+r.n : r.off+r.n]
+		d := arena[r.off:r.end:r.end]
 		copy(d, *s)
 		*s = d
 	}

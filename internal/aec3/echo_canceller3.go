@@ -353,7 +353,7 @@ func (c *Ec3Core) Init(config, multichannelConfig *EchoCanceller3Config, sampleR
 	numRenderChannels, numCaptureChannels, extraSamples int, alloc func(ArenaSizes) Arena) {
 	var e EchoCanceller3
 	c.BindRender(&e)
-	e.blockProcessor.bind(&c.st.blockProcessor, nil)
+	e.blockProcessor.bind(&c.st.blockProcessor, bindAlone)
 	if alloc == nil {
 		alloc = NewSliceArena
 	}
@@ -394,8 +394,17 @@ func (c *Ec3Core) BindRender(e *EchoCanceller3) {
 
 // Bind makes e the view of c for the capture side.
 func (c *Ec3Core) Bind(e *EchoCanceller3) {
-	c.BindRender(e)
-	b := binder{mode: bindView, a: c.bp(), x: c.bpExtra}
+	v := c.arena.Views()
+	n := c.st.offsets.size
+	e.ec3State = &c.st
+	e.core = c
+	e.storage = v.F32[:n:n]
+	e.renderTransferQueue = &c.queue
+	e.hpMore = c.hpMore
+	b := binder{mode: bindView, a: bpArenas{f32: v.F32[n:], fft: v.Fft, spec: v.Spec, i32: v.I32}, x: c.bpExtra}
+	if c.bpArena != nil {
+		b.a = c.bp()
+	}
 	if b.x == nil {
 		b.x = &bpNoExtra
 	}
@@ -405,7 +414,7 @@ func (c *Ec3Core) Bind(e *EchoCanceller3) {
 // measure returns the lengths of the slices that the init of p allocated,
 // per arena, and records them in the state.
 func (c *Ec3Core) measure(p *BlockProcessor) arenaSizes {
-	b := binder{mode: bindMeasure, x: &bpNoExtra}
+	b := binder{mode: bindMeasure, notView: -1, x: &bpNoExtra}
 	p.bind(&c.st.blockProcessor, &b)
 	return b.n
 }
@@ -432,7 +441,7 @@ func (c *Ec3Core) adopt(p *BlockProcessor, alloc func(ArenaSizes) Arena, separat
 		need.F32 += c.st.offsets.size
 		c.arena = alloc(need)
 	}
-	b := binder{mode: bindMove, a: c.bp(), x: &bpExtra{}}
+	b := binder{mode: bindMove, notView: -1, a: c.bp(), x: &bpExtra{}}
 	p.bind(&c.st.blockProcessor, &b)
 	c.bpExtra = nil
 	if b.hasExtra {

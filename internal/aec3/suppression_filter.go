@@ -40,7 +40,7 @@ func (f *SuppressionFilter) bind(st *suppressionFilterState, b *binder) {
 
 func NewSuppressionFilter(optimization Aec3Optimization, sampleRateHz, numCaptureChannels int) *SuppressionFilter {
 	f := &SuppressionFilter{}
-	f.bind(&suppressionFilterState{}, nil)
+	f.bind(&suppressionFilterState{}, bindAlone)
 	f.init(optimization, sampleRateHz, numCaptureChannels)
 	return f
 }
@@ -50,7 +50,7 @@ func (f *SuppressionFilter) init(optimization Aec3Optimization, sampleRateHz, nu
 	st := f.suppressionFilterState
 	*st = suppressionFilterState{}
 	*f = SuppressionFilter{}
-	f.bind(st, nil)
+	f.bind(st, bindAlone)
 	f.optimization = optimization
 	f.sampleRateHz = sampleRateHz
 	f.numCaptureChannels = numCaptureChannels
@@ -61,7 +61,7 @@ func (f *SuppressionFilter) init(optimization Aec3Optimization, sampleRateHz, nu
 
 // ApplyGain applies the suppression gain, adds the comfort noise and writes
 // the synthesized output into e.
-func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftData,
+func (f SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftData,
 	suppressionGain *[FftLengthBy2Plus1]float32, highBandsGain float32,
 	eLowestBand []FftData, e *Block) {
 	// Comfort noise gain is sqrt(1-g^2), where g is the suppression gain.

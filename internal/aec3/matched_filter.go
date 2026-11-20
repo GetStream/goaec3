@@ -1450,7 +1450,7 @@ func NewMatchedFilter(optimization Aec3Optimization, subBlockSize, windowSizeSub
 	alignmentShiftSubBlocks int, excitationLimit, smoothingFast, smoothingSlow, matchingFilterThreshold float32,
 	detectPreEcho bool) *MatchedFilter {
 	m := &MatchedFilter{}
-	m.bind(&matchedFilterState{}, nil)
+	m.bind(&matchedFilterState{}, bindAlone)
 	m.init(optimization, subBlockSize, windowSizeSubBlocks, numMatchedFilters, alignmentShiftSubBlocks,
 		excitationLimit, smoothingFast, smoothingSlow, matchingFilterThreshold, detectPreEcho)
 	return m

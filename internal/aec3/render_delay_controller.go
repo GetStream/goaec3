@@ -43,7 +43,7 @@ type renderDelayControllerState struct {
 // NewRenderDelayController mirrors RenderDelayController::Create.
 func NewRenderDelayController(config *EchoCanceller3Config, sampleRateHz, numCaptureChannels int) *RenderDelayController {
 	c := &RenderDelayController{}
-	c.bind(&renderDelayControllerState{}, nil)
+	c.bind(&renderDelayControllerState{}, bindAlone)
 	c.init(config, sampleRateHz, numCaptureChannels)
 	return c
 }
@@ -64,7 +64,7 @@ func (c *RenderDelayController) init(config *EchoCanceller3Config, sampleRateHz,
 		lastDelayEstimateQuality: DelayQualityCoarse,
 	}
 	*c = RenderDelayController{}
-	c.bind(st, nil)
+	c.bind(st, bindAlone)
 	c.delayEstimator.init(config, numCaptureChannels)
 }
 

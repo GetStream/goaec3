@@ -89,9 +89,14 @@ func (*noCopy) Unlock() {}
 
 // BlockBuffer is a ring of Blocks (block_buffer.h). The slots share one
 // pointer-free backing array; At returns a view of one slot.
+//
+// The view has a copy of the dimensions, which do not change, so that At
+// reads nothing of the state.
 type BlockBuffer struct {
 	*blockBufferState
-	data []float32
+	data        []float32
+	numBands    int
+	numChannels int
 }
 
 // blockBufferState is the state of a BlockBuffer but its slots.
@@ -104,7 +109,7 @@ type blockBufferState struct {
 
 func NewBlockBuffer(size, numBands, numChannels int) *BlockBuffer {
 	b := &BlockBuffer{}
-	b.bind(&blockBufferState{}, nil)
+	b.bind(&blockBufferState{}, bindAlone)
 	b.init(size, numBands, numChannels, make([]float32, size*numBands*numChannels*BlockSize))
 	return b
 }
@@ -112,6 +117,7 @@ func NewBlockBuffer(size, numBands, numChannels int) *BlockBuffer {
 // bind makes b the view of st.
 func (b *BlockBuffer) bind(st *blockBufferState, bd *binder) {
 	b.blockBufferState = st
+	b.numBands, b.numChannels = st.numBands, st.numChannels
 	bd.f32(&b.data, &st.dataSpan)
 }
 
@@ -119,24 +125,25 @@ func (b *BlockBuffer) bind(st *blockBufferState, bd *binder) {
 func (b *BlockBuffer) init(size, numBands, numChannels int, data []float32) {
 	*b.blockBufferState = blockBufferState{ringIndex: ringIndex{Size: size}, numBands: numBands,
 		numChannels: numChannels}
+	b.numBands, b.numChannels = numBands, numChannels
 	b.data = data
 }
 
 // At returns slot i as a Block that aliases the ring storage.
-func (b *BlockBuffer) At(i int) Block {
-	st := b.blockBufferState
-	n := st.numBands * st.numChannels * BlockSize
-	return Block{numBands: st.numBands, numChannels: st.numChannels, data: b.data[i*n : (i+1)*n : (i+1)*n]}
+func (b BlockBuffer) At(i int) Block {
+	n := b.numBands * b.numChannels * BlockSize
+	return Block{numBands: b.numBands, numChannels: b.numChannels, data: b.data[i*n : (i+1)*n : (i+1)*n]}
 }
 
-func (b *BlockBuffer) NumBands() int    { return b.numBands }
-func (b *BlockBuffer) NumChannels() int { return b.numChannels }
+func (b BlockBuffer) NumBands() int    { return b.numBands }
+func (b BlockBuffer) NumChannels() int { return b.numChannels }
 
 // SpectrumBuffer is a ring of per-channel power spectra (spectrum_buffer.h),
 // stored slot-major in one backing array.
 type SpectrumBuffer struct {
 	*spectrumBufferState
-	data [][FftLengthBy2Plus1]float32
+	data        [][FftLengthBy2Plus1]float32
+	numChannels int // a copy of the state's, for At
 }
 
 // spectrumBufferState is the state of a SpectrumBuffer but its slots.
@@ -148,7 +155,7 @@ type spectrumBufferState struct {
 
 func NewSpectrumBuffer(size, numChannels int) *SpectrumBuffer {
 	b := &SpectrumBuffer{}
-	b.bind(&spectrumBufferState{}, nil)
+	b.bind(&spectrumBufferState{}, bindAlone)
 	b.init(size, numChannels)
 	return b
 }
@@ -156,28 +163,31 @@ func NewSpectrumBuffer(size, numChannels int) *SpectrumBuffer {
 // bind makes b the view of st.
 func (b *SpectrumBuffer) bind(st *spectrumBufferState, bd *binder) {
 	b.spectrumBufferState = st
+	b.numChannels = st.numChannels
 	bd.spec(&b.data, &st.dataSpan)
 }
 
 // init sets up b in place.
 func (b *SpectrumBuffer) init(size, numChannels int) {
 	*b.spectrumBufferState = spectrumBufferState{ringIndex: ringIndex{Size: size}, numChannels: numChannels}
+	b.numChannels = numChannels
 	b.data = make([][FftLengthBy2Plus1]float32, size*numChannels)
 }
 
 // At returns the per-channel spectra of slot i.
-func (b *SpectrumBuffer) At(i int) [][FftLengthBy2Plus1]float32 {
+func (b SpectrumBuffer) At(i int) [][FftLengthBy2Plus1]float32 {
 	n := b.numChannels
 	return b.data[i*n : (i+1)*n : (i+1)*n]
 }
 
-func (b *SpectrumBuffer) NumChannels() int { return b.numChannels }
+func (b SpectrumBuffer) NumChannels() int { return b.numChannels }
 
 // FftBuffer is a ring of per-channel FFTs (fft_buffer.h), stored slot-major
 // in one backing array.
 type FftBuffer struct {
 	*fftBufferState
-	data []FftData
+	data        []FftData
+	numChannels int // a copy of the state's, for At
 }
 
 // fftBufferState is the state of an FftBuffer but its slots.
@@ -189,7 +199,7 @@ type fftBufferState struct {
 
 func NewFftBuffer(size, numChannels int) *FftBuffer {
 	b := &FftBuffer{}
-	b.bind(&fftBufferState{}, nil)
+	b.bind(&fftBufferState{}, bindAlone)
 	b.init(size, numChannels)
 	return b
 }
@@ -197,22 +207,24 @@ func NewFftBuffer(size, numChannels int) *FftBuffer {
 // bind makes b the view of st.
 func (b *FftBuffer) bind(st *fftBufferState, bd *binder) {
 	b.fftBufferState = st
+	b.numChannels = st.numChannels
 	bd.fft(&b.data, &st.dataSpan)
 }
 
 // init sets up b in place.
 func (b *FftBuffer) init(size, numChannels int) {
 	*b.fftBufferState = fftBufferState{ringIndex: ringIndex{Size: size}, numChannels: numChannels}
+	b.numChannels = numChannels
 	b.data = make([]FftData, size*numChannels)
 }
 
 // At returns the per-channel FFTs of slot i.
-func (b *FftBuffer) At(i int) []FftData {
+func (b FftBuffer) At(i int) []FftData {
 	n := b.numChannels
 	return b.data[i*n : (i+1)*n : (i+1)*n]
 }
 
-func (b *FftBuffer) NumChannels() int { return b.numChannels }
+func (b FftBuffer) NumChannels() int { return b.numChannels }
 
 // DownsampledRenderBuffer is a ring of decimated samples
 // (downsampled_render_buffer.h).
@@ -230,7 +242,7 @@ type downsampledRenderBufferState struct {
 
 func NewDownsampledRenderBuffer(size int) *DownsampledRenderBuffer {
 	b := &DownsampledRenderBuffer{}
-	b.bind(&downsampledRenderBufferState{}, nil)
+	b.bind(&downsampledRenderBufferState{}, bindAlone)
 	b.init(make([]float32, size))
 	return b
 }

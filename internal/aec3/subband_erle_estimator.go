@@ -50,7 +50,7 @@ type sbErleChannels struct {
 
 // channels returns the per-channel state: views of s for up to
 // inlineChannels channels.
-func (s *SubbandErleEstimator) channels() sbErleChannels {
+func (s SubbandErleEstimator) channels() sbErleChannels {
 	if s.more != nil {
 		return *s.more
 	}
@@ -73,7 +73,7 @@ func (s *SubbandErleEstimator) channels() sbErleChannels {
 // defaults (WebRTC-Aec3MinErleDuringOnsetsKillSwitch disabled).
 func NewSubbandErleEstimator(config *EchoCanceller3Config, numCaptureChannels int) *SubbandErleEstimator {
 	s := &SubbandErleEstimator{}
-	s.bind(&subbandErleEstimatorState{}, nil)
+	s.bind(&subbandErleEstimatorState{}, bindAlone)
 	s.init(config, numCaptureChannels)
 	return s
 }
@@ -96,7 +96,7 @@ func (s *SubbandErleEstimator) init(config *EchoCanceller3Config, numCaptureChan
 		useMinErleDuringOnsets: true,
 	}
 	*s = SubbandErleEstimator{}
-	s.bind(st, nil)
+	s.bind(st, bindAlone)
 	if n := numCaptureChannels; n > inlineChannelLimit {
 		s.more = &sbErleChannels{
 			accumY2:              make([][FftLengthBy2Plus1]float32, n),
@@ -121,7 +121,7 @@ func (s *SubbandErleEstimator) init(config *EchoCanceller3Config, numCaptureChan
 	s.Reset()
 }
 
-func (s *SubbandErleEstimator) Reset() {
+func (s SubbandErleEstimator) Reset() {
 	c := s.channels()
 	for ch := range c.erle {
 		for k := 0; k < FftLengthBy2Plus1; k++ {
@@ -137,7 +137,7 @@ func (s *SubbandErleEstimator) Reset() {
 }
 
 // Erle returns the ERLE, onset compensated when requested and enabled.
-func (s *SubbandErleEstimator) Erle(onsetCompensated bool) [][FftLengthBy2Plus1]float32 {
+func (s SubbandErleEstimator) Erle(onsetCompensated bool) [][FftLengthBy2Plus1]float32 {
 	c := s.channels()
 	if onsetCompensated && s.useOnsetDetection {
 		return c.erleOnsetCompensated
@@ -145,16 +145,16 @@ func (s *SubbandErleEstimator) Erle(onsetCompensated bool) [][FftLengthBy2Plus1]
 	return c.erle
 }
 
-func (s *SubbandErleEstimator) ErleUnbounded() [][FftLengthBy2Plus1]float32 {
+func (s SubbandErleEstimator) ErleUnbounded() [][FftLengthBy2Plus1]float32 {
 	return s.channels().erleUnbounded
 }
-func (s *SubbandErleEstimator) ErleDuringOnsets() [][FftLengthBy2Plus1]float32 {
+func (s SubbandErleEstimator) ErleDuringOnsets() [][FftLengthBy2Plus1]float32 {
 	c := s.channels()
 	return c.erleDuringOnsets
 }
 
 // Update updates the ERLE estimate.
-func (s *SubbandErleEstimator) Update(X2 *[FftLengthBy2Plus1]float32, Y2, E2 [][FftLengthBy2Plus1]float32, convergedFilters []bool) {
+func (s SubbandErleEstimator) Update(X2 *[FftLengthBy2Plus1]float32, Y2, E2 [][FftLengthBy2Plus1]float32, convergedFilters []bool) {
 	c := s.channels()
 	s.updateAccumulatedSpectra(c, X2, Y2, E2, convergedFilters)
 	s.updateBands(c, convergedFilters)
@@ -190,7 +190,7 @@ func stUpdateErleBand(erle *float32, newErle float32, lowRenderEnergy bool, minE
 // local pointer: indexing the slices of s inside a bin loop reloads the
 // slice and checks the channel on every access, because the stores of the
 // loop may alias s.
-func (s *SubbandErleEstimator) updateBands(c sbErleChannels, convergedFilters []bool) {
+func (s SubbandErleEstimator) updateBands(c sbErleChannels, convergedFilters []bool) {
 	for ch := range c.accumY2 {
 		if !convergedFilters[ch] {
 			continue
@@ -249,7 +249,7 @@ func (s *SubbandErleEstimator) updateBands(c sbErleChannels, convergedFilters []
 	}
 }
 
-func (s *SubbandErleEstimator) decreaseErlePerBandForLowRenderSignals(c sbErleChannels) {
+func (s SubbandErleEstimator) decreaseErlePerBandForLowRenderSignals(c sbErleChannels) {
 	for ch := range c.accumY2 {
 		holdCounters, comingOnset := &c.holdCounters[ch], &c.comingOnset[ch]
 		erleOnsetCompensated, erleDuringOnsets := &c.erleOnsetCompensated[ch], &c.erleDuringOnsets[ch]
@@ -269,7 +269,7 @@ func (s *SubbandErleEstimator) decreaseErlePerBandForLowRenderSignals(c sbErleCh
 	}
 }
 
-func (s *SubbandErleEstimator) resetAccumulatedSpectra(c sbErleChannels) {
+func (s SubbandErleEstimator) resetAccumulatedSpectra(c sbErleChannels) {
 	for ch := range c.erleDuringOnsets {
 		c.accumY2[ch] = [FftLengthBy2Plus1]float32{}
 		c.accumE2[ch] = [FftLengthBy2Plus1]float32{}
@@ -278,7 +278,7 @@ func (s *SubbandErleEstimator) resetAccumulatedSpectra(c sbErleChannels) {
 	}
 }
 
-func (s *SubbandErleEstimator) updateAccumulatedSpectra(c sbErleChannels, X2 *[FftLengthBy2Plus1]float32, Y2, E2 [][FftLengthBy2Plus1]float32, convergedFilters []bool) {
+func (s SubbandErleEstimator) updateAccumulatedSpectra(c sbErleChannels, X2 *[FftLengthBy2Plus1]float32, Y2, E2 [][FftLengthBy2Plus1]float32, convergedFilters []bool) {
 	for ch := range Y2 {
 		if !convergedFilters[ch] {
 			continue

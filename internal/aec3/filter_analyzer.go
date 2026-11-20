@@ -160,7 +160,7 @@ type faChannels struct {
 
 // channels returns the per-channel state: views of f for up to
 // inlineChannels channels.
-func (f *FilterAnalyzer) channels() faChannels {
+func (f FilterAnalyzer) channels() faChannels {
 	if f.more != nil {
 		return *f.more
 	}
@@ -174,7 +174,7 @@ func (f *FilterAnalyzer) channels() faChannels {
 
 // hHighpass returns the high-pass filtered impulse response of channel ch,
 // which has n samples.
-func (f *FilterAnalyzer) hHighpass(ch, n int) []float32 {
+func (f FilterAnalyzer) hHighpass(ch, n int) []float32 {
 	return f.storage[ch*f.hCap : ch*f.hCap+n : (ch+1)*f.hCap]
 }
 
@@ -189,7 +189,7 @@ func (f *FilterAnalyzer) bind(st *filterAnalyzerState, b *binder) {
 
 func NewFilterAnalyzer(config *EchoCanceller3Config, numCaptureChannels int) *FilterAnalyzer {
 	f := &FilterAnalyzer{}
-	f.bind(&filterAnalyzerState{}, nil)
+	f.bind(&filterAnalyzerState{}, bindAlone)
 	f.init(config, numCaptureChannels, make([]float32, faStorageSize(config, numCaptureChannels)))
 	return f
 }
@@ -217,7 +217,7 @@ func (f *FilterAnalyzer) init(config *EchoCanceller3Config, numCaptureChannels i
 		defaultGain:        config.EpStrength.DefaultGain,
 	}
 	*f = FilterAnalyzer{storage: storage}
-	f.bind(st, nil)
+	f.bind(st, bindAlone)
 	if n := numCaptureChannels; n > inlineChannelLimit {
 		f.more = &faChannels{
 			hLen:                 make([]int, n),
@@ -238,7 +238,7 @@ func (f *FilterAnalyzer) init(config *EchoCanceller3Config, numCaptureChannels i
 	f.Reset()
 }
 
-func (f *FilterAnalyzer) Reset() {
+func (f FilterAnalyzer) Reset() {
 	f.blocksSinceReset = 0
 	f.resetRegion()
 	c := f.channels()
@@ -269,24 +269,24 @@ func (f *FilterAnalyzer) Update(filtersTimeDomain [][]float32, renderBuffer *Ren
 }
 
 // FilterDelaysBlocks returns the per-channel filter delays.
-func (f *FilterAnalyzer) FilterDelaysBlocks() []int { return f.channels().filterDelaysBlocks }
+func (f FilterAnalyzer) FilterDelaysBlocks() []int { return f.channels().filterDelaysBlocks }
 
 // MinFilterDelayBlocks returns the minimum delay over channels.
-func (f *FilterAnalyzer) MinFilterDelayBlocks() int { return f.minFilterDelayBlocks }
+func (f FilterAnalyzer) MinFilterDelayBlocks() int { return f.minFilterDelayBlocks }
 
 // FilterLengthBlocks returns the filter length of channel 0.
-func (f *FilterAnalyzer) FilterLengthBlocks() int {
+func (f FilterAnalyzer) FilterLengthBlocks() int {
 	return f.channels().filterAnalysisStates[0].filterLengthBlocks
 }
 
 // GetAdjustedFilters returns the high-pass filtered impulse responses.
-func (f *FilterAnalyzer) GetAdjustedFilters() [][]float32 {
+func (f FilterAnalyzer) GetAdjustedFilters() [][]float32 {
 	return f.adjustedFilters(make([][]float32, f.numCaptureChannels))
 }
 
 // adjustedFilters returns the high-pass filtered impulse responses in dst,
 // which has room for one per channel.
-func (f *FilterAnalyzer) adjustedFilters(dst [][]float32) [][]float32 {
+func (f FilterAnalyzer) adjustedFilters(dst [][]float32) [][]float32 {
 	c := f.channels()
 	dst = dst[:f.numCaptureChannels]
 	for ch := range dst {
@@ -312,7 +312,7 @@ func (f *FilterAnalyzer) analyzeRegion(c faChannels, filtersTimeDomain [][]float
 	}
 }
 
-func (f *FilterAnalyzer) updateFilterGain(filterTimeDomain []float32, st *stFilterAnalysisState) {
+func (f FilterAnalyzer) updateFilterGain(filterTimeDomain []float32, st *stFilterAnalysisState) {
 	sufficientTimeToConverge := f.blocksSinceReset > 5*NumBlocksPerSecond
 	if sufficientTimeToConverge && st.consistentEstimate {
 		st.gain = fabsf(filterTimeDomain[st.peakIndex])
@@ -359,13 +359,13 @@ func (f *FilterAnalyzer) preProcessFilters(c faChannels, filtersTimeDomain [][]f
 	}
 }
 
-func (f *FilterAnalyzer) resetRegion() {
+func (f FilterAnalyzer) resetRegion() {
 	f.region.StartSample = 0
 	f.region.EndSample = 0
 }
 
 // SetRegionToAnalyze advances the analyzed region by one block.
-func (f *FilterAnalyzer) SetRegionToAnalyze(filterSize int) {
+func (f FilterAnalyzer) SetRegionToAnalyze(filterSize int) {
 	const numberBlocksToUpdate = 1
 	r := &f.region
 	if r.EndSample >= filterSize-1 {

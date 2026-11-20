@@ -67,7 +67,7 @@ type blockProcessorComponents struct {
 func NewBlockProcessor(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int) *BlockProcessor {
 	p := &BlockProcessor{}
-	p.bind(&blockProcessorState{}, nil)
+	p.bind(&blockProcessorState{}, bindAlone)
 	p.init(config, sampleRateHz, numRenderChannels, numCaptureChannels)
 	return p
 }
@@ -89,7 +89,7 @@ func (p *BlockProcessor) init(config *EchoCanceller3Config, sampleRateHz, numRen
 	st := p.blockProcessorState
 	*st = blockProcessorState{}
 	*p = BlockProcessor{}
-	p.bind(st, nil)
+	p.bind(st, bindAlone)
 	p.config = *config
 	config = &p.config
 	p.sampleRateHz = sampleRateHz
@@ -121,7 +121,7 @@ func NewBlockProcessorWithComponents(config *EchoCanceller3Config, sampleRateHz,
 		sampleRateHz:       sampleRateHz,
 		hasDelayController: delayController != nil,
 		renderEvent:        BufferingEventNone,
-	}, nil)
+	}, bindAlone)
 	return p
 }
 

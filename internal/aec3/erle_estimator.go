@@ -29,7 +29,7 @@ func (e *ErleEstimator) bind(st *erleEstimatorState, b *binder) {
 
 func NewErleEstimator(startupPhaseLengthBlocks int, config *EchoCanceller3Config, numCaptureChannels int) *ErleEstimator {
 	e := &ErleEstimator{}
-	e.bind(&erleEstimatorState{}, nil)
+	e.bind(&erleEstimatorState{}, bindAlone)
 	e.init(startupPhaseLengthBlocks, config, numCaptureChannels)
 	return e
 }
@@ -39,7 +39,7 @@ func (e *ErleEstimator) init(startupPhaseLengthBlocks int, config *EchoCanceller
 	st := e.erleEstimatorState
 	*st = erleEstimatorState{startupPhaseLengthBlocks: startupPhaseLengthBlocks}
 	*e = ErleEstimator{}
-	e.bind(st, nil)
+	e.bind(st, bindAlone)
 	e.fullbandErleEstimator.init(config, numCaptureChannels)
 	e.subbandErleEstimator.init(config, numCaptureChannels)
 	if config.Erle.NumSections > 1 {
@@ -49,7 +49,7 @@ func (e *ErleEstimator) init(startupPhaseLengthBlocks int, config *EchoCanceller
 }
 
 // Reset resets the estimators; delayChange also restarts the startup phase.
-func (e *ErleEstimator) Reset(delayChange bool) {
+func (e ErleEstimator) Reset(delayChange bool) {
 	e.fullbandErleEstimator.Reset()
 	e.subbandErleEstimator.Reset()
 	if e.signalDependentErleEstimator != nil {
@@ -61,7 +61,7 @@ func (e *ErleEstimator) Reset(delayChange bool) {
 }
 
 // Update updates the ERLE estimates.
-func (e *ErleEstimator) Update(renderBuffer *RenderBuffer, filterFrequencyResponses [][][FftLengthBy2Plus1]float32,
+func (e ErleEstimator) Update(renderBuffer *RenderBuffer, filterFrequencyResponses [][][FftLengthBy2Plus1]float32,
 	avgRenderSpectrumWithReverb *[FftLengthBy2Plus1]float32, captureSpectra, subtractorSpectra [][FftLengthBy2Plus1]float32,
 	convergedFilters []bool) {
 	X2Reverb := avgRenderSpectrumWithReverb
@@ -80,7 +80,7 @@ func (e *ErleEstimator) Update(renderBuffer *RenderBuffer, filterFrequencyRespon
 }
 
 // Erle returns the ERLE, onset compensated when requested.
-func (e *ErleEstimator) Erle(onsetCompensated bool) [][FftLengthBy2Plus1]float32 {
+func (e ErleEstimator) Erle(onsetCompensated bool) [][FftLengthBy2Plus1]float32 {
 	if e.signalDependentErleEstimator != nil {
 		return e.signalDependentErleEstimator.Erle(onsetCompensated)
 	}
@@ -88,7 +88,7 @@ func (e *ErleEstimator) Erle(onsetCompensated bool) [][FftLengthBy2Plus1]float32
 }
 
 // ErleUnbounded returns the non-capped ERLE.
-func (e *ErleEstimator) ErleUnbounded() [][FftLengthBy2Plus1]float32 {
+func (e ErleEstimator) ErleUnbounded() [][FftLengthBy2Plus1]float32 {
 	if e.signalDependentErleEstimator == nil {
 		return e.subbandErleEstimator.ErleUnbounded()
 	}
@@ -96,14 +96,14 @@ func (e *ErleEstimator) ErleUnbounded() [][FftLengthBy2Plus1]float32 {
 }
 
 // ErleDuringOnsets returns the ERLE estimated during onsets.
-func (e *ErleEstimator) ErleDuringOnsets() [][FftLengthBy2Plus1]float32 {
+func (e ErleEstimator) ErleDuringOnsets() [][FftLengthBy2Plus1]float32 {
 	return e.subbandErleEstimator.ErleDuringOnsets()
 }
 
 // FullbandErleLog2 returns the fullband ERLE in log2 units.
-func (e *ErleEstimator) FullbandErleLog2() float32 { return e.fullbandErleEstimator.FullbandErleLog2() }
+func (e ErleEstimator) FullbandErleLog2() float32 { return e.fullbandErleEstimator.FullbandErleLog2() }
 
 // GetInstLinearQualityEstimates returns the per-channel linear filter quality.
-func (e *ErleEstimator) GetInstLinearQualityEstimates() []LinearFilterQuality {
+func (e ErleEstimator) GetInstLinearQualityEstimates() []LinearFilterQuality {
 	return e.fullbandErleEstimator.GetInstLinearQualityEstimates()
 }

@@ -29,7 +29,7 @@ type echoPathDelayEstimatorState struct {
 // dumper). The matched filter kernel follows DetectOptimization().
 func NewEchoPathDelayEstimator(config *EchoCanceller3Config, numCaptureChannels int) *EchoPathDelayEstimator {
 	e := &EchoPathDelayEstimator{}
-	e.bind(&echoPathDelayEstimatorState{}, nil)
+	e.bind(&echoPathDelayEstimatorState{}, bindAlone)
 	e.init(config, numCaptureChannels)
 	return e
 }

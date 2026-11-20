@@ -56,7 +56,7 @@ var _ NearendDetector = (*DominantNearendDetector)(nil)
 
 func NewDominantNearendDetector(config *DominantNearendDetectionConfig, numCaptureChannels int) *DominantNearendDetector {
 	d := &DominantNearendDetector{}
-	d.bind(&dominantNearendState{}, nil)
+	d.bind(&dominantNearendState{}, bindAlone)
 	d.init(config, numCaptureChannels)
 	return d
 }
@@ -65,7 +65,7 @@ func NewDominantNearendDetector(config *DominantNearendDetectionConfig, numCaptu
 func (d *DominantNearendDetector) init(config *DominantNearendDetectionConfig, numCaptureChannels int) {
 	st := d.dominantNearendState
 	*d = DominantNearendDetector{}
-	d.bind(st, nil)
+	d.bind(st, bindAlone)
 	*st = dominantNearendState{
 		enrThreshold:          config.EnrThreshold,
 		enrExitThreshold:      config.EnrExitThreshold,
@@ -80,7 +80,7 @@ func (d *DominantNearendDetector) init(config *DominantNearendDetectionConfig, n
 	}
 }
 
-func (d *DominantNearendDetector) IsNearendState() bool { return d.nearendState }
+func (d DominantNearendDetector) IsNearendState() bool { return d.nearendState }
 
 func supLowFrequencyEnergy(spectrum *[FftLengthBy2Plus1]float32) float32 {
 	var sum float32
@@ -90,7 +90,7 @@ func supLowFrequencyEnergy(spectrum *[FftLengthBy2Plus1]float32) float32 {
 	return sum
 }
 
-func (d *DominantNearendDetector) Update(nearendSpectrum, residualEchoSpectrum,
+func (d DominantNearendDetector) Update(nearendSpectrum, residualEchoSpectrum,
 	comfortNoiseSpectrum [][FftLengthBy2Plus1]float32, initialState bool) {
 	d.nearendState = false
 

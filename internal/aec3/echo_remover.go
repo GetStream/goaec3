@@ -120,7 +120,7 @@ func NewEchoRemover(config *EchoCanceller3Config, sampleRateHz, numRenderChannel
 func NewEchoRemoverWithOptimization(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int, optimization Aec3Optimization) *EchoRemover {
 	e := &EchoRemover{}
-	e.bind(&echoRemoverState{}, nil)
+	e.bind(&echoRemoverState{}, bindAlone)
 	e.init(config, sampleRateHz, numRenderChannels, numCaptureChannels, optimization)
 	return e
 }
@@ -134,7 +134,7 @@ func (e *EchoRemover) init(config *EchoCanceller3Config, sampleRateHz, numRender
 	st := e.echoRemoverState
 	*st = echoRemoverState{}
 	*e = EchoRemover{}
-	e.bind(st, nil)
+	e.bind(st, bindAlone)
 	e.config = *config
 	e.optimization = optimization
 	e.sampleRateHz = sampleRateHz

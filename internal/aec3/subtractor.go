@@ -172,14 +172,14 @@ func (s *Subtractor) bind(st *subtractorState, b *binder) {
 	}
 	for ch := range s.channels {
 		H2, h := &s.refinedFrequencyResponses[ch], &s.refinedImpulseResponses[ch]
-		if b != nil && b.mode == bindMeasure {
+		if b.mode == bindMeasure {
 			// The arenas hold the responses at their full size.
 			st.h2Lens[ch], st.hLens[ch] = int32(len(*H2)), int32(len(*h))
 			*H2, *h = (*H2)[:cap(*H2)], (*h)[:cap(*h)]
 		}
 		b.spec(H2, &st.h2Spans[ch])
 		b.f32(h, &st.hSpans[ch])
-		if b != nil && b.mode != bindMeasure {
+		if b.mode == bindMove || b.mode == bindView {
 			*H2, *h = (*H2)[:st.h2Lens[ch]], (*h)[:st.hLens[ch]]
 		}
 		s.channels[ch].bind(&st.channels[ch], b)
@@ -197,7 +197,7 @@ func (sc *subChannel) bind(st *subChannelState, b *binder) {
 // defaults, so the coarse filter reset hangover is in use.
 func NewSubtractor(config *EchoCanceller3Config, numRenderChannels, numCaptureChannels int, optimization Aec3Optimization) *Subtractor {
 	s := &Subtractor{}
-	s.bind(&subtractorState{}, nil)
+	s.bind(&subtractorState{}, bindAlone)
 	s.init(config, numRenderChannels, numCaptureChannels, optimization)
 	return s
 }
@@ -207,7 +207,7 @@ func (s *Subtractor) init(config *EchoCanceller3Config, numRenderChannels, numCa
 	st := s.subtractorState
 	*st = subtractorState{}
 	*s = Subtractor{}
-	s.bind(st, nil)
+	s.bind(st, bindAlone)
 	s.optimization = optimization
 	s.config = *config
 	s.numCaptureChannels = numCaptureChannels
@@ -220,7 +220,7 @@ func (s *Subtractor) init(config *EchoCanceller3Config, numRenderChannels, numCa
 			states:                    make([]subChannelState, numCaptureChannels),
 		}
 		for ch := range s.more.channels {
-			s.more.channels[ch].bind(&s.more.states[ch], nil)
+			s.more.channels[ch].bind(&s.more.states[ch], bindAlone)
 		}
 	}
 	c := &s.config

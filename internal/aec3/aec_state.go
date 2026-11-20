@@ -308,7 +308,7 @@ func aecStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
 // filter length are another.
 func NewAecState(config *EchoCanceller3Config, numCaptureChannels int) *AecState {
 	a := &AecState{}
-	a.bind(&aecStateState{}, nil)
+	a.bind(&aecStateState{}, bindAlone)
 	a.initDefault(config, numCaptureChannels, make([]float32, aecStorageSize(config, numCaptureChannels)))
 	return a
 }
@@ -329,7 +329,7 @@ func (a *AecState) initDefault(config *EchoCanceller3Config, numCaptureChannels 
 // which is a *LegacyTransparentMode or a *TransparentModeHmm.
 func NewAecStateWithTransparentMode(config *EchoCanceller3Config, numCaptureChannels int, tm TransparentMode) *AecState {
 	a := &AecState{}
-	a.bind(&aecStateState{}, nil)
+	a.bind(&aecStateState{}, bindAlone)
 	a.init(config, numCaptureChannels, make([]float32, aecStorageSize(config, numCaptureChannels)))
 	switch t := tm.(type) {
 	case nil:
@@ -360,7 +360,7 @@ func (a *AecState) init(config *EchoCanceller3Config, numCaptureChannels int, st
 		subtractorAnalyzerResetAtEchoPathChange: true,
 	}
 	*a = AecState{}
-	a.bind(st, nil)
+	a.bind(st, bindAlone)
 	c := &a.config
 	if n := numCaptureChannels; n > inlineChannelLimit {
 		a.more = &aecMore{

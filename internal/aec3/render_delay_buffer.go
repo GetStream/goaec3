@@ -60,7 +60,7 @@ type renderDelayBufferState struct {
 // NewRenderDelayBuffer mirrors RenderDelayBuffer::Create.
 func NewRenderDelayBuffer(config *EchoCanceller3Config, sampleRateHz, numRenderChannels int) *RenderDelayBuffer {
 	r := &RenderDelayBuffer{}
-	r.bind(&renderDelayBufferState{}, nil)
+	r.bind(&renderDelayBufferState{}, bindAlone)
 	r.init(config, sampleRateHz, numRenderChannels)
 	return r
 }
@@ -86,7 +86,7 @@ func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, num
 		maxObservedJitter:         1,
 	}
 	*r = RenderDelayBuffer{}
-	r.bind(st, nil)
+	r.bind(st, bindAlone)
 	r.subBlockSize = BlockSize
 	if r.downSamplingFactor > 0 {
 		r.subBlockSize = BlockSize / r.downSamplingFactor

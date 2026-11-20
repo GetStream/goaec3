@@ -33,7 +33,7 @@ type rmChannels struct {
 
 // channels returns the per-channel estimators: views of r for up to
 // inlineChannels channels.
-func (r *ReverbModelEstimator) channels() rmChannels {
+func (r ReverbModelEstimator) channels() rmChannels {
 	if r.more != nil {
 		return *r.more
 	}
@@ -55,7 +55,7 @@ func (r *ReverbModelEstimator) bind(st *reverbModelEstimatorState, b *binder) {
 
 func NewReverbModelEstimator(config *EchoCanceller3Config, numCaptureChannels int) *ReverbModelEstimator {
 	r := &ReverbModelEstimator{}
-	r.bind(&reverbModelEstimatorState{}, nil)
+	r.bind(&reverbModelEstimatorState{}, bindAlone)
 	r.init(config, numCaptureChannels, make([]float32, rmStorageSize(config, numCaptureChannels)))
 	return r
 }
@@ -74,7 +74,7 @@ func (r *ReverbModelEstimator) init(config *EchoCanceller3Config, numCaptureChan
 		perChannel:         stReverbDecayStorageSize(config),
 	}
 	*r = ReverbModelEstimator{storage: storage}
-	r.bind(st, nil)
+	r.bind(st, bindAlone)
 	if n := numCaptureChannels; n > inlineChannelLimit {
 		r.more = &rmChannels{
 			reverbDecayEstimators:    make([]reverbDecayState, n),
@@ -90,7 +90,7 @@ func (r *ReverbModelEstimator) init(config *EchoCanceller3Config, numCaptureChan
 }
 
 // Update updates the estimates based on new data.
-func (r *ReverbModelEstimator) Update(impulseResponses [][]float32, frequencyResponses [][][FftLengthBy2Plus1]float32,
+func (r ReverbModelEstimator) Update(impulseResponses [][]float32, frequencyResponses [][][FftLengthBy2Plus1]float32,
 	linearFilterQualities []LinearFilterQuality, filterDelaysBlocks []int, usableLinearEstimates []bool,
 	stationaryBlock bool) {
 	c := r.channels()
@@ -105,12 +105,12 @@ func (r *ReverbModelEstimator) Update(impulseResponses [][]float32, frequencyRes
 
 // ReverbDecay returns the exponential decay of the reverberant echo (channel
 // 0); mild selects the milder decay.
-func (r *ReverbModelEstimator) ReverbDecay(mild bool) float32 {
+func (r ReverbModelEstimator) ReverbDecay(mild bool) float32 {
 	return r.channels().reverbDecayEstimators[0].Decay(mild)
 }
 
 // GetReverbFrequencyResponse returns the frequency response of the
 // reverberant echo (channel 0).
-func (r *ReverbModelEstimator) GetReverbFrequencyResponse() *[FftLengthBy2Plus1]float32 {
+func (r ReverbModelEstimator) GetReverbFrequencyResponse() *[FftLengthBy2Plus1]float32 {
 	return r.channels().reverbFrequencyResponses[0].FrequencyResponse()
 }

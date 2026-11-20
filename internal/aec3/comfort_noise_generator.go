@@ -134,7 +134,7 @@ func (c *ComfortNoiseGenerator) bind(st *cngState, b *binder) {
 func NewComfortNoiseGenerator(config *EchoCanceller3Config, optimization Aec3Optimization,
 	numCaptureChannels int) *ComfortNoiseGenerator {
 	c := &ComfortNoiseGenerator{}
-	c.bind(&cngState{}, nil)
+	c.bind(&cngState{}, bindAlone)
 	c.init(config, optimization, numCaptureChannels)
 	return c
 }
@@ -144,7 +144,7 @@ func (c *ComfortNoiseGenerator) init(config *EchoCanceller3Config, optimization 
 	numCaptureChannels int) {
 	st := c.cngState
 	*c = ComfortNoiseGenerator{}
-	c.bind(st, nil)
+	c.bind(st, bindAlone)
 	*st = cngState{
 		optimization:       optimization,
 		seed:               42,
@@ -168,7 +168,7 @@ func (c *ComfortNoiseGenerator) init(config *EchoCanceller3Config, optimization 
 }
 
 // Compute computes the comfort noise.
-func (c *ComfortNoiseGenerator) Compute(saturatedCapture bool,
+func (c ComfortNoiseGenerator) Compute(saturatedCapture bool,
 	captureSpectrum [][FftLengthBy2Plus1]float32,
 	lowerBandNoise, upperBandNoise []FftData) {
 	Y2 := captureSpectrum
@@ -232,7 +232,7 @@ func (c *ComfortNoiseGenerator) Compute(saturatedCapture bool,
 }
 
 // NoiseSpectrum returns the estimate of the background noise spectrum.
-func (c *ComfortNoiseGenerator) NoiseSpectrum() [][FftLengthBy2Plus1]float32 {
+func (c ComfortNoiseGenerator) NoiseSpectrum() [][FftLengthBy2Plus1]float32 {
 	if c.more != nil {
 		return c.more.n2
 	}

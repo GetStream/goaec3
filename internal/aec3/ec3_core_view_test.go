@@ -186,3 +186,16 @@ func TestEc3ViewPerCall(t *testing.T) {
 		})
 	}
 }
+
+// BenchmarkEc3Bind times binding the views of a canceller, which every
+// capture call does once.
+func BenchmarkEc3Bind(b *testing.B) {
+	cfg := DefaultEchoCanceller3Config()
+	core := &Ec3Core{}
+	core.Init(&cfg, nil, 48000, 2, 2, 0, nil)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var e EchoCanceller3
+		core.Bind(&e)
+	}
+}

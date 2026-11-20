@@ -53,7 +53,7 @@ func NewAlignmentMixer(numChannels int, config AlignmentMixing) *AlignmentMixer 
 func NewAlignmentMixerWithParams(numChannels int, downmix, adaptiveSelection bool, activityPowerThreshold float32,
 	preferFirstTwoChannels bool) *AlignmentMixer {
 	m := &AlignmentMixer{}
-	m.bind(&alignmentMixerState{}, nil)
+	m.bind(&alignmentMixerState{}, bindAlone)
 	m.init(numChannels, downmix, adaptiveSelection, activityPowerThreshold, preferFirstTwoChannels)
 	return m
 }
@@ -76,7 +76,7 @@ func (m *AlignmentMixer) init(numChannels int, downmix, adaptiveSelection bool, 
 		selectionVariant:          dlyChooseMixingVariant(downmix, adaptiveSelection, numChannels),
 	}
 	*m = AlignmentMixer{}
-	m.bind(st, nil)
+	m.bind(st, bindAlone)
 	if m.selectionVariant == MixingVariantAdaptive {
 		m.moreEnergies = moreChannels[float32](numChannels)
 	}
@@ -84,7 +84,7 @@ func (m *AlignmentMixer) init(numChannels int, downmix, adaptiveSelection bool, 
 
 // ProduceOutput writes the mixed band-0 signal of x into y (BlockSize
 // samples).
-func (m *AlignmentMixer) ProduceOutput(x *Block, y []float32) {
+func (m AlignmentMixer) ProduceOutput(x *Block, y []float32) {
 	y = y[:BlockSize]
 	if m.selectionVariant == MixingVariantDownmix {
 		m.downmix(x, y)
@@ -97,7 +97,7 @@ func (m *AlignmentMixer) ProduceOutput(x *Block, y []float32) {
 	copy(y, x.View(0, ch))
 }
 
-func (m *AlignmentMixer) downmix(x *Block, y []float32) {
+func (m AlignmentMixer) downmix(x *Block, y []float32) {
 	copy(y, x.View(0, 0))
 	for ch := 1; ch < m.numChannels; ch++ {
 		xCh := x.View(0, ch)
@@ -110,7 +110,7 @@ func (m *AlignmentMixer) downmix(x *Block, y []float32) {
 	}
 }
 
-func (m *AlignmentMixer) selectChannel(x *Block) int {
+func (m AlignmentMixer) selectChannel(x *Block) int {
 	energies := channelState(&m.inlineEnergies, m.numChannels, m.moreEnergies)
 	const blocksToChooseLeftOrRight = int(0.5 * NumBlocksPerSecond)
 	goodSignalInLeftOrRight := m.preferFirstTwoChannels &&
