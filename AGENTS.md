@@ -258,45 +258,61 @@ burst they measure.
 ## Garbage collector footprint
 
 A canceller is long-lived state the garbage collector marks on every cycle.
-What the mark costs, in this order: the pointer words it reads (every
-pointer word of a live object, nil or not; spread over a large object, each
-is a cache line of its own), the length of the object up to its last pointer
-word, and the number of heap objects. `TestPointerWords` bounds the pointer
-words of the canceller type and where the last one sits, `TestPointerSlots`
-the non-nil pointers of a canceller and `TestNewFootprint` its objects;
-`BenchmarkGCMark -cpu 1` times a cycle with 1000 cancellers (`mark-ns/op` is
-the mark phase alone).
+What the mark costs: the heap objects (about 25 ns each), the pointer words
+it reads (every pointer word of a live object, nil or not, and about 15 ns
+more for one that is not nil, also when it points into an object that is
+already marked), and the length of an object up to its last pointer word
+(about 5 ns per KB). A pointer-free object is marked without being read,
+whatever its size. So a canceller is one object whose few pointers are its
+first words, and a few pointer-free arrays.
 
+- A component that needs a pointer (a slice whose size depends on the
+  config, the state of more than `inlineChannels` channels, an optional
+  component) is two types (`internal/aec3/arena.go`): `xState`, a
+  pointer-free struct that the state of its parent holds by value, and `X`,
+  a view: `*xState` next to the slices and the views of its children. The
+  methods are those of the view and the fields of the state are promoted
+  into it, so a method body reads as if there were one struct.
+- `Ec3Core` is what a canceller keeps: the pointers (the samples, the render
+  transfer queue, the arenas of the block processor) and the state of every
+  component. Every entry point binds the views on its stack
+  (`Ec3Core.Bind`, `BindRender`) and calls their methods. A view must not
+  escape: it is not stored in an interface or a closure (the allocation
+  tests show it).
+- `init` allocates the slices of a view as if it stood alone. `Ec3Core.adopt`
+  then walks the views twice with a binder (`bind`, one method per view
+  type that lists its slices and children): it records the length of every
+  slice in a `span` of the state and moves the slices into one arena per
+  element type (`[]float32`, `[]FftData`, `[][65]float32`, `[]int32`). The
+  samples of the block processor and the canceller's own are one array. A
+  slice a view registers owns its memory; a slice whose length changes while
+  processing keeps the length in the state (`Subtractor`).
+- A view made by `NewX` stands alone (`bind(st, nil)`): tests and the
+  oracle harness use the components as before.
+- Per-channel state of up to `inlineChannels` capture channels lives in
+  arrays of the state; the component derives the slices on use
+  (`channelState`). What more channels need, and the optional components,
+  are heap objects behind one pointer each (`more`), which the canceller
+  keeps in `bpExtra`: a canceller with up to `inlineChannels` channels and
+  the default components has none. `TestEc3ChannelStateStorage` runs both
+  forms against each other.
 - Multi-dimensional buffers are one pointer-free array with views computed
   from the indices (`Frame.View`, `Block.View`, the rings' `At`, the matched
   filter's `filter(n)`), not slices of slices.
-- Components are held by value in their parent and set up in place by an
-  `init` method; `NewX` allocates one and calls it. A component copies the
-  config (as the C++ does) rather than pointing at it.
-- A struct declares its fields that hold pointers first (a component among
-  them keeps its own at its start) and its pointer-free state last, so the
-  pointers of a canceller sit together at its start and the rest is never
-  read.
-- Per-channel state of up to `inlineChannels` capture channels lives in
-  arrays of the component's own struct; the component derives the slices on
-  use (`channelState`, or a `channels()` method that returns them all) and
-  keeps no pointer to them. What more channels need is allocated behind one
-  pointer (`more`) at the start of the component.
-  `TestEc3ChannelStateStorage` runs both forms against each other. Buffers
-  whose size depends on the config share one allocation per component, which
-  its parent hands to `init` (`AecState` for its analyzers).
-- No component points at itself or at a sibling. A view that would
-  (`RenderBuffer` over the rings of `RenderDelayBuffer`, the frames, blocks
-  and framing components of `EchoCanceller3` over its storage) is built on
-  the stack when it is used, from offsets and counters the owner keeps. A
-  view handed to an interface escapes: the caller on that path passes a
-  copy (`BlockProcessor.ProcessCapture` with an injected echo remover).
-- An optional implementation is a tagged value, not an interface
+- A component copies the config (as the C++ does) rather than pointing at
+  it. An optional implementation is a tagged value, not an interface
   (`stTransparentState`).
-- What a cycle costs per canceller, measured with 1000 of them: about 15 to
-  30 ns per heap object, 5 ns per KB up to the last pointer word, 2 to 6 ns
-  per pointer word and 8 to 17 ns more when it is not nil. A pointer-free
-  object is marked without being read, whatever its size.
+- The render side runs concurrently with the capture side: it reads only
+  the pointers that are set once (`storage`, `hpMore`) and the queue. The
+  arenas of the block processor change when it is set up again (stereo
+  content detected), on the capture side.
+- The tests: `TestPointerWords` (the pointer words of the canceller type and
+  where the last one ends: the state has none), `TestPointerSlots` (the
+  non-nil pointers of a canceller), `TestNewFootprint` (its objects),
+  `TestGCMarkPerCanceller` (the mark time a canceller adds to a cycle) and
+  the `Test...PointerFree` tests of `internal/aec3`. `BenchmarkGCMark -cpu 1`
+  times a cycle with 1000 cancellers; `net-mark-ns/op` is the mark phase
+  less that of a cycle without them.
 
 ## Build and test
 

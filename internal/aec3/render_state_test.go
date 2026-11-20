@@ -42,8 +42,8 @@ func TestRenderStatesPointerFree(t *testing.T) {
 		{state: fftBufferState{}},
 		{state: downsampledRenderBufferState{}},
 		{state: alignmentMixerState{}},
-		{state: renderDelayControllerState{}, skip: []any{MatchedFilter{}, MatchedFilterLagAggregator{}}},
-		{state: echoPathDelayEstimatorState{}, skip: []any{MatchedFilter{}, MatchedFilterLagAggregator{}}},
+		{state: renderDelayControllerState{}},
+		{state: echoPathDelayEstimatorState{}},
 	} {
 		skip := map[reflect.Type]bool{}
 		for _, s := range tc.skip {

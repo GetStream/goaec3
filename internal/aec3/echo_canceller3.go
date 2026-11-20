@@ -117,9 +117,18 @@ type ec3RenderTransferQueue struct {
 // and capture alternate in steady state, so one frame is queued at a time.
 const ec3RenderTransferQueueInitialFrames = 4
 
-func (q *ec3RenderTransferQueue) init(maxFrames, numBands, numChannels int) {
+// ec3RenderTransferQueueInitialSize returns the number of samples the queue
+// starts with.
+func ec3RenderTransferQueueInitialSize(maxFrames, numBands, numChannels int) int {
+	return min(maxFrames, ec3RenderTransferQueueInitialFrames) * numBands * numChannels * SplitBandSize
+}
+
+// init sets up q over initial, which holds
+// ec3RenderTransferQueueInitialSize samples: the queue allocates only when
+// it grows.
+func (q *ec3RenderTransferQueue) init(maxFrames, numBands, numChannels int, initial []float32) {
 	q.frameSize, q.maxFrames = numBands*numChannels*SplitBandSize, maxFrames
-	q.buffer = make([]float32, min(maxFrames, ec3RenderTransferQueueInitialFrames)*q.frameSize)
+	q.buffer = initial
 }
 
 func (q *ec3RenderTransferQueue) capacity() int { return len(q.buffer) / q.frameSize }
@@ -179,24 +188,39 @@ func (q *ec3RenderTransferQueue) Remove(output Frame) bool {
 // ec3RenderWriter is EchoCanceller3::RenderWriter: it moves the split-band
 // render frame (which the canceller holds) into the transfer queue,
 // optionally high-pass filtering its lowest band first.
+//
+// Its high-pass filter (HighPassFilter at 16 kHz) is one section per
+// channel: those of up to inlineChannels channels are part of the writer,
+// those of more channels are the canceller's (Ec3Core.hpMore).
 type ec3RenderWriter struct {
-	highPassFilter    HighPassFilter
 	hasHighPassFilter bool
+	sections          [inlineChannels]BiQuad
 }
 
-func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numChannels int) {
+// init sets up w and returns the sections of more than inlineChannels
+// channels, nil otherwise.
+func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numChannels int) (more []BiQuad) {
 	*w = ec3RenderWriter{}
 	if config.Filter.HighPassFilterEchoReference {
 		w.hasHighPassFilter = true
-		w.highPassFilter.init(16000, numChannels)
+		more = moreChannels[BiQuad](numChannels)
+		sections := channelState(&w.sections, numChannels, more)
+		c := ec3ChooseHighPassCoefficients(16000)[0]
+		for k := range sections {
+			sections[k] = BiQuad{Coefficients: c}
+		}
 	}
+	return more
 }
 
-// Insert moves renderQueueInputFrame into the transfer queue.
-func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue, renderQueueInputFrame Frame) {
+// Insert moves renderQueueInputFrame into the transfer queue; more is what
+// init returned.
+func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue, renderQueueInputFrame Frame, more []BiQuad) {
 	if w.hasHighPassFilter {
-		for channel := 0; channel < renderQueueInputFrame.numChannels; channel++ {
-			w.highPassFilter.ProcessChannel(channel, renderQueueInputFrame.View(0, channel))
+		sections := channelState(&w.sections, renderQueueInputFrame.numChannels, more)
+		for channel := range sections {
+			x := renderQueueInputFrame.View(0, channel)
+			dlyApplyBiQuadCascade(x, x, sections[channel:channel+1])
 		}
 	}
 
@@ -233,6 +257,7 @@ type EchoCanceller3 struct {
 	core                     *Ec3Core
 	storage                  []float32 // every sample buffer but the transfer queue
 	renderTransferQueue      *ec3RenderTransferQueue
+	hpMore                   []BiQuad        // of the render writer
 	blockProcessorForTesting *BlockProcessor // set by SetBlockProcessorForTesting
 	blockProcessor           BlockProcessor
 }
@@ -244,23 +269,25 @@ type EchoCanceller3 struct {
 // EchoCanceller3 the view of it that has the methods.
 //
 // The render side (BindRender and the render-side methods of its view) may
-// run concurrently with the capture side: it reads storage, which is set
-// once, and the queue.
+// run concurrently with the capture side: it reads storage and hpMore, which
+// are set once, and the queue.
 type Ec3Core struct {
 	storage []float32
 	queue   ec3RenderTransferQueue
+	hpMore  []BiQuad
 	bp      bpArenas
 	bpExtra *bpExtra
 	st      ec3State
 }
 
-// Init sets up c, which must be the zero value.
+// Init sets up c, which must be the zero value. The storage has room for
+// extraSamples samples of the caller (EchoCanceller3.ExtraSamples).
 func (c *Ec3Core) Init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
-	numRenderChannels, numCaptureChannels int) {
+	numRenderChannels, numCaptureChannels, extraSamples int) {
 	var e EchoCanceller3
 	c.BindRender(&e)
 	e.blockProcessor.bind(&c.st.blockProcessor, nil)
-	e.init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels)
+	e.init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels, extraSamples)
 }
 
 // BindRender makes e the view of c for the render-side methods (RenderFrame,
@@ -270,6 +297,7 @@ func (c *Ec3Core) BindRender(e *EchoCanceller3) {
 	e.core = c
 	e.storage = c.storage
 	e.renderTransferQueue = &c.queue
+	e.hpMore = c.hpMore
 }
 
 // Bind makes e the view of c for the capture side.
@@ -284,11 +312,17 @@ func (c *Ec3Core) Bind(e *EchoCanceller3) {
 
 // adopt moves the slices that the init of p allocated into arenas of c, and
 // its pointers into the extras: afterwards a view of c needs nothing else.
-func (c *Ec3Core) adopt(p *BlockProcessor) {
+// The first time, the storage of the canceller (storageSize samples) and the
+// samples of the block processor are one array; a block processor set up
+// again gets arenas of its own.
+func (c *Ec3Core) adopt(p *BlockProcessor, storageSize int) {
 	st := &c.st.blockProcessor
 	b := binder{mode: bindMeasure, x: &bpNoExtra}
 	p.bind(st, &b)
-	if b.n.f32 > 0 {
+	if c.storage == nil {
+		samples := make([]float32, storageSize+int(b.n.f32))
+		c.storage, b.a.f32 = samples[:storageSize:storageSize], samples[storageSize:]
+	} else if b.n.f32 > 0 {
 		b.a.f32 = make([]float32, b.n.f32)
 	}
 	if b.n.fft > 0 {
@@ -351,6 +385,8 @@ type ec3Offsets struct {
 	linearOutputBlock      int // [capture channel][BlockSize]
 	linearOutputFrame      int // [capture channel][SplitBandSize]
 	renderQueueInputFrame  int // [band][render channel][SplitBandSize]
+	extra                  int // the caller's samples
+	size                   int // of the storage
 }
 
 // The views below are the frames, blocks and framing components of e over
@@ -426,7 +462,7 @@ func (e *EchoCanceller3) blockDelayBuffer() BlockDelayBuffer {
 func NewEchoCanceller3(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
 	numRenderChannels, numCaptureChannels int) *EchoCanceller3 {
 	c := &Ec3Core{}
-	c.Init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels)
+	c.Init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels, 0)
 	e := &EchoCanceller3{}
 	c.Bind(e)
 	return e
@@ -434,7 +470,7 @@ func NewEchoCanceller3(config, multichannelConfig *EchoCanceller3Config, sampleR
 
 // init sets up the core of e, which must be the zero value.
 func (e *EchoCanceller3) init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
-	numRenderChannels, numCaptureChannels int) {
+	numRenderChannels, numCaptureChannels, extraSamples int) {
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate for EchoCanceller3")
 	}
@@ -479,17 +515,22 @@ func (e *EchoCanceller3) init(config, multichannelConfig *EchoCanceller3Config, 
 		e.offsets.linearOutputBlock = take(e.numCaptureChannels * BlockSize)
 		e.offsets.linearOutputFrame = take(e.numCaptureChannels * SplitBandSize)
 	}
+	queueSize := ec3RenderTransferQueueInitialSize(RenderTransferQueueSizeFrames, e.numBands, e.numRenderInputChannels)
+	queueOffset := take(queueSize)
 	e.offsets.renderQueueInputFrame = take(renderViews * SplitBandSize)
-	e.storage = make([]float32, n)
-	e.core.storage = e.storage
+	e.offsets.extra = take(extraSamples)
+	e.offsets.size = n
+
+	// initialize allocates the storage.
+	e.initialize()
 
 	// The framers start with BlockSize zeros, the blockers empty.
 	e.outputFramerFill = BlockSize
 	e.linearOutputFramerFill = BlockSize
-	e.renderTransferQueue.init(RenderTransferQueueSizeFrames, e.numBands, e.numRenderInputChannels)
-	e.renderWriter.init(active, e.numRenderInputChannels)
-
-	e.initialize()
+	e.renderTransferQueue.init(RenderTransferQueueSizeFrames, e.numBands, e.numRenderInputChannels,
+		e.storage[queueOffset:queueOffset+queueSize:queueOffset+queueSize])
+	e.hpMore = e.renderWriter.init(active, e.numRenderInputChannels)
+	e.core.hpMore = e.hpMore
 }
 
 // ec3BlockOver returns a block that keeps its samples in storage.
@@ -508,15 +549,16 @@ func (e *EchoCanceller3) initialize() {
 
 	e.configSelector.Update(e.multichannelContentDetector.IsProperMultiChannelContentDetected())
 
+	e.blockProcessor.init(e.configSelector.ActiveConfig(), e.sampleRateHz,
+		e.numRenderChannelsToAec, e.numCaptureChannels)
+	e.core.adopt(&e.blockProcessor, e.offsets.size)
+	e.storage = e.core.storage
+
 	renderBlock := e.renderBlock()
 	clear(renderBlock.data)
 
 	// An empty blocker over the same storage.
 	e.renderBlockerFill = 0
-
-	e.blockProcessor.init(e.configSelector.ActiveConfig(), e.sampleRateHz,
-		e.numRenderChannelsToAec, e.numCaptureChannels)
-	e.core.adopt(&e.blockProcessor)
 }
 
 // processor returns the block processor in use.
@@ -549,6 +591,9 @@ func (e *EchoCanceller3) GetActiveConfigForTesting() *EchoCanceller3Config {
 	return e.configSelector.ActiveConfig()
 }
 
+// ExtraSamples returns the samples Ec3Core.Init set aside for the caller.
+func (e *EchoCanceller3) ExtraSamples() []float32 { return e.storage[e.offsets.extra:] }
+
 // RenderFrame returns the split-band render frame that AnalyzeRenderFrame
 // consumes. The caller fills every band and channel before each call.
 func (e *EchoCanceller3) RenderFrame() Frame { return e.renderQueueInputFrame() }
@@ -556,7 +601,7 @@ func (e *EchoCanceller3) RenderFrame() Frame { return e.renderQueueInputFrame() 
 // AnalyzeRenderFrame analyzes and stores an internal copy of RenderFrame,
 // whose contents are unspecified afterwards.
 func (e *EchoCanceller3) AnalyzeRenderFrame() {
-	e.renderWriter.Insert(e.renderTransferQueue, e.renderQueueInputFrame())
+	e.renderWriter.Insert(e.renderTransferQueue, e.renderQueueInputFrame(), e.hpMore)
 }
 
 // AnalyzeRender analyzes and stores an internal copy of the split-band

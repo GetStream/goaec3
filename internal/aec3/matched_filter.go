@@ -1398,18 +1398,24 @@ type MatchedFilterLagEstimate struct {
 // scratch memory share one pointer-free array; filter, accumulatedError,
 // instantaneousAccumulatedError and scratchMemory return views of it.
 type MatchedFilter struct {
-	optimization        Aec3Optimization
-	subBlockSize        int
-	filterIntraLagShift int
-	numFilters          int
-	filterSize          int
-	accumulatedSize     int // samples of one accumulated error
-	scratchSize         int
+	*matchedFilterState
 	// storage holds the filters [numFilters][filterSize] and, with
 	// detectPreEcho, the accumulated errors [numFilters][accumulatedSize],
 	// the instantaneous accumulated error [accumulatedSize] and the scratch
 	// memory [scratchSize].
-	storage                   []float32
+	storage []float32
+}
+
+// matchedFilterState is the state of a MatchedFilter but its storage.
+type matchedFilterState struct {
+	storageSpan               span
+	optimization              Aec3Optimization
+	subBlockSize              int
+	filterIntraLagShift       int
+	numFilters                int
+	filterSize                int
+	accumulatedSize           int // samples of one accumulated error
+	scratchSize               int
 	reportedLagEstimate       MatchedFilterLagEstimate
 	hasReportedLagEstimate    bool
 	winnerLag                 int
@@ -1444,9 +1450,16 @@ func NewMatchedFilter(optimization Aec3Optimization, subBlockSize, windowSizeSub
 	alignmentShiftSubBlocks int, excitationLimit, smoothingFast, smoothingSlow, matchingFilterThreshold float32,
 	detectPreEcho bool) *MatchedFilter {
 	m := &MatchedFilter{}
+	m.bind(&matchedFilterState{}, nil)
 	m.init(optimization, subBlockSize, windowSizeSubBlocks, numMatchedFilters, alignmentShiftSubBlocks,
 		excitationLimit, smoothingFast, smoothingSlow, matchingFilterThreshold, detectPreEcho)
 	return m
+}
+
+// bind makes m the view of st.
+func (m *MatchedFilter) bind(st *matchedFilterState, b *binder) {
+	m.matchedFilterState = st
+	b.f32(&m.storage, &st.storageSpan)
 }
 
 func (m *MatchedFilter) init(optimization Aec3Optimization, subBlockSize, windowSizeSubBlocks, numMatchedFilters,
@@ -1455,7 +1468,8 @@ func (m *MatchedFilter) init(optimization Aec3Optimization, subBlockSize, window
 	if windowSizeSubBlocks <= 0 || BlockSize%subBlockSize != 0 || subBlockSize%4 != 0 {
 		panic("aec3: invalid MatchedFilter dimensions")
 	}
-	*m = MatchedFilter{
+	m.storage = nil
+	*m.matchedFilterState = matchedFilterState{
 		optimization:              optimization,
 		subBlockSize:              subBlockSize,
 		filterIntraLagShift:       alignmentShiftSubBlocks * subBlockSize,

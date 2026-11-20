@@ -119,3 +119,46 @@ func (f *SplittingFilter) ThreeBandsSynthesis(bands [][][]float32, data [][]floa
 		f.SynthesisChannel(i, bands[0][i], bands[1][i], bands[2][i], data[i])
 	}
 }
+
+// ChannelSplitter is the splitting filter of one channel: a pointer-free
+// value whose zero value is ready, for callers that keep the channels in one
+// array.
+type ChannelSplitter struct {
+	two   TwoBandsStates
+	three ThreeBandFilterBank
+
+	// Scratch.
+	bands16    [2][bsSamplesPerBand]int16
+	fullBand16 [bsTwoBandFilterSamplesPerFrame]int16
+}
+
+// Analysis splits data (numBands*160 samples, 2 or 3 bands) into the bands
+// b0, b1 and, with three bands, b2, of 160 samples each
+// (SplittingFilter.AnalysisChannel).
+func (c *ChannelSplitter) Analysis(numBands int, data, b0, b1, b2 []float32) {
+	if numBands == 2 {
+		s := &c.two
+		FloatS16ToS16Slice(data[:bsTwoBandFilterSamplesPerFrame], c.fullBand16[:])
+		AnalysisQMF(c.fullBand16[:], c.bands16[0][:], c.bands16[1][:], &s.AnalysisState1, &s.AnalysisState2)
+		S16ToFloatS16Slice(c.bands16[0][:], b0)
+		S16ToFloatS16Slice(c.bands16[1][:], b1)
+		return
+	}
+	out := [NumBands][]float32{b0, b1, b2}
+	c.three.Analysis((*[FullBandSize]float32)(data), &out)
+}
+
+// Synthesis merges the bands b0, b1 and, with three bands, b2 (160 samples
+// each) into data (numBands*160 samples) (SplittingFilter.SynthesisChannel).
+func (c *ChannelSplitter) Synthesis(numBands int, b0, b1, b2, data []float32) {
+	if numBands == 2 {
+		s := &c.two
+		FloatS16ToS16Slice(b0[:bsSamplesPerBand], c.bands16[0][:])
+		FloatS16ToS16Slice(b1[:bsSamplesPerBand], c.bands16[1][:])
+		SynthesisQMF(c.bands16[0][:], c.bands16[1][:], c.fullBand16[:], &s.SynthesisState1, &s.SynthesisState2)
+		S16ToFloatS16Slice(c.fullBand16[:], data)
+		return
+	}
+	in := [NumBands][]float32{b0, b1, b2}
+	c.three.Synthesis(&in, (*[FullBandSize]float32)(data))
+}

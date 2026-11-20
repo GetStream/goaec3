@@ -4,7 +4,9 @@ package aec3
 // (echo_path_delay_estimator.h).
 type EchoPathDelayEstimator struct {
 	*echoPathDelayEstimatorState
-	captureMixer AlignmentMixer
+	captureMixer               AlignmentMixer
+	matchedFilter              MatchedFilter
+	matchedFilterLagAggregator MatchedFilterLagAggregator
 }
 
 // echoPathDelayEstimatorState is the state of an EchoPathDelayEstimator but
@@ -15,8 +17,8 @@ type echoPathDelayEstimatorState struct {
 	subBlockSize               int
 	captureMixer               alignmentMixerState
 	captureDecimator           Decimator
-	matchedFilter              MatchedFilter
-	matchedFilterLagAggregator MatchedFilterLagAggregator
+	matchedFilter              matchedFilterState
+	matchedFilterLagAggregator lagAggregatorState
 	oldAggregatedLag           DelayEstimate
 	hasOldAggregatedLag        bool
 	consistentEstimateCounter  int
@@ -36,6 +38,8 @@ func NewEchoPathDelayEstimator(config *EchoCanceller3Config, numCaptureChannels 
 func (e *EchoPathDelayEstimator) bind(st *echoPathDelayEstimatorState, b *binder) {
 	e.echoPathDelayEstimatorState = st
 	e.captureMixer.bind(&st.captureMixer, b)
+	e.matchedFilter.bind(&st.matchedFilter, b)
+	e.matchedFilterLagAggregator.bind(&st.matchedFilterLagAggregator, b)
 }
 
 func (e *EchoPathDelayEstimator) init(config *EchoCanceller3Config, numCaptureChannels int) {

@@ -244,7 +244,7 @@ func TestEc3SaturationDetection(t *testing.T) {
 
 func TestEc3RenderTransferQueue(t *testing.T) {
 	var q ec3RenderTransferQueue
-	q.init(3, 1, 1)
+	q.init(3, 1, 1, make([]float32, ec3RenderTransferQueueInitialSize(3, 1, 1)))
 	in := NewFrame(1, 1)
 	out := NewFrame(1, 1)
 	for i := 0; i < 4; i++ {
@@ -274,7 +274,7 @@ func TestEc3RenderTransferQueueGrowth(t *testing.T) {
 		{1, 1, 1}, {3, 1, 1}, {7, 2, 3}, {RenderTransferQueueSizeFrames, 3, 2},
 	} {
 		var q ec3RenderTransferQueue
-		q.init(c.maxFrames, c.numBands, c.numChannels)
+		q.init(c.maxFrames, c.numBands, c.numChannels, make([]float32, ec3RenderTransferQueueInitialSize(c.maxFrames, c.numBands, c.numChannels)))
 		in := NewFrame(c.numBands, c.numChannels)
 		out := NewFrame(c.numBands, c.numChannels)
 		var fifo []float32
@@ -337,7 +337,7 @@ func TestEc3RenderTransferQueueGrowth(t *testing.T) {
 
 func TestEc3RenderTransferQueueAllocationFree(t *testing.T) {
 	var q ec3RenderTransferQueue
-	q.init(RenderTransferQueueSizeFrames, 3, 2)
+	q.init(RenderTransferQueueSizeFrames, 3, 2, make([]float32, ec3RenderTransferQueueInitialSize(RenderTransferQueueSizeFrames, 3, 2)))
 	in := NewFrame(3, 2)
 	out := NewFrame(3, 2)
 	// Warm up past the deepest burst of the measured loop.

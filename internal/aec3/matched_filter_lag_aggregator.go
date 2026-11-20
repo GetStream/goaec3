@@ -54,9 +54,16 @@ func dlyArgMax(v []int32) int {
 }
 
 type dlyPreEchoLagAggregator struct {
+	*dlyPreEchoLagState
+	histogram []int32
+}
+
+// dlyPreEchoLagState is the state of a dlyPreEchoLagAggregator but its
+// histogram.
+type dlyPreEchoLagState struct {
+	histogramSpan      span
 	blockSizeLog2      int
 	histogramData      [250]int32
-	histogram          []int32
 	histogramMax       dlyHistogramMax
 	histogramDataIndex int
 	preEchoCandidate   int
@@ -78,9 +85,12 @@ func newDlyPreEchoLagAggregator(maxFilterLag, downSamplingFactor int) *dlyPreEch
 // init sets up the aggregator over histogram, which holds
 // dlyPreEchoHistogramSize zeros.
 func (a *dlyPreEchoLagAggregator) init(downSamplingFactor int, histogram []int32) {
-	*a = dlyPreEchoLagAggregator{
+	if a.dlyPreEchoLagState == nil {
+		a.dlyPreEchoLagState = &dlyPreEchoLagState{}
+	}
+	a.histogram = histogram
+	*a.dlyPreEchoLagState = dlyPreEchoLagState{
 		blockSizeLog2: dlyGetDownSamplingBlockSizeLog2(downSamplingFactor),
-		histogram:     histogram,
 	}
 	a.Reset()
 }
@@ -129,7 +139,14 @@ func (a *dlyPreEchoLagAggregator) Aggregate(preEchoLag int) {
 }
 
 type dlyHighestPeakAggregator struct {
-	histogram          []int32
+	*dlyHighestPeakState
+	histogram []int32
+}
+
+// dlyHighestPeakState is the state of a dlyHighestPeakAggregator but its
+// histogram.
+type dlyHighestPeakState struct {
+	histogramSpan      span
 	histogramData      [250]int32
 	histogramMax       dlyHistogramMax
 	histogramDataIndex int
@@ -143,7 +160,11 @@ func (a *dlyHighestPeakAggregator) init(maxFilterLag int) {
 // initOver sets up the aggregator over histogram, which holds maxFilterLag+1
 // zeros.
 func (a *dlyHighestPeakAggregator) initOver(histogram []int32) {
-	*a = dlyHighestPeakAggregator{histogram: histogram, candidate: -1}
+	if a.dlyHighestPeakState == nil {
+		a.dlyHighestPeakState = &dlyHighestPeakState{}
+	}
+	a.histogram = histogram
+	*a.dlyHighestPeakState = dlyHighestPeakState{candidate: -1}
 }
 
 // Reset clears the histogram; the candidate keeps its value until the next
@@ -169,28 +190,49 @@ func (a *dlyHighestPeakAggregator) Aggregate(lag int) {
 // MatchedFilter into a single reliable combined lag estimate
 // (matched_filter_lag_aggregator.h).
 type MatchedFilterLagAggregator struct {
+	*lagAggregatorState
+	highestPeakAggregator dlyHighestPeakAggregator
+	preEchoLagAggregator  dlyPreEchoLagAggregator
+}
+
+// lagAggregatorState is the state of a MatchedFilterLagAggregator but its
+// histograms.
+type lagAggregatorState struct {
 	significantCandidateFound bool
 	thresholdsInitial         int
 	thresholdsConverged       int
 	headroom                  int
-	highestPeakAggregator     dlyHighestPeakAggregator
+	highestPeakAggregator     dlyHighestPeakState
 	hasPreEchoLagAggregator   bool
-	preEchoLagAggregator      dlyPreEchoLagAggregator
+	preEchoLagAggregator      dlyPreEchoLagState
+}
+
+// bind makes a the view of st.
+func (a *MatchedFilterLagAggregator) bind(st *lagAggregatorState, b *binder) {
+	a.lagAggregatorState = st
+	a.highestPeakAggregator.dlyHighestPeakState = &st.highestPeakAggregator
+	b.i32(&a.highestPeakAggregator.histogram, &st.highestPeakAggregator.histogramSpan)
+	a.preEchoLagAggregator.dlyPreEchoLagState = &st.preEchoLagAggregator
+	b.i32(&a.preEchoLagAggregator.histogram, &st.preEchoLagAggregator.histogramSpan)
 }
 
 // NewMatchedFilterLagAggregator mirrors the C++ constructor.
 func NewMatchedFilterLagAggregator(maxFilterLag int, config *DelayConfig) *MatchedFilterLagAggregator {
 	a := &MatchedFilterLagAggregator{}
+	a.bind(&lagAggregatorState{}, nil)
 	a.init(maxFilterLag, config)
 	return a
 }
 
 func (a *MatchedFilterLagAggregator) init(maxFilterLag int, d *DelayConfig) {
-	*a = MatchedFilterLagAggregator{
+	st := a.lagAggregatorState
+	*st = lagAggregatorState{
 		thresholdsInitial:   d.DelaySelectionThresholds.Initial,
 		thresholdsConverged: d.DelaySelectionThresholds.Converged,
 		headroom:            d.DelayHeadroomSamples / d.DownSamplingFactor,
 	}
+	*a = MatchedFilterLagAggregator{}
+	a.bind(st, nil)
 	// The two histograms share one array.
 	n, nPreEcho := maxFilterLag+1, 0
 	if d.DetectPreEcho {

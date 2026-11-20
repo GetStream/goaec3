@@ -442,7 +442,7 @@ func TestDlyMatchedFilterCoreLanesDiffer(t *testing.T) {
 	results := map[Aec3Optimization][]float32{}
 	for _, opt := range []Aec3Optimization{OptNone, OptNeon, OptSse2, OptAvx2} {
 		h := make([]float32, hSize)
-		mf := &MatchedFilter{optimization: opt}
+		mf := &MatchedFilter{matchedFilterState: &matchedFilterState{optimization: opt}}
 		var updated bool
 		var errSum float32
 		for rep := 0; rep < 20; rep++ {

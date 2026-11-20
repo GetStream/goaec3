@@ -8,6 +8,7 @@ import (
 	"runtime/metrics"
 	"strconv"
 	"testing"
+	"time"
 )
 
 var footprintCases = []struct {
@@ -46,12 +47,14 @@ func footprint(t testing.TB, rate, ch int) (bytes, objects uint64) {
 
 // footprintObjectLimits bounds the heap objects per canceller of each
 // footprintCases entry.
-var footprintObjectLimits = []uint64{12, 15, 15}
+var footprintObjectLimits = []uint64{5, 6, 6}
 
 // TestNewFootprint reports the live heap per canceller and bounds the number
-// of heap objects, which sets most of the mark cost of a GC cycle with many
-// live cancellers: marking an object costs several times as much as following
-// another pointer into an object that is already marked.
+// of heap objects, which sets the mark cost of a GC cycle with many live
+// cancellers: the canceller itself, of which the garbage collector reads the
+// first few words, and pointer-free arrays it does not read (the samples,
+// the filter coefficients, the spectra, the delay histograms and, at 32 and
+// 48 kHz, the band-splitting filters).
 func TestNewFootprint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
@@ -136,12 +139,10 @@ func hasPointers(t reflect.Type) bool {
 }
 
 // TestPointerSlots bounds the pointers the garbage collector follows per
-// canceller. The frames, the framing buffers, the render rings, the matched
-// filters and the adaptive filter coefficients are pointer-free arrays with
-// computed views, so the count does not grow with the buffer sizes, and no
-// component points at itself.
+// canceller: one per array of TestNewFootprint, and those into the array of
+// samples (the canceller's own part, the queue's and the block processor's).
 func TestPointerSlots(t *testing.T) {
-	limits := []int{16, 20, 24}
+	limits := []int{7, 8, 8}
 	for i, c := range footprintCases {
 		ec, err := New(DefaultConfig(), c.rate, c.ch, c.ch)
 		if err != nil {
@@ -182,25 +183,22 @@ func pointerWords(t reflect.Type) (words int, end uintptr) {
 
 // TestPointerWords bounds what the garbage collector reads of a canceller,
 // whatever its configuration: it reads every pointer word of the object, nil
-// or not, and walks the object up to the last of them. Pointer words spread
-// over the object cost a cache line each, which is most of the mark cost of
-// a canceller, so the components keep theirs at their start, and the
-// components without pointers come last.
+// or not, and walks the object up to the last of them. The pointers of a
+// canceller are its first words; the state of every component follows and
+// holds none.
 func TestPointerWords(t *testing.T) {
 	if strconv.IntSize != 64 {
 		t.Skip("the bounds are for 64-bit pointers")
 	}
-	// The sizes depend on the build (the FFT scratch does), so the end of
-	// the pointers is bounded relative to the size.
-	const maxWords, maxEndPercent = 44, 60
+	const maxWords, maxEnd = 9, 256
 	typ := reflect.TypeOf(EchoCanceller{})
 	words, end := pointerWords(typ)
 	t.Logf("%d pointer words, the last one ends at byte %d of %d", words, end, typ.Size())
 	if words > maxWords {
 		t.Errorf("%d pointer words per canceller, want at most %d", words, maxWords)
 	}
-	if end*100 > typ.Size()*maxEndPercent {
-		t.Errorf("the pointers of a canceller end at byte %d of %d, want at most %d%%", end, typ.Size(), maxEndPercent)
+	if end > maxEnd {
+		t.Errorf("the pointers of a canceller end at byte %d of %d, want at most %d", end, typ.Size(), maxEnd)
 	}
 }
 
@@ -363,22 +361,69 @@ func gcMarkCPU() float64 {
 	return seconds
 }
 
+// gcCycles runs n garbage collection cycles and returns the shortest and
+// the least mark CPU time of one, in nanoseconds.
+func gcCycles(n int) (cycle, mark float64) {
+	cycle, mark = math.Inf(1), math.Inf(1)
+	for i := 0; i < n; i++ {
+		m, start := gcMarkCPU(), time.Now()
+		runtime.GC()
+		cycle = min(cycle, float64(time.Since(start)))
+		mark = min(mark, (gcMarkCPU()-m)*1e9)
+	}
+	return cycle, mark
+}
+
+// newCancellers returns n cancellers of one footprint case.
+func newCancellers(t testing.TB, n, rate, ch int) []*EchoCanceller {
+	live := make([]*EchoCanceller, n)
+	for i := range live {
+		ec, err := New(DefaultConfig(), rate, ch, ch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		live[i] = ec
+	}
+	return live
+}
+
+// TestGCMarkPerCanceller bounds what a live canceller adds to the mark phase
+// of a garbage collection cycle on one P: the mark CPU time of a cycle with
+// 2000 cancellers less that of a cycle without them. The bound is several
+// times the cost on a current machine; a canceller whose state the garbage
+// collector had to read cost ten times as much.
+func TestGCMarkPerCanceller(t *testing.T) {
+	if testing.Short() || raceEnabled {
+		t.Skip("timing")
+	}
+	const n, maxNs = 2000, 1000
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	for _, c := range footprintCases {
+		_, empty := gcCycles(20)
+		live := newCancellers(t, n, c.rate, c.ch)
+		_, mark := gcCycles(20)
+		runtime.KeepAlive(live)
+		net := (mark - empty) / n
+		t.Logf("%s: %.0f ns of mark per canceller and cycle", c.name, net)
+		if net > maxNs {
+			t.Errorf("%s: %.0f ns of mark per canceller and cycle, want at most %d", c.name, net, maxNs)
+		}
+	}
+}
+
 // BenchmarkGCMark measures one full GC cycle with 1000 live cancellers. With
 // -cpu 1 the time is close to the mark work; with more Ps it is mostly the
 // coordination of the mark workers. mark-ns/op is the CPU time of the mark
 // phase alone, which leaves out what the cycle costs whatever the heap holds
-// (stopping and starting the world, the sweep).
+// (stopping and starting the world, the sweep). A cycle costs time without
+// any canceller too: net-ns/op and net-mark-ns/op are the two less the
+// shortest of 50 cycles run before the cancellers exist, which is what the
+// cancellers add.
 func BenchmarkGCMark(b *testing.B) {
 	for _, c := range footprintCases {
 		b.Run(fmt.Sprintf("%s_x1000", c.name), func(b *testing.B) {
-			live := make([]*EchoCanceller, 1000)
-			for i := range live {
-				ec, err := New(DefaultConfig(), c.rate, c.ch, c.ch)
-				if err != nil {
-					b.Fatal(err)
-				}
-				live[i] = ec
-			}
+			emptyCycle, emptyMark := gcCycles(50)
+			live := newCancellers(b, 1000, c.rate, c.ch)
 			runtime.GC()
 			mark := gcMarkCPU()
 			b.ResetTimer()
@@ -386,7 +431,10 @@ func BenchmarkGCMark(b *testing.B) {
 				runtime.GC()
 			}
 			b.StopTimer()
-			b.ReportMetric((gcMarkCPU()-mark)*1e9/float64(b.N), "mark-ns/op")
+			markNs := (gcMarkCPU() - mark) * 1e9 / float64(b.N)
+			b.ReportMetric(markNs, "mark-ns/op")
+			b.ReportMetric(markNs-emptyMark, "net-mark-ns/op")
+			b.ReportMetric(float64(b.Elapsed())/float64(b.N)-emptyCycle, "net-ns/op")
 			runtime.KeepAlive(live)
 		})
 	}
