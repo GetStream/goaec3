@@ -141,6 +141,29 @@ write changelog narrative.
   single transforms elsewhere; aec3 pairs the transforms that come in twos
   (`aec3FftPair`). Their work areas live with the caller (`ooura.Scratch`,
   `PairScratch`).
+- On arm64 the vector operations decide. A Neoverse-N2 has two
+  floating-point pipes and runs a kernel at the pace of its floating-point
+  and vector operations, shuffles, scalar float operations and (in part)
+  vector stores included; loads and integer work ride along. Count them in
+  `-gcflags=-S` output: a kernel with fewer of them is faster in proportion.
+  - The split transforms of arm64 (`fft_soa_simd_arm64.go`) keep the real
+    and the imaginary parts in separate vectors: a rotation needs no lane
+    swap, the bit reversal is the 4x4 transposition between the first two
+    passes, and the transform has a quarter fewer vector operations than the
+    passes of `fft_simd.go`, which remain the packed transforms and the
+    amd64 SSE2 lane.
+  - Scalar float code costs per operation what a vector of four costs. The
+    decimation by 4 (`decimator_simd_arm64.go`) runs its four cascaded
+    biquad sections as the lanes of one vector, section i two samples behind
+    section i-1: ten vector operations per sample instead of 36 scalar ones.
+    The two samples keep the path through a lane's input (a shuffle, a
+    product, four additions) off the critical cycle, which is the path from
+    an output of a section to its next one. The samples the lanes do not
+    cover run through the scalar section, and a block with a value that is
+    not finite runs the scalar sections (the operand order of an addition
+    only shows in the payload of a NaN).
+  - A closure that captures no vector is not inlined above the usual budget:
+    `_ = zero` on a captured vector gives it the budget of a kernel closure.
 - CPU detection (`DetectOptimization`): one routine for builds with and
   without `GOEXPERIMENT=simd`, `golang.org/x/sys/cpu` with libwebrtc's kAVX2
   condition (AVX, OSXSAVE/YMM, AVX2, BMI2), so both builds pick the same lane
