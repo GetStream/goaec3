@@ -5,7 +5,8 @@ package aec3
 type EchoPathDelayEstimator struct {
 	downSamplingFactor         int
 	subBlockSize               int
-	captureMixer               AlignmentMixer
+	captureMixer               AlignmentMixer // bound to captureMixerState by init
+	captureMixerState          alignmentMixerState
 	captureDecimator           Decimator
 	matchedFilter              MatchedFilter
 	matchedFilterLagAggregator MatchedFilterLagAggregator
@@ -30,6 +31,7 @@ func (e *EchoPathDelayEstimator) init(config *EchoCanceller3Config, numCaptureCh
 		e.subBlockSize = BlockSize / e.downSamplingFactor
 	}
 	m := &config.Delay.CaptureAlignmentMixing
+	e.captureMixer.bind(&e.captureMixerState, nil)
 	e.captureMixer.init(numCaptureChannels, m.Downmix, m.AdaptiveSelection, m.ActivityPowerThreshold,
 		m.PreferFirstTwoChannels)
 	e.captureDecimator.init(e.downSamplingFactor)

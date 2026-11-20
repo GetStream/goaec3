@@ -14,12 +14,22 @@ const (
 // extracted with a specified delay (render_delay_buffer.h; this is the
 // RenderDelayBufferImpl of render_delay_buffer.cc).
 type RenderDelayBuffer struct {
-	// The rings and the mixer, which hold pointers, come first.
+	*renderDelayBufferState
 	blocks      BlockBuffer
 	spectra     SpectrumBuffer
 	ffts        FftBuffer
 	lowRate     DownsampledRenderBuffer
 	renderMixer AlignmentMixer
+}
+
+// renderDelayBufferState is the state of a RenderDelayBuffer but the slices
+// of its rings and its mixer.
+type renderDelayBufferState struct {
+	blocks      blockBufferState
+	spectra     spectrumBufferState
+	ffts        fftBufferState
+	lowRate     downsampledRenderBufferState
+	renderMixer alignmentMixerState
 
 	optimization                               Aec3Optimization
 	config                                     EchoCanceller3Config
@@ -50,35 +60,49 @@ type RenderDelayBuffer struct {
 // NewRenderDelayBuffer mirrors RenderDelayBuffer::Create.
 func NewRenderDelayBuffer(config *EchoCanceller3Config, sampleRateHz, numRenderChannels int) *RenderDelayBuffer {
 	r := &RenderDelayBuffer{}
+	r.bind(&renderDelayBufferState{}, nil)
 	r.init(config, sampleRateHz, numRenderChannels)
 	return r
 }
 
+// bind makes r the view of st.
+func (r *RenderDelayBuffer) bind(st *renderDelayBufferState, b *binder) {
+	r.renderDelayBufferState = st
+	r.blocks.bind(&st.blocks, b)
+	r.spectra.bind(&st.spectra, b)
+	r.ffts.bind(&st.ffts, b)
+	r.lowRate.bind(&st.lowRate, b)
+	r.renderMixer.bind(&st.renderMixer, b)
+}
+
 // init sets up r in place.
 func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, numRenderChannels int) {
-	*r = RenderDelayBuffer{
+	st := r.renderDelayBufferState
+	*st = renderDelayBufferState{
 		optimization:              DetectOptimization(),
 		config:                    *config,
 		renderLinearAmplitudeGain: Exp10f(config.RenderLevels.RenderPowerGainDb / 20),
 		downSamplingFactor:        config.Delay.DownSamplingFactor,
 		maxObservedJitter:         1,
 	}
+	*r = RenderDelayBuffer{}
+	r.bind(st, nil)
 	r.subBlockSize = BlockSize
 	if r.downSamplingFactor > 0 {
 		r.subBlockSize = BlockSize / r.downSamplingFactor
 	}
 	size := GetRenderDelayBufferSize(r.downSamplingFactor, config.Delay.NumFilters, config.Filter.Refined.LengthBlocks)
-	// The block ring and the decimated render ring share one array.
+	// The block ring and the decimated render ring are allocated together
+	// and hold disjoint parts of the array.
 	numBands := NumBandsForRate(sampleRateHz)
 	blockSamples := size * numBands * numRenderChannels * BlockSize
 	lowRateSize := GetDownSampledBufferSize(r.downSamplingFactor, config.Delay.NumFilters)
 	samples := make([]float32, blockSamples+lowRateSize)
-	r.blocks = BlockBuffer{ringIndex: ringIndex{Size: size}, numBands: numBands, numChannels: numRenderChannels,
-		data: samples[:blockSamples:blockSamples]}
-	r.spectra = *NewSpectrumBuffer(size, numRenderChannels)
-	r.ffts = *NewFftBuffer(size, numRenderChannels)
+	r.blocks.init(size, numBands, numRenderChannels, samples[:blockSamples:blockSamples])
+	r.spectra.init(size, numRenderChannels)
+	r.ffts.init(size, numRenderChannels)
 	r.delay, r.hasDelay = config.Delay.DefaultDelay, true
-	r.lowRate = DownsampledRenderBuffer{ringIndex: ringIndex{Size: lowRateSize}, Buffer: samples[blockSamples:]}
+	r.lowRate.init(samples[blockSamples:])
 	m := &config.Delay.RenderAlignmentMixing
 	r.renderMixer.init(numRenderChannels, m.Downmix, m.AdaptiveSelection, m.ActivityPowerThreshold,
 		m.PreferFirstTwoChannels)

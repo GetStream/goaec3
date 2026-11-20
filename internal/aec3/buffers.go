@@ -40,8 +40,10 @@ func (r *ringIndex) IncReadIndex()               { r.Read = r.IncIndex(r.Read) }
 func (r *ringIndex) DecReadIndex()               { r.Read = r.DecIndex(r.Read) }
 
 // The rings below keep all their slots in one pointer-free backing array
-// and hand out slots as views computed from the slot index, so a ring is one
-// heap object that the garbage collector does not scan.
+// and hand out slots as views computed from the slot index. A ring is a view
+// (see arena.go): its indices and dimensions are a pointer-free state, which
+// the methods reach through the embedded pointer, next to the slice of the
+// slots.
 
 // inlineChannels is the number of capture channels whose per-channel state a
 // component keeps in arrays of its own struct. With more channels the state
@@ -88,21 +90,43 @@ func (*noCopy) Unlock() {}
 // BlockBuffer is a ring of Blocks (block_buffer.h). The slots share one
 // pointer-free backing array; At returns a view of one slot.
 type BlockBuffer struct {
+	*blockBufferState
+	data []float32
+}
+
+// blockBufferState is the state of a BlockBuffer but its slots.
+type blockBufferState struct {
 	ringIndex
 	numBands    int
 	numChannels int
-	data        []float32
+	dataSpan    span
 }
 
 func NewBlockBuffer(size, numBands, numChannels int) *BlockBuffer {
-	return &BlockBuffer{ringIndex: ringIndex{Size: size}, numBands: numBands, numChannels: numChannels,
-		data: make([]float32, size*numBands*numChannels*BlockSize)}
+	b := &BlockBuffer{}
+	b.bind(&blockBufferState{}, nil)
+	b.init(size, numBands, numChannels, make([]float32, size*numBands*numChannels*BlockSize))
+	return b
+}
+
+// bind makes b the view of st.
+func (b *BlockBuffer) bind(st *blockBufferState, bd *binder) {
+	b.blockBufferState = st
+	bd.f32(&b.data, &st.dataSpan)
+}
+
+// init sets up b in place over data, which holds the samples of size slots.
+func (b *BlockBuffer) init(size, numBands, numChannels int, data []float32) {
+	*b.blockBufferState = blockBufferState{ringIndex: ringIndex{Size: size}, numBands: numBands,
+		numChannels: numChannels}
+	b.data = data
 }
 
 // At returns slot i as a Block that aliases the ring storage.
 func (b *BlockBuffer) At(i int) Block {
-	n := b.numBands * b.numChannels * BlockSize
-	return Block{numBands: b.numBands, numChannels: b.numChannels, data: b.data[i*n : (i+1)*n : (i+1)*n]}
+	st := b.blockBufferState
+	n := st.numBands * st.numChannels * BlockSize
+	return Block{numBands: st.numBands, numChannels: st.numChannels, data: b.data[i*n : (i+1)*n : (i+1)*n]}
 }
 
 func (b *BlockBuffer) NumBands() int    { return b.numBands }
@@ -111,14 +135,34 @@ func (b *BlockBuffer) NumChannels() int { return b.numChannels }
 // SpectrumBuffer is a ring of per-channel power spectra (spectrum_buffer.h),
 // stored slot-major in one backing array.
 type SpectrumBuffer struct {
+	*spectrumBufferState
+	data [][FftLengthBy2Plus1]float32
+}
+
+// spectrumBufferState is the state of a SpectrumBuffer but its slots.
+type spectrumBufferState struct {
 	ringIndex
 	numChannels int
-	data        [][FftLengthBy2Plus1]float32
+	dataSpan    span
 }
 
 func NewSpectrumBuffer(size, numChannels int) *SpectrumBuffer {
-	return &SpectrumBuffer{ringIndex: ringIndex{Size: size}, numChannels: numChannels,
-		data: make([][FftLengthBy2Plus1]float32, size*numChannels)}
+	b := &SpectrumBuffer{}
+	b.bind(&spectrumBufferState{}, nil)
+	b.init(size, numChannels)
+	return b
+}
+
+// bind makes b the view of st.
+func (b *SpectrumBuffer) bind(st *spectrumBufferState, bd *binder) {
+	b.spectrumBufferState = st
+	bd.spec(&b.data, &st.dataSpan)
+}
+
+// init sets up b in place.
+func (b *SpectrumBuffer) init(size, numChannels int) {
+	*b.spectrumBufferState = spectrumBufferState{ringIndex: ringIndex{Size: size}, numChannels: numChannels}
+	b.data = make([][FftLengthBy2Plus1]float32, size*numChannels)
 }
 
 // At returns the per-channel spectra of slot i.
@@ -132,14 +176,34 @@ func (b *SpectrumBuffer) NumChannels() int { return b.numChannels }
 // FftBuffer is a ring of per-channel FFTs (fft_buffer.h), stored slot-major
 // in one backing array.
 type FftBuffer struct {
+	*fftBufferState
+	data []FftData
+}
+
+// fftBufferState is the state of an FftBuffer but its slots.
+type fftBufferState struct {
 	ringIndex
 	numChannels int
-	data        []FftData
+	dataSpan    span
 }
 
 func NewFftBuffer(size, numChannels int) *FftBuffer {
-	return &FftBuffer{ringIndex: ringIndex{Size: size}, numChannels: numChannels,
-		data: make([]FftData, size*numChannels)}
+	b := &FftBuffer{}
+	b.bind(&fftBufferState{}, nil)
+	b.init(size, numChannels)
+	return b
+}
+
+// bind makes b the view of st.
+func (b *FftBuffer) bind(st *fftBufferState, bd *binder) {
+	b.fftBufferState = st
+	bd.fft(&b.data, &st.dataSpan)
+}
+
+// init sets up b in place.
+func (b *FftBuffer) init(size, numChannels int) {
+	*b.fftBufferState = fftBufferState{ringIndex: ringIndex{Size: size}, numChannels: numChannels}
+	b.data = make([]FftData, size*numChannels)
 }
 
 // At returns the per-channel FFTs of slot i.
@@ -153,10 +217,32 @@ func (b *FftBuffer) NumChannels() int { return b.numChannels }
 // DownsampledRenderBuffer is a ring of decimated samples
 // (downsampled_render_buffer.h).
 type DownsampledRenderBuffer struct {
-	ringIndex
+	*downsampledRenderBufferState
 	Buffer []float32
 }
 
+// downsampledRenderBufferState is the state of a DownsampledRenderBuffer but
+// its samples.
+type downsampledRenderBufferState struct {
+	ringIndex
+	bufferSpan span
+}
+
 func NewDownsampledRenderBuffer(size int) *DownsampledRenderBuffer {
-	return &DownsampledRenderBuffer{ringIndex: ringIndex{Size: size}, Buffer: make([]float32, size)}
+	b := &DownsampledRenderBuffer{}
+	b.bind(&downsampledRenderBufferState{}, nil)
+	b.init(make([]float32, size))
+	return b
+}
+
+// bind makes b the view of st.
+func (b *DownsampledRenderBuffer) bind(st *downsampledRenderBufferState, bd *binder) {
+	b.downsampledRenderBufferState = st
+	bd.f32(&b.Buffer, &st.bufferSpan)
+}
+
+// init sets up b in place over buffer.
+func (b *DownsampledRenderBuffer) init(buffer []float32) {
+	*b.downsampledRenderBufferState = downsampledRenderBufferState{ringIndex: ringIndex{Size: len(buffer)}}
+	b.Buffer = buffer
 }

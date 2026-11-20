@@ -25,7 +25,13 @@ func dlyChooseMixingVariant(downmix, adaptiveSelection bool, numChannels int) Al
 // AlignmentMixer converts the channels to mono to provide a decent input for
 // the delay estimation (alignment_mixer.h).
 type AlignmentMixer struct {
-	moreEnergies              []float32 // cumulativeEnergies of more than inlineChannels channels
+	*alignmentMixerState
+	moreEnergies []float32 // cumulativeEnergies of more than inlineChannels channels
+}
+
+// alignmentMixerState is the state of an AlignmentMixer but its slice.
+type alignmentMixerState struct {
+	moreEnergiesSpan          span
 	numChannels               int
 	oneByNumChannels          float32
 	excitationEnergyThreshold float32
@@ -47,20 +53,30 @@ func NewAlignmentMixer(numChannels int, config AlignmentMixing) *AlignmentMixer 
 func NewAlignmentMixerWithParams(numChannels int, downmix, adaptiveSelection bool, activityPowerThreshold float32,
 	preferFirstTwoChannels bool) *AlignmentMixer {
 	m := &AlignmentMixer{}
+	m.bind(&alignmentMixerState{}, nil)
 	m.init(numChannels, downmix, adaptiveSelection, activityPowerThreshold, preferFirstTwoChannels)
 	return m
+}
+
+// bind makes m the view of st.
+func (m *AlignmentMixer) bind(st *alignmentMixerState, b *binder) {
+	m.alignmentMixerState = st
+	b.f32(&m.moreEnergies, &st.moreEnergiesSpan)
 }
 
 // init sets up m in place.
 func (m *AlignmentMixer) init(numChannels int, downmix, adaptiveSelection bool, activityPowerThreshold float32,
 	preferFirstTwoChannels bool) {
-	*m = AlignmentMixer{
+	st := m.alignmentMixerState
+	*st = alignmentMixerState{
 		numChannels:               numChannels,
 		oneByNumChannels:          1 / float32(numChannels),
 		excitationEnergyThreshold: float32(BlockSize) * activityPowerThreshold,
 		preferFirstTwoChannels:    preferFirstTwoChannels,
 		selectionVariant:          dlyChooseMixingVariant(downmix, adaptiveSelection, numChannels),
 	}
+	*m = AlignmentMixer{}
+	m.bind(st, nil)
 	if m.selectionVariant == MixingVariantAdaptive {
 		m.moreEnergies = moreChannels[float32](numChannels)
 	}
