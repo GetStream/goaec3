@@ -22,6 +22,10 @@ on:
       benchtime:
         description: "benchmark -benchtime"
         default: "2000x"
+      preempt:
+        description: "measure only the cost of asynchronous preemption (the preempt jobs)"
+        type: boolean
+        default: false
   push:
     branches: ["perf/**"]
     paths-ignore: ["**.md"]
@@ -42,6 +46,7 @@ env:
 jobs:
   bench:
     name: bench (${{ matrix.os }}, ${{ matrix.name }})
+    if: ${{ !inputs.preempt }}
     strategy:
       fail-fast: false
       matrix:
@@ -302,9 +307,101 @@ jobs:
             rows.csv
             bench.test
 
+  # The cost of asynchronous preemption with GOEXPERIMENT=simd
+  # (golang/go#81847): on a CPU with AVX-512, Go 1.27 saves and restores the
+  # ZMM registers at every asynchronous preemption, which leaves the upper
+  # vector state dirty, so the legacy-SSE code that follows pays state
+  # transitions until the next VZEROUPPER. The job times the AVX2 lane with
+  # the default settings and with GODEBUG=asyncpreemptoff=1 in alternating
+  # runs of one binary. Hosted runners differ in CPU, so several copies run
+  # and each reports its CPU model and whether it has AVX-512.
+  preempt:
+    name: preempt (${{ matrix.copy }})
+    if: ${{ inputs.preempt }}
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [1, 2, 3, 4, 5, 6, 7, 8]
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+      GOEXPERIMENT: simd
+      GOAEC3_EXPECT_LANE: avx2
+      COUNT: ${{ inputs.count || '6' }}
+      BENCHTIME: ${{ inputs.benchtime || '2000x' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Cache WebRTC sources
+        uses: actions/cache@v4
+        with:
+          path: tmp_check/webrtc-m141
+          key: webrtc-m141-${{ hashFiles('scripts/fetch-webrtc.sh') }}
+      - name: Fetch WebRTC sources
+        run: bash scripts/fetch-webrtc.sh
+      - name: clang
+        run: |
+          command -v clang >/dev/null || { sudo apt-get update && sudo apt-get install -y clang; }
+          clang --version
+      - name: CPU
+        run: |
+          lscpu | tee cpu.txt
+          model=$(lscpu | sed -n 's/^Model name: *//p' | head -1)
+          echo "CPU_MODEL=${model:-unknown}" >>"$GITHUB_ENV"
+          if grep -qw avx512f /proc/cpuinfo; then echo "AVX512=yes"; else echo "AVX512=no"; fi >>"$GITHUB_ENV"
+      - name: Build
+        run: go test -c -o bench.test -tags webrtc_src_oracle ./internal/webrtcoracle/
+      - name: Benchmark
+        run: |
+          : >on.txt
+          : >off.txt
+          for _ in $(seq "$COUNT"); do
+            ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc/.*/go$' \
+              -test.benchtime "$BENCHTIME" -test.count 1 | tee -a on.txt
+            GODEBUG=asyncpreemptoff=1 ./bench.test -test.run '^$' -test.bench 'BenchmarkEc3VsLibwebrtc/.*/go$' \
+              -test.benchtime "$BENCHTIME" -test.count 1 | tee -a off.txt
+          done
+      - name: Summary
+        run: |
+          cat >"$RUNNER_TEMP/median.awk" <<'AWK'
+          # Prints "case median_us" per case of BenchmarkEc3VsLibwebrtc/case/go.
+          function median(s,   a, n, i, j, t) {
+            n = split(s, a, " ")
+            for (i = 2; i <= n; i++) for (j = i; j > 1 && a[j-1] + 0 > a[j] + 0; j--) { t = a[j]; a[j] = a[j-1]; a[j-1] = t }
+            return n % 2 ? a[(n+1)/2] : (a[n/2] + a[n/2+1]) / 2
+          }
+          $1 ~ /^BenchmarkEc3VsLibwebrtc\// && $4 == "ns/op" { split($1, p, "/"); v[p[2]] = v[p[2]] " " $3 }
+          END { for (c in v) printf "%s %.2f\n", c, median(v[c]) / 1000 }
+          AWK
+          awk -f "$RUNNER_TEMP/median.awk" on.txt | LC_ALL=C sort >on.rows
+          awk -f "$RUNNER_TEMP/median.awk" off.txt | LC_ALL=C sort >off.rows
+          LC_ALL=C join on.rows off.rows | awk -v cpu="$CPU_MODEL" -v avx512="$AVX512" \
+            '{ printf "%s,%s,%s,%.2f,%.2f,%.3f\n", cpu, avx512, $1, $2, $3, $2 / $3 }' >rows.csv
+          {
+            echo "### Asynchronous preemption, AVX2 lane with GOEXPERIMENT=simd"
+            echo
+            echo "CPU: $CPU_MODEL, AVX-512: $AVX512. Go ${GO_VERSION}. Median of $COUNT alternating rounds, µs per 10 ms frame."
+            echo
+            echo "| Case | default | asyncpreemptoff=1 | default / off |"
+            echo "| --- | --- | --- | --- |"
+            awk -F, '{ printf "| %s | %s | %s | %s |\n", $3, $4, $5, $6 }' rows.csv
+          } >>"$GITHUB_STEP_SUMMARY"
+          cat rows.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preempt-${{ matrix.copy }}
+          path: |
+            on.txt
+            off.txt
+            rows.csv
+            cpu.txt
+
   summary:
     needs: bench
-    if: always()
+    if: ${{ always() && !inputs.preempt }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
