@@ -222,19 +222,29 @@ Apple M4 Max, against the prebuilt libwebrtc:
 
 GitHub-hosted runners (`.github/workflows/bench.yml`), against libwebrtc
 built from source with clang `-O2` in the same job. The runner CPU varies per
-job, so these are ratios over the three cases:
+job, so compare ratios (Go/C++ time; below 1 goaec3 is faster):
 
-| CPU | Lane | Go/C++ |
-| --- | --- | --- |
-| Neoverse-N2 | NEON | 0.86–0.89× |
-| AMD EPYC Zen 4 | AVX2 | 0.78–0.86× |
-| AMD EPYC Zen 3 | AVX2 | 0.81–0.95× |
-| AMD EPYC Zen 4 | SSE2 | 0.85–0.93× |
-| AMD EPYC Zen 3 | SSE2 | 0.88–0.91× |
-| Intel Xeon 6975P-C | AVX2 | 0.93–1.01× (measured before the current x86 kernels) |
+| CPU | Lane | 16 kHz mono | 48 kHz mono | 48 kHz stereo |
+| --- | --- | --- | --- | --- |
+| Neoverse-N2 | NEON | 0.87× | 0.85× | 0.87× |
+| AMD EPYC 9V74 (Zen 4) | AVX2 | 0.82× | 0.78× | 0.73× |
+| AMD EPYC 9V74 (Zen 4) | SSE2 | 0.90× | 0.89× | 0.80× |
 
-Without `GOEXPERIMENT=simd` the same lanes run as pure Go: about 2.1–2.3× the
-time of libwebrtc on Neoverse-N2, 2.2–2.5× in the SSE2 lane and 4.5–5.3× in the
+Intel Xeon runners were not drawn for the current code; the last Intel AVX2
+measurement (0.93–1.01×) predates the current x86 kernels.
+
+The bench signal keeps the far end loud all the time. With a silent or
+quiet far end, or a silent microphone, goaec3 skips work that provably
+leaves its output and state unchanged:
+
+| Lane | Far end silent | Far end quiet | Capture silent |
+| --- | --- | --- | --- |
+| NEON, Neoverse-N2 | 0.53–0.63× | 0.54–0.64× | 0.83–0.94× |
+| AVX2, Zen 4 | 0.65–0.67× | 0.62–0.70× | 0.71–0.85× |
+| SSE2, Zen 4 | 0.59–0.66× | 0.60–0.64× | 0.77–0.86× |
+
+Without `GOEXPERIMENT=simd` the same lanes run as pure Go: about 2.0–2.2× the
+time of libwebrtc on Neoverse-N2, 1.95–2.4× in the SSE2 lane and 4.1–4.5× in the
 AVX2 lane, whose fused multiply-adds then run in software.
 
 Memory and garbage collection, per canceller with the default config
