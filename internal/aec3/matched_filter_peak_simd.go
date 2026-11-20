@@ -63,12 +63,12 @@ func dlyMaxSquarePeakIndex(h []float32) int {
 // dlyPeakLanes128 sets mv[l] and iv[l] to the largest square, and its
 // earliest index, among p[k] with k = l (mod 16), from a -1 sentinel.
 func dlyPeakLanes128(p []float32, mv *[16]float32, iv *[16]int32) {
-	m0 := archsimd.BroadcastFloat32x4(-1)
+	m0 := kernSplat4(-1)
 	m1, m2, m3 := m0, m0, m0
-	i0 := archsimd.BroadcastInt32x4(-1)
+	i0 := kernSplatI4(-1)
 	i1, i2, i3 := i0, i0, i0
 	cur := archsimd.LoadInt32x4Array(&[4]int32{0, 1, 2, 3})
-	step := archsimd.BroadcastInt32x4(4)
+	step := kernSplatI4(4)
 	for len(p) >= 16 {
 		pp := (*[16]float32)(p)
 		v0 := archsimd.LoadFloat32x4Array((*[4]float32)(pp[0:4]))

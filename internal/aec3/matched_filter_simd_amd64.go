@@ -284,7 +284,7 @@ func dlyAxpyAccErrSse2(h, xa, xb []float32, alpha, y float32, accErr []float32) 
 	xa = xa[:n:n]
 	xb = xb[:n:n]
 	accErr = accErr[: n/4 : n/4]
-	a := archsimd.BroadcastFloat32x4(alpha)
+	a := kernSplat4(alpha)
 	var s float32
 	for g := 0; g < len(accErr)-1; g += 2 {
 		i := 4 * g
@@ -316,7 +316,7 @@ func dlyAxpy(h, x []float32, alpha float32) {
 	}
 	n := len(h)
 	x = x[:n:n]
-	a := archsimd.BroadcastFloat32x4(alpha)
+	a := kernSplat4(alpha)
 	i := 0
 	for ; i < n-15; i += 16 {
 		hh := (*[16]float32)(h[i : i+16])
@@ -525,14 +525,22 @@ var dlyPeakSimd = dlyUseAvx
 //
 //go:noinline
 func dlyZeroAcc(acc *[16]float32) {
-	if !dlyUseAvx {
+	switch {
+	case kernHasAVX2:
+		var z archsimd.Float32x8
+		z.StoreArray((*[8]float32)(acc[0:8]))
+		z.StoreArray((*[8]float32)(acc[8:16]))
+		archsimd.ClearAVXUpperBits()
+	case dlyUseAvx:
+		// AVX without AVX2 (the SSE2 lane's kernels): 128-bit stores.
+		var z archsimd.Float32x4
+		z.StoreArray((*[4]float32)(acc[0:4]))
+		z.StoreArray((*[4]float32)(acc[4:8]))
+		z.StoreArray((*[4]float32)(acc[8:12]))
+		z.StoreArray((*[4]float32)(acc[12:16]))
+	default:
 		*acc = [16]float32{}
-		return
 	}
-	var z archsimd.Float32x8
-	z.StoreArray((*[8]float32)(acc[0:8]))
-	z.StoreArray((*[8]float32)(acc[8:16]))
-	archsimd.ClearAVXUpperBits()
 }
 
 // dlyPeakLanes256 is dlyPeakLanes128 with two 256-bit vectors per 16
@@ -648,6 +656,10 @@ func dlyCoreLaneKernel(g int, xStartIndex int, x2SumThreshold, smoothing float32
 // kernel call covers all of h. Otherwise the pending update runs as its own
 // pass first and the dot product follows the C++ chunk loop. The update of
 // every element is the same operation either way.
+//
+// dlyCoreLaneKernel admits g = 16 only with dlyUseFma; the AVX2 kernels are
+// called behind their own test of it so that every 256-bit instruction
+// follows one (TestSimdInstructionsGated).
 func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32) {
 	hSize := len(h)
@@ -669,7 +681,7 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 				xa := x[pendStart : pendStart+hSize]
 				if g == 8 {
 					s, x2Sum = dlyAxpyDotSse2Sum(h, xa, xb, pend.alpha)
-				} else {
+				} else if dlyUseFma {
 					s, x2Sum = dlyAxpyFmaDotAvx2Sum(h, xa, xb, pend.alpha)
 				}
 			} else {
@@ -679,7 +691,7 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 				}
 				if g == 8 {
 					s, x2Sum = dlyDotSse2Sum(h, xb)
-				} else {
+				} else if dlyUseFma {
 					s, x2Sum = dlyDotAvx2Sum(h, xb)
 				}
 			}
@@ -708,7 +720,7 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 		case reduced:
 		case g == 8:
 			s, x2Sum = dlyReduceSse2((*[16]float32)(acc[:16]), s, x2Sum)
-		default:
+		case dlyUseFma:
 			s, x2Sum = dlyReduceAvx2(&acc, s, x2Sum)
 		}
 
@@ -742,7 +754,9 @@ func dlyLaneDotX2(g int, h, x []float32, acc *[32]float32) {
 		dlyDotSse2(h, x, (*[16]float32)(acc[:16]))
 		return
 	}
-	dlyDotAvx2(h, x, acc)
+	if dlyUseFma {
+		dlyDotAvx2(h, x, acc)
+	}
 }
 
 func dlyDotSse2(h, x []float32, acc *[16]float32) {
@@ -802,6 +816,13 @@ func dlyDotAvx2(h, x []float32, acc *[32]float32) {
 //
 //go:noinline
 func dlyZeroAcc32(acc *[32]float32) {
+	if !kernHasAVX2 {
+		// AVX without AVX2 (the SSE2 lane's kernels): the SSE2 lane uses
+		// the first sixteen elements.
+		dlyZeroAcc((*[16]float32)(acc[0:16]))
+		dlyZeroAcc((*[16]float32)(acc[16:32]))
+		return
+	}
 	var z archsimd.Float32x8
 	z.StoreArray((*[8]float32)(acc[0:8]))
 	z.StoreArray((*[8]float32)(acc[8:16]))
@@ -884,7 +905,7 @@ func dlyAxpyDotSse2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32) {
 	n := len(h)
 	xa = xa[:n:n]
 	xb = xb[:n:n]
-	a := archsimd.BroadcastFloat32x4(alpha)
+	a := kernSplat4(alpha)
 	var sv, s4, x2, x24 archsimd.Float32x4
 	for i := 0; i < n-7; i += 8 {
 		hh := (*[8]float32)(h[i : i+8])
