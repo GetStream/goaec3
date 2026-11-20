@@ -307,8 +307,18 @@ its first, and one pointer-free object for its arrays (the arena).
   another size, when stereo content starts or ends: its block processor has
   an arena of its own, which is reused when the new arrays fit and replaced
   when they do not.
-- A view made by `NewX` stands alone (`bind(st, nil)`): tests and the
+- A view made by `NewX` stands alone (`bind(st, bindAlone)`): tests and the
   oracle harness use the components as before.
+- A method of a view reaches a field of the state through the view's
+  pointer to it, which is one load more than a field of its own, and after
+  a store the compiler loads that pointer again. The small views (the
+  filters, the rings, the analyzers and estimators) therefore have value
+  receivers, which keep the pointer in a register; only the methods that
+  set a field of the view itself (`init`, `bind`, a slice that is replaced)
+  have pointer receivers. A view keeps a copy of the fields of its state
+  that never change and that its accessors read (the dimensions of a ring).
+  `TestEc3ViewPerCall` runs a view bound per call against a view bound once,
+  bit for bit: whatever changes between calls must be in the state.
 - Per-channel state of up to `inlineChannels` capture channels lives in
   arrays of the state; the component derives the slices on use
   (`channelState`). What more channels need, and the optional components,
