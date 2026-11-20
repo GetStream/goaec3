@@ -28,10 +28,10 @@ func FloatS16ToS16Slice(src []float32, dest []int16) {
 	}
 	n := len(src)
 	dest = dest[:n]
-	hi := archsimd.BroadcastFloat32x4(32767)
-	lo := archsimd.BroadcastFloat32x4(-32768)
-	sign := archsimd.BroadcastUint32x4(1 << 31)
-	half := archsimd.BroadcastUint32x4(0x3f000000) // 0.5
+	hi := bsSplat4(32767)
+	lo := bsSplat4(-32768)
+	sign := bsSplatU4(1 << 31)
+	half := bsSplatU4(0x3f000000) // 0.5
 	i := 0
 	for ; i+8 <= n; i += 8 {
 		a := bsClamp4(archsimd.LoadFloat32x4Array((*[4]float32)(src[i:i+4])), hi, lo)
@@ -78,9 +78,9 @@ func FloatToFloatS16Slice(src, dest []float32) {
 	if bsHasAVX2 {
 		i = bsClampScale256(src, dest, 1, -1, 32768)
 	}
-	hi := archsimd.BroadcastFloat32x4(1)
-	lo := archsimd.BroadcastFloat32x4(-1)
-	scale := archsimd.BroadcastFloat32x4(32768)
+	hi := bsSplat4(1)
+	lo := bsSplat4(-1)
+	scale := bsSplat4(32768)
 	for ; i+4 <= n; i += 4 {
 		v := archsimd.LoadFloat32x4Array((*[4]float32)(src[i : i+4]))
 		bsClamp4(v, hi, lo).Mul(scale).StoreArray((*[4]float32)(dest[i : i+4]))
@@ -101,9 +101,9 @@ func FloatS16ToFloatSlice(src, dest []float32) {
 	if bsHasAVX2 {
 		i = bsClampScale256(src, dest, 32768, -32768, 1.0/32768)
 	}
-	hi := archsimd.BroadcastFloat32x4(32768)
-	lo := archsimd.BroadcastFloat32x4(-32768)
-	scale := archsimd.BroadcastFloat32x4(1.0 / 32768)
+	hi := bsSplat4(32768)
+	lo := bsSplat4(-32768)
+	scale := bsSplat4(1.0 / 32768)
 	for ; i+4 <= n; i += 4 {
 		v := archsimd.LoadFloat32x4Array((*[4]float32)(src[i : i+4]))
 		bsClamp4(v, hi, lo).Mul(scale).StoreArray((*[4]float32)(dest[i : i+4]))

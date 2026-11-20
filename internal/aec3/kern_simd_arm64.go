@@ -88,3 +88,9 @@ func kernVectorSqrt(x []float32) {
 	}
 	kernVectorSqrtGeneric(x[j:])
 }
+
+// kernSplat4 returns x in all four lanes.
+func kernSplat4(x float32) archsimd.Float32x4 { return archsimd.BroadcastFloat32x4(x) }
+
+// kernSplatI4 is kernSplat4 for int32 lanes.
+func kernSplatI4(x int32) archsimd.Int32x4 { return archsimd.BroadcastInt32x4(x) }

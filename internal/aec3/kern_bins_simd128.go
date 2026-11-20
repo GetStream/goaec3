@@ -56,7 +56,7 @@ func kernAxpy(x []float32, a float32, z []float32) {
 		kernAxpy64((*[64]float32)(x), a, (*[64]float32)(z))
 		return
 	}
-	av := archsimd.BroadcastFloat32x4(a)
+	av := kernSplat4(a)
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
 		archsimd.LoadFloat32x4(z[j:]).Add(archsimd.LoadFloat32x4(x[j:]).Mul(av)).Store(z[j:])
@@ -79,7 +79,7 @@ func kernOneMinusSq(x, z []float32) {
 		kernOneMinusSq64((*[64]float32)(x), (*[64]float32)(z))
 		return
 	}
-	one := archsimd.BroadcastFloat32x4(1)
+	one := kernSplat4(1)
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
 		v := archsimd.LoadFloat32x4(x[j:])
@@ -154,7 +154,7 @@ func kernStdMaxScalar(x []float32, a float32) {
 		kernStdMaxScalar64((*[64]float32)(x), a)
 		return
 	}
-	av := archsimd.BroadcastFloat32x4(a)
+	av := kernSplat4(a)
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
 		vStdMax(archsimd.LoadFloat32x4(x[j:]), av).Store(x[j:])
@@ -177,7 +177,7 @@ func kernSmooth(s, y []float32, c float32) {
 		kernSmooth64((*[64]float32)(s), (*[64]float32)(y), c)
 		return
 	}
-	cv := archsimd.BroadcastFloat32x4(c)
+	cv := kernSplat4(c)
 	j := 0
 	for ; j+4 <= len(s); j += 4 {
 		a := archsimd.LoadFloat32x4(s[j:])
@@ -196,7 +196,7 @@ func kernNoAudibleEcho(nearend, echo, masker, enrT, enrS, emrT, gain *[FftLength
 		kernNoAudibleEchoGeneric(nearend, echo, masker, enrT, enrS, emrT, gain)
 		return
 	}
-	one := archsimd.BroadcastFloat32x4(1)
+	one := kernSplat4(1)
 	var zero f32x4
 	f := func(k int) {
 		_ = zero // a captured vector makes the compiler inline the closure
@@ -240,9 +240,9 @@ func kernMinGain(w *[FftLengthBy2Plus1]float32, minEchoPower float32, minGain *[
 		kernMinGainGeneric(w, minEchoPower, minGain)
 		return
 	}
-	one := archsimd.BroadcastFloat32x4(1)
+	one := kernSplat4(1)
 	var zero f32x4
-	mp := archsimd.BroadcastFloat32x4(minEchoPower)
+	mp := kernSplat4(minEchoPower)
 	f := func(k int) {
 		_ = zero // a captured vector makes the compiler inline the closure
 		wv := archsimd.LoadFloat32x4Array((*[4]float32)(w[k : k+4]))
@@ -274,9 +274,9 @@ func kernWeigh(threshold, normalizer float32, echo, weightedEcho []float32) {
 		return
 	}
 	weightedEcho = weightedEcho[:len(echo)]
-	th := archsimd.BroadcastFloat32x4(threshold)
-	nv := archsimd.BroadcastFloat32x4(normalizer)
-	one := archsimd.BroadcastFloat32x4(1)
+	th := kernSplat4(threshold)
+	nv := kernSplat4(normalizer)
+	one := kernSplat4(1)
 	var zero f32x4
 	j := 0
 	for ; j+4 <= len(echo); j += 4 {
@@ -293,9 +293,9 @@ func kernNoiseUpdate(n, s *[FftLengthBy2Plus1]float32) {
 		kernNoiseUpdateGeneric(n, s)
 		return
 	}
-	c09 := archsimd.BroadcastFloat32x4(0.9)
-	c01 := archsimd.BroadcastFloat32x4(0.1)
-	c1 := archsimd.BroadcastFloat32x4(1.0002)
+	c09 := kernSplat4(0.9)
+	c01 := kernSplat4(0.1)
+	c1 := kernSplat4(1.0002)
 	var zero f32x4
 	f := func(k int) {
 		_ = zero // a captured vector makes the compiler inline the closure
@@ -333,7 +333,7 @@ func kernNoiseInitialUpdate(n, ini *[FftLengthBy2Plus1]float32) {
 		kernNoiseInitialUpdateGeneric(n, ini)
 		return
 	}
-	c := archsimd.BroadcastFloat32x4(0.001)
+	c := kernSplat4(0.001)
 	var zero f32x4
 	f := func(k int) {
 		_ = zero // a captured vector makes the compiler inline the closure
@@ -367,9 +367,9 @@ func kernFir3(x []float32, h *[3]float32, out []float32, from, to int) {
 		kernFir3Generic(x, h, out, from, to)
 		return
 	}
-	h0 := archsimd.BroadcastFloat32x4(h[0])
-	h1 := archsimd.BroadcastFloat32x4(h[1])
-	h2 := archsimd.BroadcastFloat32x4(h[2])
+	h0 := kernSplat4(h[0])
+	h1 := kernSplat4(h[1])
+	h2 := kernSplat4(h[2])
 	var zero f32x4
 	k := from
 	if from >= 2 {
@@ -420,7 +420,7 @@ func kernReverb(r, p, s []float32, d float32) {
 		kernReverb64((*[64]float32)(r), (*[64]float32)(p), (*[64]float32)(s), d)
 		return
 	}
-	dv := archsimd.BroadcastFloat32x4(d)
+	dv := kernSplat4(d)
 	j := 0
 	for ; j+4 <= len(r); j += 4 {
 		q := archsimd.LoadFloat32x4(p[j:]).Mul(archsimd.LoadFloat32x4(s[j:]))
@@ -468,9 +468,9 @@ func kernRefinedMu(X2, hError, E2 *[FftLengthBy2Plus1]float32, gate, sp float32,
 		kernRefinedMuGeneric(X2, hError, E2, gate, sp, mu)
 		return
 	}
-	half := archsimd.BroadcastFloat32x4(0.5)
-	gv := archsimd.BroadcastFloat32x4(gate)
-	spv := archsimd.BroadcastFloat32x4(sp)
+	half := kernSplat4(0.5)
+	gv := kernSplat4(gate)
+	spv := kernSplat4(sp)
 	var zero f32x4
 	f := func(k int) {
 		_ = zero // a captured vector makes the compiler inline the closure
@@ -504,7 +504,7 @@ func kernRefinedHError(mu, X2, hError *[FftLengthBy2Plus1]float32) {
 		kernRefinedHErrorGeneric(mu, X2, hError)
 		return
 	}
-	half := archsimd.BroadcastFloat32x4(0.5)
+	half := kernSplat4(0.5)
 	var zero f32x4
 	f := func(k int) {
 		_ = zero // a captured vector makes the compiler inline the closure
@@ -534,10 +534,10 @@ func kernRefinedLeak(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []floa
 		return
 	}
 	e := (*[FftLengthBy2Plus1]float32)(erl)
-	lc := archsimd.BroadcastFloat32x4(leakageConverged)
-	ld := archsimd.BroadcastFloat32x4(leakageDiverged)
-	fl := archsimd.BroadcastFloat32x4(errorFloor)
-	ce := archsimd.BroadcastFloat32x4(errorCeil)
+	lc := kernSplat4(leakageConverged)
+	ld := kernSplat4(leakageDiverged)
+	fl := kernSplat4(errorFloor)
+	ce := kernSplat4(errorCeil)
 	var zero f32x4
 	f := func(k int) {
 		_ = zero // a captured vector makes the compiler inline the closure
@@ -574,8 +574,8 @@ func kernCoarseMu(X2 *[FftLengthBy2Plus1]float32, gate, rate float32, mu *[FftLe
 		kernCoarseMuGeneric(X2, gate, rate, mu)
 		return
 	}
-	gv := archsimd.BroadcastFloat32x4(gate)
-	rv := archsimd.BroadcastFloat32x4(rate)
+	gv := kernSplat4(gate)
+	rv := kernSplat4(rate)
 	var zero f32x4
 	f := func(k int) {
 		_ = zero // a captured vector makes the compiler inline the closure
@@ -614,8 +614,8 @@ func kernReverbScalar(r, p []float32, s, d float32) {
 		kernReverbScalar64((*[64]float32)(r), (*[64]float32)(p), s, d)
 		return
 	}
-	sv := archsimd.BroadcastFloat32x4(s)
-	dv := archsimd.BroadcastFloat32x4(d)
+	sv := kernSplat4(s)
+	dv := kernSplat4(d)
 	j := 0
 	for ; j+4 <= len(r); j += 4 {
 		q := archsimd.LoadFloat32x4(p[j:]).Mul(sv)
@@ -634,13 +634,13 @@ func kernErlUpdate(X2, Y2, erl *[FftLengthBy2Plus1]float32, hold *[FftLengthBy2]
 		kernErlUpdateGeneric(X2, Y2, erl, hold)
 		return
 	}
-	x2Min := archsimd.BroadcastFloat32x4(stErlX2Min)
-	c01 := archsimd.BroadcastFloat32x4(0.1)
-	two := archsimd.BroadcastFloat32x4(2)
-	minErl := archsimd.BroadcastFloat32x4(stMinErl)
-	maxErl := archsimd.BroadcastFloat32x4(stMaxErl)
-	hold1000 := archsimd.BroadcastInt32x4(1000)
-	one := archsimd.BroadcastInt32x4(1)
+	x2Min := kernSplat4(stErlX2Min)
+	c01 := kernSplat4(0.1)
+	two := kernSplat4(2)
+	minErl := kernSplat4(stMinErl)
+	maxErl := kernSplat4(stMaxErl)
+	hold1000 := kernSplatI4(1000)
+	one := kernSplatI4(1)
 	var zero archsimd.Int32x4
 	f := func(k int) {
 		_ = x2Min // a captured vector makes the compiler inline the closure
@@ -681,7 +681,7 @@ func kernPeakBin(x *[FftLengthBy2Plus1]float32) int {
 	best := kernLd4(x, 0)
 	bins := archsimd.LoadInt32x4Array(&[4]int32{0, 1, 2, 3})
 	bestBins := bins
-	four := archsimd.BroadcastInt32x4(4)
+	four := kernSplatI4(4)
 	f := func(k int) {
 		_ = four // a captured vector makes the compiler inline the closure
 		v := kernLd4(x, k)
@@ -731,7 +731,7 @@ func kernNarrowBands(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32)
 		kernNarrowBandsGeneric(x, narrow)
 		return
 	}
-	three := archsimd.BroadcastFloat32x4(3)
+	three := kernSplat4(3)
 	f := func(k int) {
 		_ = three // a captured vector makes the compiler inline the closure
 		// Bins k+1 to k+4: x[k:k+4] and x[k+2:k+6] are their neighbours.
@@ -766,11 +766,11 @@ func kernNoiseFloorUpdate(renderPower, noiseFloor *[FftLengthBy2Plus1]float32, c
 		kernNoiseFloorUpdateGeneric(renderPower, noiseFloor, counter, hold, minPower)
 		return
 	}
-	holdV := archsimd.BroadcastInt32x4(hold)
-	one := archsimd.BroadcastInt32x4(1)
+	holdV := kernSplatI4(hold)
+	one := kernSplatI4(1)
 	var zero archsimd.Int32x4
-	c11 := archsimd.BroadcastFloat32x4(1.1)
-	minV := archsimd.BroadcastFloat32x4(minPower)
+	c11 := kernSplat4(1.1)
+	minV := kernSplat4(minPower)
 	f := func(k int) {
 		_ = c11 // a captured vector makes the compiler inline the closure
 		p := kernLd4(renderPower, k)
@@ -809,7 +809,7 @@ func kernStdMinScalar(x []float32, a float32) {
 		kernStdMinScalarGeneric(x, a)
 		return
 	}
-	av := archsimd.BroadcastFloat32x4(a)
+	av := kernSplat4(a)
 	j := 0
 	for ; j+4 <= len(x); j += 4 {
 		vStdMin(archsimd.LoadFloat32x4(x[j:]), av).Store(x[j:])
@@ -832,7 +832,7 @@ func kernSumMaxSq(x *[BlockSize]float32, sum, mx float32) (float32, float32) {
 	for _, v := range x {
 		sum += float32(v * v)
 	}
-	m := archsimd.BroadcastFloat32x4(mx)
+	m := kernSplat4(mx)
 	f := func(k int) {
 		_ = m // a captured vector makes the compiler inline the closure
 		v := kernLd64(x, k)

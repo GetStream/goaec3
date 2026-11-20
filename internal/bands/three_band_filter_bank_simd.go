@@ -159,8 +159,8 @@ type bsCoeffs struct{ c0, c1, c2, c3 archsimd.Float32x4 }
 
 func bsBroadcastCoeffs(filter int) bsCoeffs {
 	c := &bsFilterCoeffs[filter]
-	return bsCoeffs{archsimd.BroadcastFloat32x4(c[0]), archsimd.BroadcastFloat32x4(c[1]),
-		archsimd.BroadcastFloat32x4(c[2]), archsimd.BroadcastFloat32x4(c[3])}
+	return bsCoeffs{bsSplat4(c[0]), bsSplat4(c[1]),
+		bsSplat4(c[2]), bsSplat4(c[3])}
 }
 
 // bsTap4 is bsFilterCore for out[k:k+4]: w is the history window
@@ -203,8 +203,8 @@ func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 	for i := range c {
 		c[i] = bsBroadcastCoeffs(i)
 	}
-	two := archsimd.BroadcastFloat32x4(2)
-	sqrt3 := archsimd.BroadcastFloat32x4(bsSqrt3)
+	two := bsSplat4(2)
+	sqrt3 := bsSplat4(bsSqrt3)
 	var zero archsimd.Float32x4
 	for k := 0; k < SplitBandSize; k += 4 {
 		w0 := (*[19]float32)(h0[k : k+19])
@@ -267,8 +267,8 @@ func bsSynthesisSIMD(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 	in0, in1, in2 *[SplitBandSize]float32, out *[FullBandSize]float32) {
 	// Modulate: the filter input is ((0 + m0*b0) + m1*b1) + m2*b2.
 	g0, g1, g2, g3, g4, g5 := &hist[0], &hist[1], &hist[2], &hist[3], &hist[4], &hist[5]
-	two := archsimd.BroadcastFloat32x4(2)
-	sqrt3 := archsimd.BroadcastFloat32x4(bsSqrt3)
+	two := bsSplat4(2)
+	sqrt3 := bsSplat4(bsSqrt3)
 	var zero archsimd.Float32x4
 	for k := 0; k < SplitBandSize; k += 4 {
 		b0 := archsimd.LoadFloat32x4Array((*[4]float32)(in0[k : k+4]))
@@ -291,7 +291,7 @@ func bsSynthesisSIMD(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 	for i := range c {
 		c[i] = bsBroadcastCoeffs(i)
 	}
-	scale := archsimd.BroadcastFloat32x4(bsSubSampling)
+	scale := bsSplat4(bsSubSampling)
 	for k := 0; k < SplitBandSize; k += 4 {
 		w0 := (*[19]float32)(g0[k : k+19])
 		w1 := (*[19]float32)(g1[k : k+19])

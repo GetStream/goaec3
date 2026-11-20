@@ -29,7 +29,7 @@ func kernSt64(a *[64]float32, k int, v f32x4) {
 
 // kernScale64 sets z = x*a.
 func kernScale64(x *[64]float32, a float32, z *[64]float32) {
-	av := archsimd.BroadcastFloat32x4(a)
+	av := kernSplat4(a)
 	f := func(k int) {
 		_ = av // a captured vector makes the compiler inline the closure
 		kernSt64(z, k, kernLd64(x, k).Mul(av))
@@ -129,7 +129,7 @@ func kernSqrt64(x *[64]float32) {
 
 // kernClamp64 sets x = std::min(std::max(x, lo), hi).
 func kernClamp64(x *[64]float32, lo, hi float32) {
-	lv, hv := archsimd.BroadcastFloat32x4(lo), archsimd.BroadcastFloat32x4(hi)
+	lv, hv := kernSplat4(lo), kernSplat4(hi)
 	f := func(k int) {
 		_ = lv // a captured vector makes the compiler inline the closure
 		kernSt64(x, k, vStdMin(vStdMax(kernLd64(x, k), lv), hv))
@@ -171,7 +171,7 @@ func kernMulAdd2x64(a, b, c, d, z *[64]float32) {
 
 // kernAxpy64 sets z += x*a.
 func kernAxpy64(x *[64]float32, a float32, z *[64]float32) {
-	av := archsimd.BroadcastFloat32x4(a)
+	av := kernSplat4(a)
 	f := func(k int) {
 		_ = av // a captured vector makes the compiler inline the closure
 		kernSt64(z, k, kernLd64(z, k).Add(kernLd64(x, k).Mul(av)))
@@ -191,7 +191,7 @@ func kernAxpy64(x *[64]float32, a float32, z *[64]float32) {
 
 // kernOneMinusSq64 sets z = 1 - x*x.
 func kernOneMinusSq64(x, z *[64]float32) {
-	one := archsimd.BroadcastFloat32x4(1)
+	one := kernSplat4(1)
 	f := func(k int) {
 		_ = one // a captured vector makes the compiler inline the closure
 		v := kernLd64(x, k)
@@ -274,7 +274,7 @@ func kernStdMax64(x, y, z *[64]float32) {
 
 // kernStdMaxScalar64 sets x = std::max(x, a).
 func kernStdMaxScalar64(x *[64]float32, a float32) {
-	av := archsimd.BroadcastFloat32x4(a)
+	av := kernSplat4(a)
 	f := func(k int) {
 		_ = av // a captured vector makes the compiler inline the closure
 		kernSt64(x, k, vStdMax(kernLd64(x, k), av))
@@ -294,7 +294,7 @@ func kernStdMaxScalar64(x *[64]float32, a float32) {
 
 // kernSmooth64 sets s = s + c*(y-s).
 func kernSmooth64(s, y *[64]float32, c float32) {
-	cv := archsimd.BroadcastFloat32x4(c)
+	cv := kernSplat4(c)
 	f := func(k int) {
 		_ = cv // a captured vector makes the compiler inline the closure
 		a := kernLd64(s, k)
@@ -335,7 +335,7 @@ func kernDiv64(x, y, z *[64]float32) {
 
 // kernReverb64 sets r = (r + p*s) * d.
 func kernReverb64(r, p, s *[64]float32, d float32) {
-	dv := archsimd.BroadcastFloat32x4(d)
+	dv := kernSplat4(d)
 	f := func(k int) {
 		_ = dv // a captured vector makes the compiler inline the closure
 		q := kernLd64(p, k).Mul(kernLd64(s, k))
@@ -356,8 +356,8 @@ func kernReverb64(r, p, s *[64]float32, d float32) {
 
 // kernReverbScalar64 sets r = (r + p*s) * d.
 func kernReverbScalar64(r, p *[64]float32, s, d float32) {
-	sv := archsimd.BroadcastFloat32x4(s)
-	dv := archsimd.BroadcastFloat32x4(d)
+	sv := kernSplat4(s)
+	dv := kernSplat4(d)
 	f := func(k int) {
 		_ = sv // a captured vector makes the compiler inline the closure
 		q := kernLd64(p, k).Mul(sv)

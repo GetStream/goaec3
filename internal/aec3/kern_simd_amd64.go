@@ -187,3 +187,19 @@ func kernVectorSqrt(x []float32) {
 	}
 	kernVectorSqrtGeneric(x[j:])
 }
+
+// kernSplat4 returns x in all four lanes with AVX instructions (VMOVSS,
+// VSHUFPS). archsimd.BroadcastFloat32x4 compiles to VBROADCASTSS from a
+// register, and BroadcastInt32x4 to VPBROADCASTD, which are AVX2
+// instructions: the 128-bit kernels run on CPUs with AVX only.
+func kernSplat4(x float32) archsimd.Float32x4 {
+	var z archsimd.Float32x4
+	v := z.SetElem(0, x)
+	return v.ConcatPermuteScalars(0, 0, 0, 0, v)
+}
+
+// kernSplatI4 is kernSplat4 for int32 lanes (VMOVD, VPSHUFD).
+func kernSplatI4(x int32) archsimd.Int32x4 {
+	var z archsimd.Int32x4
+	return z.SetElem(0, x).PermuteScalars(0, 0, 0, 0)
+}

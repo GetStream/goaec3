@@ -342,11 +342,15 @@ func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) {
 		afirMaxAbsUpdateGo(ir, h)
 		return
 	}
+	// Float32x4.Abs builds its mask with VPBROADCASTD, an AVX2 instruction.
+	abs := kernSplatI4(0x7fffffff)
 	for k := 0; k < FftLengthBy2; k += 4 {
 		p := (*[4]float32)(ir[k : k+4])
 		a := archsimd.LoadFloat32x4Array(p)
 		b := archsimd.LoadFloat32x4Array((*[4]float32)(h[k : k+4]))
-		b.IfElse(a.Abs().Less(b.Abs()), a).StoreArray(p)
+		aa := a.AsInt32x4().And(abs).AsFloat32x4()
+		ba := b.AsInt32x4().And(abs).AsFloat32x4()
+		b.IfElse(aa.Less(ba), a).StoreArray(p)
 	}
 }
 
@@ -360,9 +364,12 @@ func afirHasX86FreqResp(opt Aec3Optimization) bool {
 // ComputeFrequencyResponse_Sse2 or _Avx2: H2 = +0, then
 // H2 = _mm_max_ps(H2, |H[ch]|^2) for every channel in order (bin 64 with
 // std::max), with sixteen bins held in registers across the channels
-// instead of being cleared, loaded and stored per channel.
+// instead of being cleared, loaded and stored per channel. It tests the CPU
+// features itself, as afirHasX86FreqResp does, so that every vector
+// instruction follows a test of its feature (TestSimdInstructionsGated).
 func afirFreqRespPartitionX86(opt Aec3Optimization, hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
-	if opt == OptAvx2 {
+	switch {
+	case opt == OptAvx2 && afirHasAVX2FMA:
 		var zero archsimd.Float32x8
 		block := func(k int) {
 			_ = zero // a captured vector makes the compiler inline the closure
@@ -387,7 +394,7 @@ func afirFreqRespPartitionX86(opt Aec3Optimization, hs []FftData, h2 *[FftLength
 		block(32)
 		block(48)
 		archsimd.ClearAVXUpperBits()
-	} else {
+	case opt == OptSse2 && afirHasAVX:
 		var zero archsimd.Float32x4
 		block := func(k int) {
 			_ = zero // a captured vector makes the compiler inline the closure
@@ -415,6 +422,8 @@ func afirFreqRespPartitionX86(opt Aec3Optimization, hs []FftData, h2 *[FftLength
 		block(40)
 		block(48)
 		block(56)
+	default:
+		panic("aec3: afirFreqRespPartitionX86 without afirHasX86FreqResp")
 	}
 	h2[FftLengthBy2] = 0
 	for c := range hs {

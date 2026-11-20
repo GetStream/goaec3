@@ -31,7 +31,7 @@ func kernScale(x []float32, a float32, z []float32) {
 		j = kernScale256(x, a, z)
 	}
 	if kernHasAVX {
-		av := archsimd.BroadcastFloat32x4(a)
+		av := kernSplat4(a)
 		for ; j+4 <= len(x); j += 4 {
 			archsimd.LoadFloat32x4(x[j:]).Mul(av).Store(z[j:])
 		}
@@ -305,7 +305,7 @@ func kernClamp(x []float32, lo, hi float32) {
 		j = kernClamp256(x, lo, hi)
 	}
 	if kernHasAVX {
-		lv, hv := archsimd.BroadcastFloat32x4(lo), archsimd.BroadcastFloat32x4(hi)
+		lv, hv := kernSplat4(lo), kernSplat4(hi)
 		for ; j+4 <= len(x); j += 4 {
 			v := archsimd.LoadFloat32x4(x[j:])
 			v = lv.IfElse(v.Less(lv), v)
