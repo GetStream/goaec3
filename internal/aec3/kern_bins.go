@@ -92,6 +92,33 @@ func kernMinMaxGeneric(x []float32) (mn, mx float32) {
 	return mn, mx
 }
 
+// kernMaxAbsBits returns the largest bit pattern among the |x[i]|, 0 for
+// an empty x. The patterns of +0, the positive numbers and +Inf are ordered
+// like their values, and those of the NaNs lie above them, so the result is
+// the pattern of the largest magnitude when it is at most that of +Inf and
+// tells that x holds a NaN otherwise. The maximum of two patterns is a
+// conditional move; a float comparison that selects a float is a branch,
+// and on a signal it mispredicts.
+func kernMaxAbsBits(x []float32) uint32 {
+	const abs = 1<<31 - 1
+	var m0, m1, m2, m3 uint32
+	for len(x) >= 4 {
+		v := (*[4]float32)(x)
+		m0 = max(m0, math.Float32bits(v[0])&abs)
+		m1 = max(m1, math.Float32bits(v[1])&abs)
+		m2 = max(m2, math.Float32bits(v[2])&abs)
+		m3 = max(m3, math.Float32bits(v[3])&abs)
+		x = x[4:]
+	}
+	for _, v := range x {
+		m0 = max(m0, math.Float32bits(v)&abs)
+	}
+	return max(max(m0, m1), max(m2, m3))
+}
+
+// kernInfBits is the bit pattern of +Inf.
+const kernInfBits = 0x7F800000
+
 // kernClampGeneric sets x = std::min(std::max(x, lo), hi) element-wise
 // (SuppressionGain::GetMaxGain). For nonzero bounds lo < hi this is also
 // SafeClamp(x, lo, hi) on every input (a value equal to a bound is that

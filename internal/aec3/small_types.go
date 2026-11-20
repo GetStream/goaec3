@@ -1,5 +1,7 @@
 package aec3
 
+import "math"
+
 // DelayAdjustment mirrors EchoPathVariability::DelayAdjustment.
 type DelayAdjustment int
 
@@ -67,10 +69,21 @@ func (s *SubtractorOutput) Reset() {
 	s.Y2 = 0
 }
 
+// maxAbsOf is std::max(max, -min) of the largest and the smallest element of
+// x, each found by a loop from x[0] with "if v > max" and "if v < min".
+// Without a NaN and with an element that is not zero, that is the largest
+// magnitude in x (kernMaxAbsBits); maxAbsOfRef runs the loops.
 func maxAbsOf(x []float32) float32 {
 	if mn, mx, ok := kernMinMax(x); ok {
 		return stdMax(mx, -mn)
 	}
+	if m := kernMaxAbsBits(x); m-1 < kernInfBits {
+		return math.Float32frombits(m)
+	}
+	return maxAbsOfRef(x)
+}
+
+func maxAbsOfRef(x []float32) float32 {
 	mx, mn := x[0], x[0]
 	for _, v := range x[1:] {
 		if v > mx {

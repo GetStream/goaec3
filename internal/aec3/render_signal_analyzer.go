@@ -124,11 +124,24 @@ func (r *RenderSignalAnalyzer) identifyStrongNarrowBandComponent(renderBuffer *R
 
 // afirMaxAbsMinMax is std::max(fabs(*r.first), fabs(*r.second)) with
 // r = std::minmax_element(x).
+//
+// Without a NaN in x the two elements are a minimum and a maximum, and the
+// larger of their magnitudes is the largest magnitude in x (kernMaxAbsBits);
+// with a NaN the result depends on the order of the comparisons, which
+// afirMaxAbsMinMaxRef follows.
 func afirMaxAbsMinMax(x []float32) float32 {
-	mn, mx, ok := kernMinMax(x)
-	if !ok {
-		mn, mx = stdMinmaxElement(x)
+	if mn, mx, ok := kernMinMax(x); ok {
+		return stdMax(fabsf(mn), fabsf(mx))
 	}
+	if m := kernMaxAbsBits(x); m <= kernInfBits {
+		return math.Float32frombits(m)
+	}
+	return afirMaxAbsMinMaxRef(x)
+}
+
+// afirMaxAbsMinMaxRef is afirMaxAbsMinMax comparison for comparison.
+func afirMaxAbsMinMaxRef(x []float32) float32 {
+	mn, mx := stdMinmaxElement(x)
 	return stdMax(fabsf(mn), fabsf(mx))
 }
 

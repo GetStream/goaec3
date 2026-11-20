@@ -427,3 +427,62 @@ func TestKernBinsSites(t *testing.T) {
 		kernCheckExact(t, "Fir3", go1, wo1)
 	}
 }
+
+// The largest magnitude taken from bit patterns against the comparisons it
+// replaces: std::minmax_element with fabs (RenderSignalAnalyzer) and the
+// max/min loops of SubtractorOutput::ComputeMetrics, on blocks with zeros of
+// both signs, equal magnitudes of both signs, infinities and NaN.
+func TestKernMaxAbs(t *testing.T) {
+	rng := rand.New(rand.NewSource(91))
+	negZero := float32(math.Copysign(0, -1))
+	for trial := 0; trial < 20000; trial++ {
+		n := 1 + rng.Intn(70)
+		if trial%2 == 0 {
+			n = BlockSize
+		}
+		var x []float32
+		switch trial % 5 {
+		case 0:
+			x = kernRandVec(rng, n)
+		case 1:
+			x = kernEdgeVec(rng, n)
+		case 2:
+			x = make([]float32, n)
+			for i := range x {
+				x[i] = [4]float32{0, negZero, 0, negZero}[rng.Intn(4)]
+			}
+		case 3:
+			x = make([]float32, n)
+			for i := range x {
+				x[i] = [5]float32{0, negZero, 2, -2, 1}[rng.Intn(5)]
+			}
+		default:
+			x = kernRandVec(rng, n)
+			x[rng.Intn(n)] = [4]float32{float32(math.NaN()), float32(math.Inf(1)), float32(math.Inf(-1)), negZero}[rng.Intn(4)]
+		}
+		if kernMinMaxFast {
+			// The build's kernMinMax has its own tests; here the pure-Go
+			// path runs through its parts.
+			m := kernMaxAbsBits(x)
+			if m <= kernInfBits {
+				if got, want := math.Float32frombits(m), afirMaxAbsMinMaxRef(x); math.Float32bits(got) != math.Float32bits(want) {
+					t.Fatalf("trial %d: minmax magnitude %v, want %v", trial, got, want)
+				}
+			}
+			if m-1 < kernInfBits {
+				if got, want := math.Float32frombits(m), maxAbsOfRef(x); math.Float32bits(got) != math.Float32bits(want) {
+					t.Fatalf("trial %d: max magnitude %v, want %v", trial, got, want)
+				}
+			}
+			continue
+		}
+		got, want := afirMaxAbsMinMax(x), afirMaxAbsMinMaxRef(x)
+		if math.Float32bits(got) != math.Float32bits(want) && !(got != got && want != want) {
+			t.Fatalf("trial %d: afirMaxAbsMinMax = %v, want %v", trial, got, want)
+		}
+		got, want = maxAbsOf(x), maxAbsOfRef(x)
+		if math.Float32bits(got) != math.Float32bits(want) && !(got != got && want != want) {
+			t.Fatalf("trial %d: maxAbsOf = %v, want %v", trial, got, want)
+		}
+	}
+}
