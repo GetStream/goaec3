@@ -177,7 +177,7 @@ type EchoCanceller struct {
 	// The sides and the canceller keep their pointers at their start.
 	render  ec3Side
 	capture ec3Side
-	ec      aec3.EchoCanceller3
+	core    aec3.Ec3Core
 
 	sampleRateHz       int
 	frameLength        int
@@ -232,7 +232,7 @@ func newEchoCanceller(cfg, multichannelCfg *Config, sampleRateHz, numRenderChann
 		numCaptureChannels: numCaptureChannels,
 		exportLinearOutput: cfg.Filter.ExportLinearAecOutput,
 	}
-	e.ec.Init(cfg, multichannelCfg, sampleRateHz, numRenderChannels, numCaptureChannels)
+	e.core.Init(cfg, multichannelCfg, sampleRateHz, numRenderChannels, numCaptureChannels)
 	// The full-band copies of both sides share one array; the capture side
 	// comes first, the render side, which AnalyzeRender writes, last.
 	var captureFull, renderFull []float32
@@ -263,8 +263,10 @@ func (e *EchoCanceller) AnalyzeRender(render [][]float32) error {
 	if err := ec3CheckFrame(render, e.numRenderChannels, e.frameLength); err != nil {
 		return err
 	}
-	e.render.split(render, e.ec.RenderFrame())
-	e.ec.AnalyzeRenderFrame()
+	var ec aec3.EchoCanceller3
+	e.core.BindRender(&ec)
+	e.render.split(render, ec.RenderFrame())
+	ec.AnalyzeRenderFrame()
 	return nil
 }
 
@@ -280,7 +282,9 @@ func (e *EchoCanceller) ProcessCapture(capture [][]float32) error {
 	if err := ec3CheckFrame(capture, e.numCaptureChannels, e.frameLength); err != nil {
 		return err
 	}
-	e.processCapture(capture)
+	var ec aec3.EchoCanceller3
+	e.core.Bind(&ec)
+	e.processCapture(&ec, capture)
 	return nil
 }
 
@@ -299,8 +303,10 @@ func (e *EchoCanceller) ProcessCaptureWithLinearOutput(capture, linearOutput [][
 	if err := ec3CheckFrame(linearOutput, e.numCaptureChannels, LinearOutputFrameSize); err != nil {
 		return err
 	}
-	e.processCapture(capture)
-	linear := e.ec.LinearOutputFrame()
+	var ec aec3.EchoCanceller3
+	e.core.Bind(&ec)
+	e.processCapture(&ec, capture)
+	linear := ec.LinearOutputFrame()
 	for ch, x := range linearOutput {
 		bands.FloatS16ToFloatSlice(linear.View(0, ch), x)
 	}
@@ -348,24 +354,24 @@ func ec3CheckCompatible(a, b *Config) error {
 	return nil
 }
 
-func (e *EchoCanceller) processCapture(capture [][]float32) {
-	frame := e.ec.CaptureFrame()
+func (e *EchoCanceller) processCapture(ec *aec3.EchoCanceller3, capture [][]float32) {
+	frame := ec.CaptureFrame()
 	if e.capture.numBands == 1 {
 		for ch, x := range capture {
 			bands.FloatToFloatS16Slice(x, frame.View(0, ch))
 		}
-		e.ec.AnalyzeCaptureSamples(frame.Samples())
+		ec.AnalyzeCaptureSamples(frame.Samples())
 	} else {
 		for ch, x := range capture {
 			bands.FloatToFloatS16Slice(x, e.capture.channel(ch))
 		}
-		e.ec.AnalyzeCaptureSamples(e.capture.full)
+		ec.AnalyzeCaptureSamples(e.capture.full)
 		e.capture.analysis(frame)
 	}
 	levelChange := e.echoPathGainChange.Swap(false)
 	// With Filter.ExportLinearAecOutput the linear output framer must see
 	// every frame.
-	e.ec.ProcessCaptureFrame(e.exportLinearOutput, levelChange)
+	ec.ProcessCaptureFrame(e.exportLinearOutput, levelChange)
 	e.capture.merge(frame, capture)
 }
 
@@ -377,16 +383,26 @@ func (e *EchoCanceller) NotifyEchoPathGainChange() { e.echoPathGainChange.Store(
 // SetAudioBufferDelay provides an external estimate of the audio buffer
 // delay in milliseconds. With Delay.UseExternalDelayEstimator set in the
 // config, it is the delay the canceller aligns render and capture with.
-func (e *EchoCanceller) SetAudioBufferDelay(delayMs int) { e.ec.SetAudioBufferDelay(delayMs) }
+func (e *EchoCanceller) SetAudioBufferDelay(delayMs int) {
+	var ec aec3.EchoCanceller3
+	e.core.Bind(&ec)
+	ec.SetAudioBufferDelay(delayMs)
+}
 
 // SetCaptureOutputUsage tells the canceller whether the capture output is
 // used. When it is not (for instance while the endpoint is muted), some of
 // the processing is deactivated.
-func (e *EchoCanceller) SetCaptureOutputUsage(used bool) { e.ec.SetCaptureOutputUsage(used) }
+func (e *EchoCanceller) SetCaptureOutputUsage(used bool) {
+	var ec aec3.EchoCanceller3
+	e.core.Bind(&ec)
+	ec.SetCaptureOutputUsage(used)
+}
 
 // Metrics returns the current echo canceller metrics.
 func (e *EchoCanceller) Metrics() Metrics {
-	m := e.ec.GetMetrics()
+	var ec aec3.EchoCanceller3
+	e.core.Bind(&ec)
+	m := ec.GetMetrics()
 	return Metrics{
 		EchoReturnLoss:            m.EchoReturnLoss,
 		EchoReturnLossEnhancement: m.EchoReturnLossEnhancement,
@@ -399,3 +415,11 @@ func (e *EchoCanceller) NumRenderChannels() int { return e.numRenderChannels }
 
 // NumCaptureChannels returns the number of capture channels.
 func (e *EchoCanceller) NumCaptureChannels() int { return e.numCaptureChannels }
+
+// stereoActive reports whether e processes its render signal in stereo (for
+// tests; it belongs to the capture side).
+func stereoActive(e *EchoCanceller) bool {
+	var ec aec3.EchoCanceller3
+	e.core.Bind(&ec)
+	return ec.StereoRenderProcessingActiveForTesting()
+}

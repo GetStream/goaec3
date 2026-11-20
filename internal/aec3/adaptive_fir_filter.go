@@ -469,6 +469,13 @@ func (h FirCoefficients) Clone() FirCoefficients {
 
 // AdaptiveFirFilter is a frequency-domain partitioned adaptive filter.
 type AdaptiveFirFilter struct {
+	*afirState
+	H FirCoefficients
+}
+
+// afirState is the state of an AdaptiveFirFilter but its coefficients.
+type afirState struct {
+	hSpan                         span
 	fft                           Aec3Fft
 	optimization                  Aec3Optimization
 	numRenderChannels             int
@@ -479,7 +486,6 @@ type AdaptiveFirFilter struct {
 	targetSizePartitions          int
 	oldTargetSizePartitions       int
 	sizeChangeCounter             int
-	H                             FirCoefficients
 	partitionToConstrain          int
 
 	// Bookkeeping of the zero-gain skip (adaptAndUpdateSizeKnownRender) and
@@ -585,6 +591,7 @@ func afirHoldsNegZero(h []FftData) bool {
 
 func NewAdaptiveFirFilter(maxSizePartitions, initialSizePartitions, sizeChangeDurationBlocks, numRenderChannels int, optimization Aec3Optimization) *AdaptiveFirFilter {
 	f := &AdaptiveFirFilter{}
+	f.bind(&afirState{}, nil)
 	f.init(maxSizePartitions, initialSizePartitions, sizeChangeDurationBlocks, numRenderChannels, optimization,
 		make([]FftData, maxSizePartitions*numRenderChannels))
 	return f
@@ -595,7 +602,8 @@ func NewAdaptiveFirFilter(maxSizePartitions, initialSizePartitions, sizeChangeDu
 func (f *AdaptiveFirFilter) init(maxSizePartitions, initialSizePartitions, sizeChangeDurationBlocks, numRenderChannels int,
 	optimization Aec3Optimization, storage []FftData) {
 	n := maxSizePartitions * numRenderChannels
-	*f = AdaptiveFirFilter{
+	f.H = FirCoefficients{numChannels: numRenderChannels, data: storage[:n:n]}
+	*f.afirState = afirState{
 		optimization:             optimization,
 		numRenderChannels:        numRenderChannels,
 		maxSizePartitions:        maxSizePartitions,
@@ -603,12 +611,18 @@ func (f *AdaptiveFirFilter) init(maxSizePartitions, initialSizePartitions, sizeC
 		currentSizePartitions:    initialSizePartitions,
 		targetSizePartitions:     initialSizePartitions,
 		oldTargetSizePartitions:  initialSizePartitions,
-		H:                        FirCoefficients{numChannels: numRenderChannels, data: storage[:n:n]},
 	}
 	f.oneBySizeChangeDurationBlocks = 1 / float32(f.sizeChangeDurationBlocks)
 	f.tracked = maxSizePartitions <= afirTrackedPartitions
 	f.zeroPartitions(0, f.maxSizePartitions)
 	f.SetSizePartitions(f.currentSizePartitions, true)
+}
+
+// bind makes f the view of st.
+func (f *AdaptiveFirFilter) bind(st *afirState, b *binder) {
+	f.afirState = st
+	f.H.numChannels = st.numRenderChannels
+	b.fft(&f.H.data, &st.hSpan)
 }
 
 // HandleEchoPathChange clears the partitions beyond the current size.

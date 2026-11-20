@@ -223,18 +223,95 @@ func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue, re
 // not be called concurrently with each other.
 //
 // The frames, blocks and framing buffers are views of one pointer-free
-// array (storage), computed from their offsets on use, and the block
-// processor is held by value, so the garbage collector follows few pointers
-// per canceller.
+// array (storage), computed from their offsets on use.
+//
+// An EchoCanceller3 is a view of an Ec3Core, which keeps the state: the one
+// NewEchoCanceller3 returns is bound for good, Ec3Core.Bind binds one for a
+// call.
 type EchoCanceller3 struct {
-	// The fields that hold pointers come first, the block processor (whose
-	// own come first too) after them and the pointer-free state last: the
-	// garbage collector reads a canceller up to its last pointer.
+	*ec3State
+	core                     *Ec3Core
 	storage                  []float32 // every sample buffer but the transfer queue
-	renderTransferQueue      ec3RenderTransferQueue
-	renderWriter             ec3RenderWriter
+	renderTransferQueue      *ec3RenderTransferQueue
 	blockProcessorForTesting *BlockProcessor // set by SetBlockProcessorForTesting
 	blockProcessor           BlockProcessor
+}
+
+// Ec3Core is what a canceller keeps between calls: a few pointers at its
+// start (the sample buffers, the render transfer queue, the arenas of the
+// block processor), which is all the garbage collector reads of it, and the
+// pointer-free state of every component. Bind and BindRender make an
+// EchoCanceller3 the view of it that has the methods.
+//
+// The render side (BindRender and the render-side methods of its view) may
+// run concurrently with the capture side: it reads storage, which is set
+// once, and the queue.
+type Ec3Core struct {
+	storage []float32
+	queue   ec3RenderTransferQueue
+	bp      bpArenas
+	bpExtra *bpExtra
+	st      ec3State
+}
+
+// Init sets up c, which must be the zero value.
+func (c *Ec3Core) Init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
+	numRenderChannels, numCaptureChannels int) {
+	var e EchoCanceller3
+	c.BindRender(&e)
+	e.blockProcessor.bind(&c.st.blockProcessor, nil)
+	e.init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels)
+}
+
+// BindRender makes e the view of c for the render-side methods (RenderFrame,
+// AnalyzeRenderFrame, AnalyzeRender).
+func (c *Ec3Core) BindRender(e *EchoCanceller3) {
+	e.ec3State = &c.st
+	e.core = c
+	e.storage = c.storage
+	e.renderTransferQueue = &c.queue
+}
+
+// Bind makes e the view of c for the capture side.
+func (c *Ec3Core) Bind(e *EchoCanceller3) {
+	c.BindRender(e)
+	b := binder{mode: bindView, a: c.bp, x: c.bpExtra}
+	if b.x == nil {
+		b.x = &bpNoExtra
+	}
+	e.blockProcessor.bind(&c.st.blockProcessor, &b)
+}
+
+// adopt moves the slices that the init of p allocated into arenas of c, and
+// its pointers into the extras: afterwards a view of c needs nothing else.
+func (c *Ec3Core) adopt(p *BlockProcessor) {
+	st := &c.st.blockProcessor
+	b := binder{mode: bindMeasure, x: &bpNoExtra}
+	p.bind(st, &b)
+	if b.n.f32 > 0 {
+		b.a.f32 = make([]float32, b.n.f32)
+	}
+	if b.n.fft > 0 {
+		b.a.fft = make([]FftData, b.n.fft)
+	}
+	if b.n.spec > 0 {
+		b.a.spec = make([][FftLengthBy2Plus1]float32, b.n.spec)
+	}
+	if b.n.i32 > 0 {
+		b.a.i32 = make([]int32, b.n.i32)
+	}
+	b.mode, b.x = bindMove, &bpExtra{}
+	p.bind(st, &b)
+	c.bp, c.bpExtra = b.a, nil
+	if b.hasExtra {
+		c.bpExtra = b.x
+	}
+}
+
+// ec3State is the state of an EchoCanceller3 but its pointers.
+type ec3State struct {
+	renderWriter   ec3RenderWriter
+	blockProcessor blockProcessorState
 
 	config                      EchoCanceller3Config
 	sampleRateHz                int
@@ -348,15 +425,15 @@ func (e *EchoCanceller3) blockDelayBuffer() BlockDelayBuffer {
 // (nil corresponds to std::nullopt).
 func NewEchoCanceller3(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
 	numRenderChannels, numCaptureChannels int) *EchoCanceller3 {
+	c := &Ec3Core{}
+	c.Init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels)
 	e := &EchoCanceller3{}
-	e.Init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels)
+	c.Bind(e)
 	return e
 }
 
-// Init sets up e, which must be the zero value, as NewEchoCanceller3 does. It
-// serves an EchoCanceller3 embedded by value; e must not be copied
-// afterwards.
-func (e *EchoCanceller3) Init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
+// init sets up the core of e, which must be the zero value.
+func (e *EchoCanceller3) init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
 	numRenderChannels, numCaptureChannels int) {
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate for EchoCanceller3")
@@ -404,6 +481,7 @@ func (e *EchoCanceller3) Init(config, multichannelConfig *EchoCanceller3Config, 
 	}
 	e.offsets.renderQueueInputFrame = take(renderViews * SplitBandSize)
 	e.storage = make([]float32, n)
+	e.core.storage = e.storage
 
 	// The framers start with BlockSize zeros, the blockers empty.
 	e.outputFramerFill = BlockSize
@@ -438,6 +516,7 @@ func (e *EchoCanceller3) initialize() {
 
 	e.blockProcessor.init(e.configSelector.ActiveConfig(), e.sampleRateHz,
 		e.numRenderChannelsToAec, e.numCaptureChannels)
+	e.core.adopt(&e.blockProcessor)
 }
 
 // processor returns the block processor in use.
@@ -477,7 +556,7 @@ func (e *EchoCanceller3) RenderFrame() Frame { return e.renderQueueInputFrame() 
 // AnalyzeRenderFrame analyzes and stores an internal copy of RenderFrame,
 // whose contents are unspecified afterwards.
 func (e *EchoCanceller3) AnalyzeRenderFrame() {
-	e.renderWriter.Insert(&e.renderTransferQueue, e.renderQueueInputFrame())
+	e.renderWriter.Insert(e.renderTransferQueue, e.renderQueueInputFrame())
 }
 
 // AnalyzeRender analyzes and stores an internal copy of the split-band

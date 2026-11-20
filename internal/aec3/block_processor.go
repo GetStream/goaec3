@@ -20,13 +20,21 @@ type BlockProcessorEchoRemover interface {
 // NewBlockProcessor creates are part of the BlockProcessor, which is not
 // copied once it is set up.
 type BlockProcessor struct {
-	_ noCopy
-	// The components of NewBlockProcessorWithComponents; nil otherwise.
+	*blockProcessorState
+	// The components of NewBlockProcessorWithComponents; nil otherwise. A
+	// view bound to a canceller has none.
 	injected *blockProcessorComponents
+
+	ownEchoRemover EchoRemover
+}
+
+// blockProcessorState is the state of a BlockProcessor but its pointers.
+type blockProcessorState struct {
+	_ noCopy
 
 	ownRenderBuffer    RenderDelayBuffer
 	ownDelayController RenderDelayController
-	ownEchoRemover     EchoRemover
+	ownEchoRemover     echoRemoverState
 
 	config                 EchoCanceller3Config
 	captureProperlyStarted bool
@@ -57,8 +65,15 @@ type blockProcessorComponents struct {
 func NewBlockProcessor(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int) *BlockProcessor {
 	p := &BlockProcessor{}
+	p.bind(&blockProcessorState{}, nil)
 	p.init(config, sampleRateHz, numRenderChannels, numCaptureChannels)
 	return p
+}
+
+// bind makes p the view of st.
+func (p *BlockProcessor) bind(st *blockProcessorState, b *binder) {
+	p.blockProcessorState = st
+	p.ownEchoRemover.bind(&st.ownEchoRemover, b)
 }
 
 // init sets up p in place, as NewBlockProcessor does.
@@ -67,7 +82,10 @@ func (p *BlockProcessor) init(config *EchoCanceller3Config, sampleRateHz, numRen
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate for BlockProcessor")
 	}
+	st := p.blockProcessorState
+	*st = blockProcessorState{}
 	*p = BlockProcessor{}
+	p.bind(st, nil)
 	p.config = *config
 	config = &p.config
 	p.sampleRateHz = sampleRateHz
@@ -90,14 +108,17 @@ func NewBlockProcessorWithComponents(config *EchoCanceller3Config, sampleRateHz,
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate for BlockProcessor")
 	}
-	return &BlockProcessor{
+	p := &BlockProcessor{
+		injected: &blockProcessorComponents{renderBuffer: renderBuffer, delayController: delayController,
+			echoRemover: echoRemover},
+	}
+	p.bind(&blockProcessorState{
 		config:             *config,
 		sampleRateHz:       sampleRateHz,
 		hasDelayController: delayController != nil,
 		renderEvent:        BufferingEventNone,
-		injected: &blockProcessorComponents{renderBuffer: renderBuffer, delayController: delayController,
-			echoRemover: echoRemover},
-	}
+	}, nil)
+	return p
 }
 
 // renderBuffer returns the render delay buffer in use.

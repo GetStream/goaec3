@@ -15,10 +15,16 @@ type EchoControlMetrics struct {
 // up to inlineChannels capture channels. The components that hold pointers
 // come first.
 type EchoRemover struct {
+	*echoRemoverState
+	more       *erMore // with more than inlineChannels channels
+	subtractor Subtractor
+}
+
+// echoRemoverState is the state of an EchoRemover but its pointers.
+type echoRemoverState struct {
 	_                     noCopy
-	more                  *erMore // with more than inlineChannels channels
 	aecState              AecState
-	subtractor            Subtractor
+	subtractor            subtractorState
 	suppressionGain       SuppressionGain
 	cng                   ComfortNoiseGenerator
 	suppressionFilter     SuppressionFilter
@@ -84,6 +90,15 @@ type erChannel struct {
 	e    [FftLengthBy2]float32
 }
 
+// bind makes e the view of st.
+func (e *EchoRemover) bind(st *echoRemoverState, b *binder) {
+	e.echoRemoverState = st
+	if b != nil {
+		bindPtr(b, &e.more, &b.x.erMore)
+	}
+	e.subtractor.bind(&st.subtractor, b)
+}
+
 // NewEchoRemover mirrors EchoRemover::Create; the optimization is
 // DetectOptimization().
 func NewEchoRemover(config *EchoCanceller3Config, sampleRateHz, numRenderChannels, numCaptureChannels int) *EchoRemover {
@@ -96,6 +111,7 @@ func NewEchoRemover(config *EchoCanceller3Config, sampleRateHz, numRenderChannel
 func NewEchoRemoverWithOptimization(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int, optimization Aec3Optimization) *EchoRemover {
 	e := &EchoRemover{}
+	e.bind(&echoRemoverState{}, nil)
 	e.init(config, sampleRateHz, numRenderChannels, numCaptureChannels, optimization)
 	return e
 }
@@ -106,7 +122,10 @@ func (e *EchoRemover) init(config *EchoCanceller3Config, sampleRateHz, numRender
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate")
 	}
+	st := e.echoRemoverState
+	*st = echoRemoverState{}
 	*e = EchoRemover{}
+	e.bind(st, nil)
 	e.config = *config
 	e.optimization = optimization
 	e.sampleRateHz = sampleRateHz

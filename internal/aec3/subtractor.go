@@ -103,10 +103,18 @@ func (m *subFilterMisadjustmentEstimator) Reset() {
 // are part of the Subtractor. The filter coefficients of all channels share
 // one array, as do the frequency responses and the impulse responses.
 type Subtractor struct {
+	*subtractorState
 	more                      *subMore                                     // with more than inlineChannels channels
 	refinedFrequencyResponses [inlineChannels][][FftLengthBy2Plus1]float32 // [channel][partition]
 	refinedImpulseResponses   [inlineChannels][]float32                    // [channel][sample]
 	channels                  [inlineChannels]subChannel
+}
+
+// subtractorState is the state of a Subtractor but its slices.
+type subtractorState struct {
+	channels [inlineChannels]subChannelState
+	h2Spans  [inlineChannels]span
+	hSpans   [inlineChannels]span
 
 	fft                          aec3FftPair
 	optimization                 Aec3Optimization
@@ -127,8 +135,15 @@ type Subtractor struct {
 
 // subChannel is the state of one capture channel of a Subtractor.
 type subChannel struct {
-	refinedFilter                AdaptiveFirFilter
-	coarseFilter                 AdaptiveFirFilter
+	*subChannelState
+	refinedFilter AdaptiveFirFilter
+	coarseFilter  AdaptiveFirFilter
+}
+
+// subChannelState is the state of a subChannel but the filter coefficients.
+type subChannelState struct {
+	refinedFilter                afirState
+	coarseFilter                 afirState
 	refinedGain                  RefinedFilterUpdateGain
 	coarseGain                   CoarseFilterUpdateGain
 	filterMisadjustmentEstimator subFilterMisadjustmentEstimator
@@ -142,19 +157,44 @@ type subMore struct {
 	refinedFrequencyResponses [][][FftLengthBy2Plus1]float32
 	refinedImpulseResponses   [][]float32
 	channels                  []subChannel
+	states                    []subChannelState
+}
+
+// bind makes s the view of st.
+func (s *Subtractor) bind(st *subtractorState, b *binder) {
+	s.subtractorState = st
+	if b != nil {
+		bindPtr(b, &s.more, &b.x.subMore)
+	}
+	for ch := range s.channels {
+		b.spec(&s.refinedFrequencyResponses[ch], &st.h2Spans[ch])
+		b.f32(&s.refinedImpulseResponses[ch], &st.hSpans[ch])
+		s.channels[ch].bind(&st.channels[ch], b)
+	}
+}
+
+// bind makes sc the view of st.
+func (sc *subChannel) bind(st *subChannelState, b *binder) {
+	sc.subChannelState = st
+	sc.refinedFilter.bind(&st.refinedFilter, b)
+	sc.coarseFilter.bind(&st.coarseFilter, b)
 }
 
 // NewSubtractor creates a Subtractor. Field trials are fixed at their
 // defaults, so the coarse filter reset hangover is in use.
 func NewSubtractor(config *EchoCanceller3Config, numRenderChannels, numCaptureChannels int, optimization Aec3Optimization) *Subtractor {
 	s := &Subtractor{}
+	s.bind(&subtractorState{}, nil)
 	s.init(config, numRenderChannels, numCaptureChannels, optimization)
 	return s
 }
 
 // init sets up s in place.
 func (s *Subtractor) init(config *EchoCanceller3Config, numRenderChannels, numCaptureChannels int, optimization Aec3Optimization) {
+	st := s.subtractorState
+	*st = subtractorState{}
 	*s = Subtractor{}
+	s.bind(st, nil)
 	s.optimization = optimization
 	s.config = *config
 	s.numCaptureChannels = numCaptureChannels
@@ -164,6 +204,10 @@ func (s *Subtractor) init(config *EchoCanceller3Config, numRenderChannels, numCa
 			refinedFrequencyResponses: make([][][FftLengthBy2Plus1]float32, numCaptureChannels),
 			refinedImpulseResponses:   make([][]float32, numCaptureChannels),
 			channels:                  make([]subChannel, numCaptureChannels),
+			states:                    make([]subChannelState, numCaptureChannels),
+		}
+		for ch := range s.more.channels {
+			s.more.channels[ch].bind(&s.more.states[ch], nil)
 		}
 	}
 	c := &s.config

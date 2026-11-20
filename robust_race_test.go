@@ -113,7 +113,7 @@ func TestConcurrentRenderAndCapture(t *testing.T) {
 				if math.IsNaN(m.EchoReturnLoss) || math.IsNaN(m.EchoReturnLossEnhancement) {
 					t.Fatalf("metrics %+v", m)
 				}
-				stereoSeen = stereoSeen || e.ec.StereoRenderProcessingActiveForTesting()
+				stereoSeen = stereoSeen || stereoActive(e)
 				ahead <- struct{}{}
 			}
 			wg.Wait()
