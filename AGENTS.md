@@ -56,10 +56,31 @@ write changelog narrative.
   does.
 - No hand-written assembly. Kernels are archsimd; a kernel archsimd cannot
   express stays pure Go. Gate x86 kernels with `archsimd.X86.AVX2()` etc.
+- Every vector instruction runs behind a test of its CPU feature: a branch
+  on a package-level variable set from `archsimd.X86` (`kernHasAVX2`,
+  `dlyUseFma`, ...), in the function itself or in every caller. A lane or
+  group-size argument does not count; the kernel it selects tests the
+  variable again. `TestSimdInstructionsGated` proves this from the compiler's
+  listing of the amd64 build, and the `avx-only` CI job runs the tests on an
+  emulated CPU with AVX and no AVX2.
+- 256-bit code needs AVX2, also where its instructions are AVX: without AVX2
+  Go 1.27 saves only the low halves of the Y registers at an asynchronous
+  preemption (golang/go#81209).
+- The 128-bit kernels run with AVX alone, and some 128-bit archsimd
+  operations compile to AVX2 instructions: `BroadcastFloat32x4`,
+  `BroadcastInt32x4`, `BroadcastUint32x4` (VBROADCASTSS from a register,
+  VPBROADCASTD) and `Float32x4.Abs`/`Neg`, which broadcast their mask. Use
+  `kernSplat4`/`kernSplatI4` (`bsSplat4`/`bsSplatU4` in `internal/bands`) and
+  a mask made with them. A VEX mnemonic the kernels did not use before fails
+  the test until it is classified in `simdVexOps`.
 - End every 256-bit archsimd section with `archsimd.ClearAVXUpperBits()`
   (VZEROUPPER). Go's scalar float code is legacy-SSE encoded, so a dirty upper
   YMM state makes every later scalar float op pay the AVX→SSE transition
   penalty: on Intel this made the AVX2 lane 16× slower per frame.
+  `TestNoLegacySSEWithDirtyUpperState` follows the state along every path of
+  the amd64 listing and fails on a legacy-SSE instruction (a scalar float
+  operation, a zero made with `MOVUPS X15`, a call out of the kernels)
+  between a 256-bit instruction and the VZEROUPPER.
 - A float32 live across `ClearAVXUpperBits` is spilled with a 4-byte store
   and restored with a 16-byte load, which the CPU cannot store-forward (this
   made Zen 3 1.6× slower). 256-bit kernels return results through the
@@ -269,7 +290,8 @@ the mark phase alone).
 - Use Go 1.27.4 (`$HOME/sdk/go1.27.4/bin/go`, or `go1.27.4`). The `Makefile`
   wraps every command below. CI (`.github/workflows/ci.yml`): `lint`;
   `test` (default, simd, purego on linux/amd64 and linux/arm64); `race`
-  (`go test -race -short ./...` without and with simd); `oracle-src` (the
+  (`go test -race -short ./...` without and with simd); `avx-only` (the
+  short simd tests under `qemu-x86_64 -cpu SandyBridge`); `oracle-src` (the
   source oracle in the AVX2, SSE2, NEON and scalar lanes, with and without
   simd; the avx2-simd job also runs the x86 kernel oracle, and the avx2-simd
   and neon-simd jobs log the glibc stock-libm divergence). Runs on main,
