@@ -68,6 +68,11 @@ type bpExtra struct {
 	fbErleMore                   *fbErleChannels
 	sbErleMore                   *sbErleChannels
 	signalDependentErleEstimator *SignalDependentErleEstimator
+	sgSubbandNearendDetector     *SubbandNearendDetector
+	sgMore                       *sgMore
+	dominantNearendMore          *dominantNearendMore
+	cngMore                      *cngMore
+	sfMore                       *sfMore
 }
 
 // bpNoExtra is what a view binds to without extras; it is never written.

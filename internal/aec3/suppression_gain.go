@@ -142,12 +142,18 @@ func newSgGainParameters(lastLfBand, firstHfBand int, tuning *Tuning) sgGainPara
 
 // SuppressionGain computes the echo suppression gains.
 type SuppressionGain struct {
+	*suppressionGainState
 	// The nearend detector: subbandNearendDetector with
 	// Suppressor.UseSubbandNearendDetection, dominantNearendDetector (the
 	// default, part of the SuppressionGain) otherwise.
 	subbandNearendDetector  *SubbandNearendDetector
 	more                    *sgMore // see sgMore
 	dominantNearendDetector DominantNearendDetector
+}
+
+// suppressionGainState is the state of a SuppressionGain but its pointers.
+type suppressionGainState struct {
+	dominantNearendDetector dominantNearendState
 
 	optimization              Aec3Optimization
 	config                    EchoCanceller3Config
@@ -185,11 +191,22 @@ type sgMore struct {
 	nearendMemory []float32
 }
 
+// bind makes s the view of st.
+func (s *SuppressionGain) bind(st *suppressionGainState, b *binder) {
+	s.suppressionGainState = st
+	if b != nil {
+		bindPtr(b, &s.subbandNearendDetector, &b.x.sgSubbandNearendDetector)
+		bindPtr(b, &s.more, &b.x.sgMore)
+	}
+	s.dominantNearendDetector.bind(&st.dominantNearendDetector, b)
+}
+
 // NewSuppressionGain mirrors the C++ constructor. sampleRateHz is unused, as
 // in the C++.
 func NewSuppressionGain(config *EchoCanceller3Config, optimization Aec3Optimization, sampleRateHz int,
 	numCaptureChannels int) *SuppressionGain {
 	s := &SuppressionGain{}
+	s.bind(&suppressionGainState{}, nil)
 	s.init(config, optimization, sampleRateHz, numCaptureChannels)
 	return s
 }
@@ -198,7 +215,10 @@ func NewSuppressionGain(config *EchoCanceller3Config, optimization Aec3Optimizat
 func (s *SuppressionGain) init(config *EchoCanceller3Config, optimization Aec3Optimization, sampleRateHz int,
 	numCaptureChannels int) {
 	_ = sampleRateHz
+	st := s.suppressionGainState
+	*st = suppressionGainState{}
 	*s = SuppressionGain{}
+	s.bind(st, nil)
 	s.optimization = optimization
 	s.config = *config
 	s.numCaptureChannels = numCaptureChannels

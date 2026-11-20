@@ -5,7 +5,13 @@ import "math"
 // SuppressionFilter applies the suppression gains and comfort noise in the
 // frequency domain and synthesizes the time-domain output of every band.
 type SuppressionFilter struct {
-	moreEOutputOld     [][MaxNumBands][FftLengthBy2]float32 // with more than inlineChannels channels
+	*suppressionFilterState
+	more *sfMore // with more than inlineChannels channels
+}
+
+// suppressionFilterState is the state of a SuppressionFilter but its
+// pointer.
+type suppressionFilterState struct {
 	optimization       Aec3Optimization
 	sampleRateHz       int
 	numCaptureChannels int
@@ -18,19 +24,39 @@ type SuppressionFilter struct {
 	eExtended [FftLength]float32
 }
 
+// sfMore holds the previous output blocks of a SuppressionFilter with more
+// than inlineChannels capture channels.
+type sfMore struct {
+	eOutputOld [][MaxNumBands][FftLengthBy2]float32 // [channel][band]
+}
+
+// bind makes f the view of st.
+func (f *SuppressionFilter) bind(st *suppressionFilterState, b *binder) {
+	f.suppressionFilterState = st
+	if b != nil {
+		bindPtr(b, &f.more, &b.x.sfMore)
+	}
+}
+
 func NewSuppressionFilter(optimization Aec3Optimization, sampleRateHz, numCaptureChannels int) *SuppressionFilter {
 	f := &SuppressionFilter{}
+	f.bind(&suppressionFilterState{}, nil)
 	f.init(optimization, sampleRateHz, numCaptureChannels)
 	return f
 }
 
 // init sets up f in place.
 func (f *SuppressionFilter) init(optimization Aec3Optimization, sampleRateHz, numCaptureChannels int) {
+	st := f.suppressionFilterState
+	*st = suppressionFilterState{}
 	*f = SuppressionFilter{}
+	f.bind(st, nil)
 	f.optimization = optimization
 	f.sampleRateHz = sampleRateHz
 	f.numCaptureChannels = numCaptureChannels
-	f.moreEOutputOld = moreChannels[[MaxNumBands][FftLengthBy2]float32](numCaptureChannels)
+	if numCaptureChannels > inlineChannelLimit {
+		f.more = &sfMore{eOutputOld: make([][MaxNumBands][FftLengthBy2]float32, numCaptureChannels)}
+	}
 }
 
 // ApplyGain applies the suppression gain, adds the comfort noise and writes
@@ -48,7 +74,11 @@ func (f *SuppressionFilter) ApplyGain(comfortNoise, comfortNoiseHighBand []FftDa
 	numBands := e.NumBands()
 	E := &f.e
 	eExtended := &f.eExtended
-	eOutputOld := channelState(&f.eOutputOld, f.numCaptureChannels, f.moreEOutputOld)
+	var more [][MaxNumBands][FftLengthBy2]float32
+	if f.more != nil {
+		more = f.more.eOutputOld
+	}
+	eOutputOld := channelState(&f.eOutputOld, f.numCaptureChannels, more)
 	for ch := range eOutputOld {
 		eOld := &eOutputOld[ch]
 		// Analysis filterbank.

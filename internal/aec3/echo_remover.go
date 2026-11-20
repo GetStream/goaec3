@@ -19,6 +19,10 @@ type EchoRemover struct {
 	more       *erMore // with more than inlineChannels channels
 	aecState   AecState
 	subtractor Subtractor
+
+	suppressionGain   SuppressionGain
+	cng               ComfortNoiseGenerator
+	suppressionFilter SuppressionFilter
 }
 
 // echoRemoverState is the state of an EchoRemover but its pointers.
@@ -26,9 +30,9 @@ type echoRemoverState struct {
 	_                     noCopy
 	aecState              aecStateState
 	subtractor            subtractorState
-	suppressionGain       SuppressionGain
-	cng                   ComfortNoiseGenerator
-	suppressionFilter     SuppressionFilter
+	suppressionGain       suppressionGainState
+	cng                   cngState
+	suppressionFilter     suppressionFilterState
 	residualEchoEstimator ResidualEchoEstimator
 	renderSignalAnalyzer  RenderSignalAnalyzer
 	metrics               EchoRemoverMetrics
@@ -99,6 +103,9 @@ func (e *EchoRemover) bind(st *echoRemoverState, b *binder) {
 	}
 	e.aecState.bind(&st.aecState, b)
 	e.subtractor.bind(&st.subtractor, b)
+	e.suppressionGain.bind(&st.suppressionGain, b)
+	e.cng.bind(&st.cng, b)
+	e.suppressionFilter.bind(&st.suppressionFilter, b)
 }
 
 // NewEchoRemover mirrors EchoRemover::Create; the optimization is

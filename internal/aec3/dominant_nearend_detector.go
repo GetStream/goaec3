@@ -14,7 +14,13 @@ type DominantNearendDetectionConfig struct {
 
 // DominantNearendDetector detects when the nearend signal dominates the echo.
 type DominantNearendDetector struct {
-	moreCounters          []dominantNearendCounters // with more than inlineChannels channels
+	*dominantNearendState
+	more *dominantNearendMore // with more than inlineChannels channels
+}
+
+// dominantNearendState is the state of a DominantNearendDetector but its
+// pointer.
+type dominantNearendState struct {
 	counters              [inlineChannels]dominantNearendCounters
 	enrThreshold          float32
 	enrExitThreshold      float32
@@ -32,17 +38,35 @@ type dominantNearendCounters struct {
 	hold    int
 }
 
+// dominantNearendMore holds the counters of a DominantNearendDetector with
+// more than inlineChannels capture channels.
+type dominantNearendMore struct {
+	counters []dominantNearendCounters
+}
+
+// bind makes d the view of st.
+func (d *DominantNearendDetector) bind(st *dominantNearendState, b *binder) {
+	d.dominantNearendState = st
+	if b != nil {
+		bindPtr(b, &d.more, &b.x.dominantNearendMore)
+	}
+}
+
 var _ NearendDetector = (*DominantNearendDetector)(nil)
 
 func NewDominantNearendDetector(config *DominantNearendDetectionConfig, numCaptureChannels int) *DominantNearendDetector {
 	d := &DominantNearendDetector{}
+	d.bind(&dominantNearendState{}, nil)
 	d.init(config, numCaptureChannels)
 	return d
 }
 
 // init sets up d in place.
 func (d *DominantNearendDetector) init(config *DominantNearendDetectionConfig, numCaptureChannels int) {
-	*d = DominantNearendDetector{
+	st := d.dominantNearendState
+	*d = DominantNearendDetector{}
+	d.bind(st, nil)
+	*st = dominantNearendState{
 		enrThreshold:          config.EnrThreshold,
 		enrExitThreshold:      config.EnrExitThreshold,
 		snrThreshold:          config.SnrThreshold,
@@ -51,7 +75,9 @@ func (d *DominantNearendDetector) init(config *DominantNearendDetectionConfig, n
 		useDuringInitialPhase: config.UseDuringInitialPhase,
 		numCaptureChannels:    numCaptureChannels,
 	}
-	d.moreCounters = moreChannels[dominantNearendCounters](numCaptureChannels)
+	if numCaptureChannels > inlineChannelLimit {
+		d.more = &dominantNearendMore{counters: make([]dominantNearendCounters, numCaptureChannels)}
+	}
 }
 
 func (d *DominantNearendDetector) IsNearendState() bool { return d.nearendState }
@@ -68,7 +94,11 @@ func (d *DominantNearendDetector) Update(nearendSpectrum, residualEchoSpectrum,
 	comfortNoiseSpectrum [][FftLengthBy2Plus1]float32, initialState bool) {
 	d.nearendState = false
 
-	counters := channelState(&d.counters, d.numCaptureChannels, d.moreCounters)
+	var more []dominantNearendCounters
+	if d.more != nil {
+		more = d.more.counters
+	}
+	counters := channelState(&d.counters, d.numCaptureChannels, more)
 	for ch := range counters {
 		c := &counters[ch]
 		neSum := supLowFrequencyEnergy(&nearendSpectrum[ch])

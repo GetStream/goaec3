@@ -98,7 +98,12 @@ func supGenerateComfortNoise(opt Aec3Optimization, N2 *[FftLengthBy2Plus1]float3
 
 // ComfortNoiseGenerator generates the comfort noise.
 type ComfortNoiseGenerator struct {
-	more               *cngMore // with more than inlineChannels channels
+	*cngState
+	more *cngMore // with more than inlineChannels channels
+}
+
+// cngState is the state of a ComfortNoiseGenerator but its pointer.
+type cngState struct {
 	optimization       Aec3Optimization
 	seed               uint32
 	numCaptureChannels int
@@ -118,9 +123,18 @@ type cngMore struct {
 	n2         [][FftLengthBy2Plus1]float32
 }
 
+// bind makes c the view of st.
+func (c *ComfortNoiseGenerator) bind(st *cngState, b *binder) {
+	c.cngState = st
+	if b != nil {
+		bindPtr(b, &c.more, &b.x.cngMore)
+	}
+}
+
 func NewComfortNoiseGenerator(config *EchoCanceller3Config, optimization Aec3Optimization,
 	numCaptureChannels int) *ComfortNoiseGenerator {
 	c := &ComfortNoiseGenerator{}
+	c.bind(&cngState{}, nil)
 	c.init(config, optimization, numCaptureChannels)
 	return c
 }
@@ -128,7 +142,10 @@ func NewComfortNoiseGenerator(config *EchoCanceller3Config, optimization Aec3Opt
 // init sets up c in place.
 func (c *ComfortNoiseGenerator) init(config *EchoCanceller3Config, optimization Aec3Optimization,
 	numCaptureChannels int) {
-	*c = ComfortNoiseGenerator{
+	st := c.cngState
+	*c = ComfortNoiseGenerator{}
+	c.bind(st, nil)
+	*st = cngState{
 		optimization:       optimization,
 		seed:               42,
 		numCaptureChannels: numCaptureChannels,
