@@ -9,10 +9,10 @@ const useSimd = true
 func fft(a *[128]float32)        { fftSimd(a) }
 func inverseFft(a *[128]float32) { inverseFftSimd(a) }
 
-func fftSplit(a *[128]float32, re, im *[65]float32, s *Scratch) { fftSplitSimd(a, re, im, &s.t) }
+func fftSplit(a *[128]float32, re, im *[65]float32, s *Scratch) { fftSplitSoa(a, re, im, &s.t) }
 
 func inverseFftSplit(re, im *[65]float32, a *[128]float32, s *Scratch) {
-	inverseFftSplitSimd(re, im, a, &s.t)
+	inverseFftSplitSoa(re, im, a, &s.t)
 }
 
 // rev64 is vrev64q_f32 = {x1, x0, x3, x2}. archsimd has no REV64, so it is

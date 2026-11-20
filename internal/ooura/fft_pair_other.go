@@ -1,4 +1,4 @@
-//go:build !(goexperiment.simd && amd64 && !purego)
+//go:build !(goexperiment.simd && (amd64 || arm64) && !purego)
 
 package ooura
 
