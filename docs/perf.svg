@@ -28,12 +28,12 @@ text{font-size:12px}
 <path class="s2" d="M190,110 h334.4 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-334.4 z"><title>Apple M4 Max · NEON, 48 kHz stereo: 72% of libwebrtc</title></path>
 <text class="t2" x="533.4" y="121">72%</text>
 <text class="t1" x="178" y="173.0" text-anchor="end">Neoverse-N2 · NEON</text>
-<path class="s0" d="M190,146 h395.5 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-395.5 z"><title>Neoverse-N2 · NEON, 16 kHz mono: 85% of libwebrtc</title></path>
-<text class="t2" x="594.5" y="157">85%</text>
-<path class="s1" d="M190,162 h395.5 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-395.5 z"><title>Neoverse-N2 · NEON, 48 kHz mono: 85% of libwebrtc</title></path>
-<text class="t2" x="594.5" y="173">85%</text>
-<path class="s2" d="M190,178 h400.2 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-400.2 z"><title>Neoverse-N2 · NEON, 48 kHz stereo: 86% of libwebrtc</title></path>
-<text class="t2" x="599.2" y="189">86%</text>
+<path class="s0" d="M190,146 h372.0 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-372.0 z"><title>Neoverse-N2 · NEON, 16 kHz mono: 80% of libwebrtc</title></path>
+<text class="t2" x="571.0" y="157">80%</text>
+<path class="s1" d="M190,162 h376.7 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-376.7 z"><title>Neoverse-N2 · NEON, 48 kHz mono: 81% of libwebrtc</title></path>
+<text class="t2" x="575.7" y="173">81%</text>
+<path class="s2" d="M190,178 h376.7 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-376.7 z"><title>Neoverse-N2 · NEON, 48 kHz stereo: 81% of libwebrtc</title></path>
+<text class="t2" x="575.7" y="189">81%</text>
 <text class="t1" x="178" y="241.0" text-anchor="end">AMD EPYC Zen 4 · AVX2</text>
 <path class="s0" d="M190,214 h376.7 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-376.7 z"><title>AMD EPYC Zen 4 · AVX2, 16 kHz mono: 81% of libwebrtc</title></path>
 <text class="t2" x="575.7" y="225">81%</text>
