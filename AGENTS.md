@@ -200,6 +200,37 @@ frame (`matched_filter_kernels.go`, `matched_filter_scalar.go`).
   the kernel benchmarks of `bench.yml`, which run base and head on the same
   runner.
 
+The rest of a pure-Go frame (adaptive filter, FFT, filter bank, bin loops):
+
+- The term kernel of ApplyFilter and the adaptation are bound by their loads
+  and float operations, not by their instruction count. Fewer instructions
+  per bin gain little (eight bins per step: 1% and 5% on Neoverse-N2), and a
+  form that loads an operand twice loses: two passes over the pairs with
+  half the live values each, every load folded into a multiplication, are 17%
+  (Xeon) to 33% (EPYC) slower than one pass that spills
+  (`afirApplyTermsQuadGo`).
+- What gains is a load and a store less per value. Passes that each load and
+  store a whole frame run as one pass where their operands meet: the split
+  transforms run cftfsubTail, rftfsub and the copy to bins as one pass and
+  the copy from bins, rftbsub and cft1st as one (`tailSplitFast`,
+  `splitCft1stFastLane`; the butterflies at c and 16-c hold each other's
+  rftfsub partners), 15-19% per transform on every runner. Off amd64 the
+  filter bank takes two output samples per step, which loads a coefficient
+  once and the history in pairs (9-11% on Neoverse-N2).
+- A float comparison that selects a float compiles to a branch on arm64 and
+  amd64 (`stdMax`, `sseMax`), and on data it mispredicts. Where the operands
+  are known to be +0, positive or +Inf, the maximum is the larger bit pattern
+  as an unsigned integer, a conditional move, and a pattern above that of
+  +Inf marks the NaN, negative or -0 operand that takes the comparison
+  (`afirFreqRespBlockSse2Fast`, `kernMaxAbsBits`). A maximum with a value
+  known to be +0 is not computed (`afirFreqRespFirstGo`).
+- An addition of +0 that only normalizes -0 is dropped where every use of
+  the sum is an addition to a sum that is never -0 (the filter outputs of
+  the three-band filter bank).
+- A helper called several times in a loop has to inline: a helper that
+  returns two results of four products each does not, two calls of one that
+  returns one do, and the compiler shares their loads (`bsTapAt`).
+
 ## Memory safety: no unsafe
 
 - No non-test file imports `unsafe` (so there is no `unsafe.Pointer`,
