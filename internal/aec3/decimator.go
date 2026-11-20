@@ -73,6 +73,10 @@ func (d *Decimator) noiseReduction() []BiQuad {
 func (d *Decimator) Decimate(in, out []float32) {
 	in = in[:BlockSize]
 	out = out[:BlockSize/d.downSamplingFactor]
+	if dlyHasDecimateKernel && d.downSamplingFactor == 4 &&
+		dlyDecimateDs4((*[BlockSize]float32)(in), (*[BlockSize / 4]float32)(out), (*[4]BiQuad)(d.sections[:4])) {
+		return
+	}
 	var x [BlockSize]float32
 
 	if aa, nr := d.antiAliasing(), d.noiseReduction(); len(aa) == 3 && len(nr) == 1 {
