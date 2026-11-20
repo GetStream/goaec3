@@ -1,16 +1,17 @@
-//go:build goexperiment.simd && arm64 && !purego
+//go:build goexperiment.simd && (arm64 || amd64) && !purego
 
 package ooura
 
-// The split transforms of the NEON lane with the real and the imaginary
-// parts in separate vectors.
+// The split transforms of the NEON and SSE2 lanes with the real and the
+// imaginary parts in separate vectors.
 //
-// ooura_fft_neon.cc keeps a complex value in two adjacent lanes, so a
-// rotation w*x is wr*x + wi*rev64(x) and x1 +- i*x3 goes through rev64 and
-// the {-1, 1} sign table as well; with the lanes regrouped between the
-// passes, close to half of the vector operations of the passes of
-// fft_simd.go are shuffles. A core with two vector pipes executes the
-// transform at the pace of its vector operations, shuffles included.
+// ooura_fft_neon.cc and ooura_fft_sse2.cc keep a complex value in two
+// adjacent lanes, so a rotation w*x is wr*x + wi*rev64(x) and x1 +- i*x3
+// goes through rev64 and the {-1, 1} sign table as well; with the lanes
+// regrouped between the passes, close to half of the vector operations of
+// the passes of fft_simd.go are shuffles. A core with two vector pipes
+// executes the transform at the pace of its vector operations, shuffles
+// included.
 //
 // Here a vector holds the real (or the imaginary) parts of four complex
 // values. Every float operation is the one of the C code for that element:
@@ -47,9 +48,9 @@ var soaWk1 [4][4]float32
 
 func rev2(x int) int { return (x&1)<<1 | x>>1 }
 
-// initPairTables runs once the negative zeros of the 128-bit tables are in
+// initSoaTables runs once the negative zeros of the 128-bit tables are in
 // place.
-func initPairTables() {
+func initSoaTables() {
 	tabs := [3][2]*[32]float32{{&rdftWk1r, &rdftWk1i}, {&rdftWk2r, &rdftWk2i}, {&rdftWk3r, &rdftWk3i}}
 	fill := func(dst *[12][4]float32, lane, idx int) {
 		for w, t := range tabs {
@@ -76,22 +77,6 @@ func initPairTables() {
 	for i, w := range cftmdlWk1r {
 		soaWk1[i] = [4]float32{w, w, w, w}
 	}
-}
-
-// PairScratch is the work area of FftSplitPair and InverseFftSplitPair; this
-// build runs the two transforms one after the other.
-type PairScratch struct {
-	s Scratch
-}
-
-func fftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairScratch) {
-	fftSplit(a, re0, im0, s.single())
-	fftSplit(b, re1, im1, s.single())
-}
-
-func inverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
-	inverseFftSplit(re0, im0, a, s.single())
-	inverseFftSplit(re1, im1, b, s.single())
 }
 
 // fftSplitSoa is fftSplitSimd: the transform of a into the bins re and im.
@@ -126,11 +111,6 @@ func q4w16(p *[16]float32, off int) *[4]float32 { return (*[4]float32)(p[off : o
 
 func tab12(t *[12][4]float32, i int) vec { return ld(&t[i]) }
 
-// trn1 is {x0, y0, x2, y2}; trn2 is {x1, y1, x3, y3}.
-func trn1(x, y vec) vec { return x.ToBits().InterleaveEven(y.ToBits()).BitsToFloat32() }
-
-func trn2(x, y vec) vec { return x.ToBits().InterleaveOdd(y.ToBits()).BitsToFloat32() }
-
 // soaButterfly is the part every radix-4 butterfly of the transform starts
 // with, on the values a, b, c and d: x0 = a + b, x1 = a - b, x2 = c + d and
 // x3 = c - d, then s = x0 + x2, t = x0 - x2, y = x1 + i*x3 and
@@ -153,11 +133,11 @@ func soaRot(tab *[12][4]float32, w int, xr, xi vec) (yr, yi vec) {
 // k = 0, 2, 1, 3 at w, w+16, w+32 and w+48: lane k of the cft1st results
 // o0..o3 of a load group m is positions 16*rev2(k) + 4*rev2(m) + 0..3.
 func soaTransposeStore(w *[52]float32, r0, r1, r2, r3 vec) {
-	e0, e1, e2, e3 := trn1(r0, r1), trn2(r0, r1), trn1(r2, r3), trn2(r2, r3)
-	lo64(e0, e2).StoreArray(q4w52(w, 0))
-	hi64(e0, e2).StoreArray(q4w52(w, 16))
-	lo64(e1, e3).StoreArray(q4w52(w, 32))
-	hi64(e1, e3).StoreArray(q4w52(w, 48))
+	l0, l1, l2, l3 := soaTranspose(r0, r1, r2, r3)
+	l0.StoreArray(q4w52(w, 0))
+	l2.StoreArray(q4w52(w, 16))
+	l1.StoreArray(q4w52(w, 32))
+	l3.StoreArray(q4w52(w, 48))
 }
 
 // The cft1st passes are bitrv2_128 and cft1st_128 by load group: the four
@@ -255,7 +235,7 @@ func soaCftmdl(s, t *[128]float32) {
 		ai, bi, ci, di := soaLoad16((*[16]float32)(inI[16:32]))
 		sr, si, tr, ti, yr, yi, zr, zi := soaButterfly(ar, ai, br, bi, cr, ci, dr, di)
 		g0, g1, g2, g3 := ld(&soaWk1[0]), ld(&soaWk1[1]), ld(&soaWk1[2]), ld(&soaWk1[3])
-		soaStore16((*[16]float32)(outR[16:32]), sr, g0.Mul(yr.Sub(yi)), ti.Neg(), g3.Mul(zr.Add(zi)))
+		soaStore16((*[16]float32)(outR[16:32]), sr, g0.Mul(yr.Sub(yi)), neg(ti), g3.Mul(zr.Add(zi)))
 		soaStore16((*[16]float32)(outI[16:32]), si, g1.Mul(yr.Add(yi)), tr, g2.Mul(zr.Sub(zi)))
 	}
 
@@ -319,13 +299,13 @@ func soaCftbsubTail(s, a *[128]float32) {
 		_ = zero // a captured vector makes the compiler inline the closure
 		ir := (*[52]float32)(inR[j : j+52])
 		ii := (*[52]float32)(inI[j : j+52])
-		ar, ai := ld(q4w52(ir, 0)), ld(q4w52(ii, 0)).Neg()
-		br, bi := ld(q4w52(ir, 16)), ld(q4w52(ii, 16)).Neg()
+		ar, ai := ld(q4w52(ir, 0)), neg(ld(q4w52(ii, 0)))
+		br, bi := ld(q4w52(ir, 16)), neg(ld(q4w52(ii, 16)))
 		cr, ci := ld(q4w52(ir, 32)), ld(q4w52(ii, 32))
 		dr, di := ld(q4w52(ir, 48)), ld(q4w52(ii, 48))
 		x0r, x0i := ar.Add(br), ai.Add(bi)
 		x1r, x1i := ar.Sub(br), ai.Sub(bi)
-		x2r, x2i := cr.Add(dr), ci.Add(di).Neg()
+		x2r, x2i := cr.Add(dr), neg(ci.Add(di))
 		x3r, x3i := cr.Sub(dr), ci.Sub(di)
 		o := (*[104]float32)(a[2*j : 2*j+104])
 		soaStorePacked((*[8]float32)(o[0:8]), x0r.Add(x2r), x0i.Add(x2i))

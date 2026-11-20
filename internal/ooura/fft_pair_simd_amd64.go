@@ -131,6 +131,7 @@ func initPairTables() {
 	}
 	dup(rftWkr8[:], wkr[:])
 	dup(rftWki8[:], rdftW[32:64])
+	initSoaTables()
 }
 
 // tab8 is the repeated t[k2:k2+4] of the 128-bit tables; k is 2*k2 in

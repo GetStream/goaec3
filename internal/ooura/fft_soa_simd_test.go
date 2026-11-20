@@ -1,4 +1,4 @@
-//go:build goexperiment.simd && arm64 && !purego
+//go:build goexperiment.simd && (arm64 || amd64) && !purego
 
 package ooura
 
@@ -16,15 +16,22 @@ func soaInverseFftSplit(re, im *[65]float32, a *[128]float32) {
 // TestSoaMatchesRef checks the split-form transforms against the lane
 // reference with the FftData copy, with a poisoned work area.
 func TestSoaMatchesRef(t *testing.T) {
+	if !useSimd {
+		t.Skip("no AVX")
+	}
 	for i := range splitScratch.t {
 		splitScratch.t[i] = float32(math.NaN())
 	}
 	compareSplit(t, "neon", soaFftSplit, soaInverseFftSplit, fftNeonRef, inverseFftNeonRef)
+	compareSplit(t, "sse2", soaFftSplit, soaInverseFftSplit, fftSSE2Ref, inverseFftSSE2Ref)
 }
 
 // With NaNs and infinities in the input the split-form transforms produce
 // the packed archsimd transforms, a NaN wherever those have one.
 func TestSoaNonFinite(t *testing.T) {
+	if !useSimd {
+		t.Skip("no AVX")
+	}
 	for n, a := range nonFiniteInputs() {
 		var re, im, wre, wim [65]float32
 		x, y := a, a
@@ -47,24 +54,33 @@ func TestSoaNonFinite(t *testing.T) {
 	}
 }
 
-// The transposition helpers of the cft1st passes.
+// The transposition of the cft1st passes.
 func TestSoaShuffles(t *testing.T) {
-	x := ld(&[4]float32{0, 1, 2, 3})
-	y := ld(&[4]float32{4, 5, 6, 7})
-	var got [4]float32
-	trn1(x, y).StoreArray(&got)
-	if want := [4]float32{0, 4, 2, 6}; got != want {
-		t.Errorf("trn1 = %v, want %v", got, want)
+	if !useSimd {
+		t.Skip("no AVX")
 	}
-	trn2(x, y).StoreArray(&got)
-	if want := [4]float32{1, 5, 3, 7}; got != want {
-		t.Errorf("trn2 = %v, want %v", got, want)
+	var got [4][4]float32
+	l0, l1, l2, l3 := soaTranspose(ld(&[4]float32{0, 1, 2, 3}), ld(&[4]float32{4, 5, 6, 7}),
+		ld(&[4]float32{8, 9, 10, 11}), ld(&[4]float32{12, 13, 14, 15}))
+	l0.StoreArray(&got[0])
+	l1.StoreArray(&got[1])
+	l2.StoreArray(&got[2])
+	l3.StoreArray(&got[3])
+	if want := [4][4]float32{{0, 4, 8, 12}, {1, 5, 9, 13}, {2, 6, 10, 14}, {3, 7, 11, 15}}; got != want {
+		t.Errorf("soaTranspose = %v, want %v", got, want)
+	}
+	neg(ld(&[4]float32{0, 1, -2, 3})).StoreArray(&got[0])
+	if want := [4]float32{float32(math.Copysign(0, -1)), -1, 2, -3}; math.Float32bits(got[0][0]) != math.Float32bits(want[0]) || got[0] != want {
+		t.Errorf("neg = %v, want %v", got[0], want)
 	}
 }
 
 // BenchmarkFftSoa times one split-form transform against the transform of
 // fft_simd.go.
 func BenchmarkFftSoa(b *testing.B) {
+	if !useSimd {
+		b.Skip("no AVX")
+	}
 	in := testInputs()
 	var x [128]float32
 	var re, im [65]float32

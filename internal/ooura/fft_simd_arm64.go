@@ -11,6 +11,24 @@ func inverseFft(a *[128]float32) { inverseFftSimd(a) }
 
 func fftSplit(a *[128]float32, re, im *[65]float32, s *Scratch) { fftSplitSoa(a, re, im, &s.t) }
 
+// PairScratch is the work area of FftSplitPair and InverseFftSplitPair; this
+// build runs the two transforms one after the other.
+type PairScratch struct {
+	s Scratch
+}
+
+func fftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairScratch) {
+	fftSplit(a, re0, im0, s.single())
+	fftSplit(b, re1, im1, s.single())
+}
+
+func inverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
+	inverseFftSplit(re0, im0, a, s.single())
+	inverseFftSplit(re1, im1, b, s.single())
+}
+
+func initPairTables() { initSoaTables() }
+
 func inverseFftSplit(re, im *[65]float32, a *[128]float32, s *Scratch) {
 	inverseFftSplitSoa(re, im, a, &s.t)
 }
@@ -63,4 +81,19 @@ func ext3(x, y vec) vec {
 func loHi(x, y vec) vec {
 	xb, yb := x.ToBits().ReshapeToUint8s(), y.ToBits().ReshapeToUint8s()
 	return swap64(xb.ConcatShiftBytesRight(yb, 8).ReshapeToUint32s().BitsToFloat32())
+}
+
+// neg is the negation of every lane.
+func neg(x vec) vec { return x.Neg() }
+
+// trn1 is {x0, y0, x2, y2}; trn2 is {x1, y1, x3, y3}.
+func trn1(x, y vec) vec { return x.ToBits().InterleaveEven(y.ToBits()).BitsToFloat32() }
+
+func trn2(x, y vec) vec { return x.ToBits().InterleaveOdd(y.ToBits()).BitsToFloat32() }
+
+// soaTranspose returns the lanes of r0..r3: lk is {r0[k], r1[k], r2[k],
+// r3[k]}.
+func soaTranspose(r0, r1, r2, r3 vec) (l0, l1, l2, l3 vec) {
+	e0, e1, e2, e3 := trn1(r0, r1), trn2(r0, r1), trn1(r2, r3), trn2(r2, r3)
+	return lo64(e0, e2), lo64(e1, e3), hi64(e0, e2), hi64(e1, e3)
 }

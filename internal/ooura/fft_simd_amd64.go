@@ -27,7 +27,7 @@ func inverseFft(a *[128]float32) {
 
 func fftSplit(a *[128]float32, re, im *[65]float32, s *Scratch) {
 	if useSimd {
-		fftSplitSimd(a, re, im, &s.t)
+		fftSplitSoa(a, re, im, &s.t)
 	} else {
 		fftSplitFast(a, re, im)
 	}
@@ -35,7 +35,7 @@ func fftSplit(a *[128]float32, re, im *[65]float32, s *Scratch) {
 
 func inverseFftSplit(re, im *[65]float32, a *[128]float32, s *Scratch) {
 	if useSimd {
-		inverseFftSplitSimd(re, im, a, &s.t)
+		inverseFftSplitSoa(re, im, a, &s.t)
 	} else {
 		inverseFftSplitFast(re, im, a)
 	}
@@ -79,4 +79,19 @@ func loHi(x, y vec) vec { return x.ConcatPermuteScalars(0, 1, 6, 7, y) }
 func ext3(x, y vec) vec {
 	xb, yb := x.ToBits().ReshapeToUint8s(), y.ToBits().ReshapeToUint8s()
 	return yb.ConcatShiftBytesRight(xb, 12).ReshapeToUint32s().BitsToFloat32()
+}
+
+// neg is the negation of every lane. Float32x4.Neg broadcasts its mask with
+// an AVX2 instruction; this one loads it.
+func neg(x vec) vec {
+	return x.ToBits().Xor(archsimd.LoadUint32x4Array(&signAll)).BitsToFloat32()
+}
+
+var signAll = [4]uint32{0x80000000, 0x80000000, 0x80000000, 0x80000000}
+
+// soaTranspose returns the lanes of r0..r3: lk is {r0[k], r1[k], r2[k],
+// r3[k]}.
+func soaTranspose(r0, r1, r2, r3 vec) (l0, l1, l2, l3 vec) {
+	e0, e1, e2, e3 := lo64(r0, r1), hi64(r0, r1), lo64(r2, r3), hi64(r2, r3)
+	return even(e0, e2), odd(e0, e2), even(e1, e3), odd(e1, e3)
 }
