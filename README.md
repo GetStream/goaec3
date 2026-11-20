@@ -64,24 +64,12 @@ Errors are sentinel values (`ErrConfig`, `ErrSampleRate`, `ErrFrameLength`, …)
 
 ![goaec3 time per 10 ms frame as a percentage of libwebrtc](docs/perf.svg)
 
-Lower is faster. Times cover the whole frame, band splitting included.
+Lower is faster; whole frame, band splitting included. M4 against prebuilt
+libwebrtc, others on GitHub runners ([bench.yml](.github/workflows/bench.yml)).
 
-| | goaec3 | libwebrtc |
-| --- | --- | --- |
-| Apple M4 Max, 16 kHz mono | 43.3 µs | 66.8 µs |
-| Apple M4 Max, 48 kHz stereo | 72.8 µs | 101.3 µs |
-
-- **Quiet far end:** goaec3 skips work that can't change the output, and
-  drops to 53–70% of libwebrtc's time.
-- **Pure Go** (no `GOEXPERIMENT=simd`): 1.4–1.6× libwebrtc's time on M4,
-  1.9–2.3× on Neoverse-N2 and x86 SSE2.
-- **Garbage collector:** a canceller is 11–15 heap objects (~320–500 kB)
-  with at most 24 pointers; 1000 live cancellers add about 0.8 ms to a GC
-  cycle on M4.
-
-M4 is measured against the prebuilt libwebrtc; the other machines run on
-GitHub runners against libwebrtc built from source
-([bench.yml](.github/workflows/bench.yml)).
+- Quiet far end: 53–70% of libwebrtc's time.
+- Pure Go (no `GOEXPERIMENT=simd`): 1.4–2.3× libwebrtc's time.
+- GC: ~0.8 ms per cycle for 1000 live cancellers.
 
 ## Parity
 
