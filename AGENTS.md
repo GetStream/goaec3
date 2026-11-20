@@ -61,8 +61,10 @@ write changelog narrative.
   `dlyUseFma`, ...), in the function itself or in every caller. A lane or
   group-size argument does not count; the kernel it selects tests the
   variable again. `TestSimdInstructionsGated` proves this from the compiler's
-  listing of the amd64 build, and the `avx-only` CI job runs the tests on an
-  emulated CPU with AVX and no AVX2.
+  listing of the amd64 build, tests included (a test that calls a kernel
+  directly skips, or leaves the kernel out of its table, behind the same
+  variable), and the `avx-only` CI job runs the tests on an emulated CPU
+  with AVX and no AVX2.
 - 256-bit code needs AVX2, also where its instructions are AVX: without AVX2
   Go 1.27 saves only the low halves of the Y registers at an asynchronous
   preemption (golang/go#81209).

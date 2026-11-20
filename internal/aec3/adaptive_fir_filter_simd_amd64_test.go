@@ -33,17 +33,21 @@ func TestAfirSimdKernelsAmd64(t *testing.T) {
 			fr           func(*FftData, *[FftLengthBy2Plus1]float32)
 			frRef        func(*FftData, *[FftLengthBy2Plus1]float32)
 			erl          func(a, b *[FftLengthBy2Plus1]float32)
-			needAVX2     bool
 		}
+		// A kernel enters the list behind the test of its CPU feature
+		// (TestSimdInstructionsGated); fr stays nil without it.
 		ks := []kern{
 			{"sse2", afirApplyBlockSSE2, afirAdaptBlockSSE2, afirFreqRespBlockSSE2,
-				afirFreqRespBlockSse2Go, afirErlBlockSSE2, false},
-			{"avx2", afirApplyBlockAVX2, afirAdaptBlockAVX2, afirFreqRespBlockAVX2, afirFreqRespBlockAvx2Go, afirErlBlockAVX2, true},
+				afirFreqRespBlockSse2Go, afirErlBlockSSE2},
+		}
+		if afirHasAVX2 {
+			k := kern{"avx2", afirApplyBlockAVX2, afirAdaptBlockAVX2, nil, afirFreqRespBlockAvx2Go, afirErlBlockAVX2}
+			if afirHasAVX2FMA {
+				k.fr = afirFreqRespBlockAVX2
+			}
+			ks = append(ks, k)
 		}
 		for _, k := range ks {
-			if k.needAVX2 && !afirHasAVX2 {
-				continue
-			}
 			g, w := s, s
 			k.apply(&x, &h, &g)
 			afirApplyBinsGo(&x, &h, &w, 0, FftLengthBy2)
@@ -53,7 +57,7 @@ func TestAfirSimdKernelsAmd64(t *testing.T) {
 			afirAdaptBinsGo(&x, &h, &w, 0, FftLengthBy2)
 			afirEqualFft(t, k.name+" adapt", &g, &w)
 			g2, w2 := s.Re, s.Re
-			if k.name == "sse2" || afirHasAVX2FMA {
+			if k.fr != nil {
 				k.fr(&h, &g2)
 				k.frRef(&h, &w2)
 				afirEqualArr(t, k.name+" fr", g2[:], w2[:])
@@ -94,9 +98,14 @@ func TestAfirFreqRespPartitionX86(t *testing.T) {
 	rng := rand.New(rand.NewSource(23))
 	im := float32(4097.0 / 4096.0)
 	for _, opt := range []Aec3Optimization{OptSse2, OptAvx2} {
-		if opt == OptAvx2 && !afirHasAVX2FMA && os.Getenv("GOAEC3_FORCE_FMA") != "1" {
-			t.Log("AVX2 kernel not run: the CPU does not report FMA (GOAEC3_FORCE_FMA=1 forces it)")
-			continue
+		if opt == OptAvx2 && !afirHasAVX2FMA {
+			if !afirHasAVX2 || os.Getenv("GOAEC3_FORCE_FMA") != "1" {
+				t.Log("AVX2 kernel not run: the CPU does not report FMA (GOAEC3_FORCE_FMA=1 forces it)")
+				continue
+			}
+			// The kernel tests the feature itself.
+			afirHasAVX2FMA = true
+			defer func() { afirHasAVX2FMA = false }()
 		}
 		for trial := 0; trial < 2000; trial++ {
 			hs := make([]FftData, 1+rng.Intn(3))

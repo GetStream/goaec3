@@ -11,6 +11,9 @@ import (
 // TestSimdMatchesRef checks the archsimd kernel against both lane
 // references (they are identical; see TestSSE2RefMatchesNeonRef).
 func TestSimdMatchesRef(t *testing.T) {
+	if !useSimd {
+		t.Skip("no AVX")
+	}
 	compareFfts(t, "fwd/neon", fftSimd, fftNeonRef)
 	compareFfts(t, "inv/neon", inverseFftSimd, inverseFftNeonRef)
 	compareFfts(t, "fwd/sse2", fftSimd, fftSSE2Ref)
@@ -20,6 +23,9 @@ func TestSimdMatchesRef(t *testing.T) {
 // TestSplitSimdMatchesRef checks the split archsimd transforms against the
 // lane references with the FftData copy.
 func TestSplitSimdMatchesRef(t *testing.T) {
+	if !useSimd {
+		t.Skip("no AVX")
+	}
 	for i := range splitScratch.t {
 		splitScratch.t[i] = float32(math.NaN())
 	}
@@ -36,6 +42,9 @@ func simdInverseFftSplit(re, im *[65]float32, a *[128]float32) {
 // With NaNs and infinities in the input the split transforms produce the
 // packed archsimd transforms, a NaN wherever those have one.
 func TestSplitSimdNonFinite(t *testing.T) {
+	if !useSimd {
+		t.Skip("no AVX")
+	}
 	for n, a := range nonFiniteInputs() {
 		var re, im, wre, wim [65]float32
 		x, y := a, a
@@ -60,6 +69,9 @@ func TestSplitSimdNonFinite(t *testing.T) {
 
 // The lane helpers of the split passes.
 func TestSplitShuffles(t *testing.T) {
+	if !useSimd {
+		t.Skip("no AVX")
+	}
 	x := archsimd.LoadFloat32x4Array(&[4]float32{0, 1, 2, 3})
 	y := archsimd.LoadFloat32x4Array(&[4]float32{4, 5, 6, 7})
 	check := func(name string, v vec, want [4]float32) {
@@ -78,6 +90,9 @@ func TestSplitShuffles(t *testing.T) {
 }
 
 func BenchmarkFftSimd(b *testing.B) {
+	if !useSimd {
+		b.Skip("no AVX")
+	}
 	b.Run("fwd", func(b *testing.B) { benchFft(b, fftSimd) })
 	b.Run("inv", func(b *testing.B) { benchFft(b, inverseFftSimd) })
 }

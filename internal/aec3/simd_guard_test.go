@@ -62,6 +62,12 @@ type asmInst struct {
 	pos  string // file:line
 	op   string
 	args string
+
+	// Derived from args once, when the listing is parsed.
+	syms       [][]string // asmSBRe matches: the operand and its symbol
+	regs       string     // args without symbols and named stack slots
+	hasX, hasY bool       // an X or a Y register among regs
+	noReturn   bool       // a call that does not return
 }
 
 func (in *asmInst) String() string { return fmt.Sprintf("%s\t%s %s", in.pos, in.op, in.args) }
@@ -69,6 +75,7 @@ func (in *asmInst) String() string { return fmt.Sprintf("%s\t%s %s", in.pos, in.
 type asmFunc struct {
 	name  string
 	insts []asmInst
+	jumps []int // instructions that the function's jump tables list
 }
 
 // asmListing is the parsed output of go build -gcflags=-S.
@@ -82,11 +89,13 @@ type asmListing struct {
 
 var (
 	asmInstRe = regexp.MustCompile(`^\t0x[0-9a-f]+ (\d+) \((.*):(\d+)\)\t(\S+)(?:\t(.*))?$`)
-	asmRelRe  = regexp.MustCompile(`^\trel \d+\+\d+ t=(\S+) (.+)\+-?\d+$`)
+	asmRelRe  = regexp.MustCompile(`^\trel \d+\+\d+ t=(\S+) (.+)\+(-?\d+)$`)
 	asmSymRe  = regexp.MustCompile(`^(.+?) (S[A-Z]+) `)
-	asmSBRe   = regexp.MustCompile(`([^\s,()$]+)\(SB\)`)
+	// asmSBRe matches a symbol operand; the name of a method has its
+	// receiver in parentheses.
+	asmSBRe = regexp.MustCompile(`((?:[^\s,()$]|\(\*?[^\s()]+\))+)\(SB\)`)
 	// asmNameRe matches a named operand: a symbol or a named stack slot.
-	asmNameRe = regexp.MustCompile(`[^\s,()$]+\((SB|SP|FP)\)`)
+	asmNameRe = regexp.MustCompile(`(?:[^\s,()$]|\(\*?[^\s()]+\))+\((SB|SP|FP)\)`)
 	asmWideRe = regexp.MustCompile(`\b[YZK]\d+\b`)
 	asmYRe    = regexp.MustCompile(`\bY\d+\b`)
 	asmXRe    = regexp.MustCompile(`\bX\d+\b`)
@@ -96,6 +105,7 @@ func parseAsmListing(out string) *asmListing {
 	l := &asmListing{funcs: map[string]*asmFunc{}, dataRefs: map[string][]string{}}
 	var fn *asmFunc
 	data := ""
+	jumps := map[string][]int{}
 	for _, line := range strings.Split(out, "\n") {
 		if line == "" {
 			continue
@@ -126,7 +136,14 @@ func parseAsmListing(out string) *asmListing {
 				continue
 			}
 			pc, _ := strconv.Atoi(m[1])
-			fn.insts = append(fn.insts, asmInst{pc: pc, pos: filepath.Base(m[2]) + ":" + m[3], op: m[4], args: m[5]})
+			in := asmInst{pc: pc, pos: filepath.Base(m[2]) + ":" + m[3], op: m[4], args: m[5]}
+			if strings.Contains(in.args, "(SB)") {
+				in.syms = asmSBRe.FindAllStringSubmatch(in.args, -1)
+			}
+			in.regs = asmNameRe.ReplaceAllString(in.args, "")
+			in.hasX, in.hasY = asmXRe.MatchString(in.regs), asmYRe.MatchString(in.regs)
+			in.noReturn = in.op == "CALL" && asmNoReturnRe.MatchString(in.callee())
+			fn.insts = append(fn.insts, in)
 			continue
 		}
 		if data != "" {
@@ -137,14 +154,57 @@ func parseAsmListing(out string) *asmListing {
 				if m[1] == "R_METHODOFF" {
 					continue
 				}
+				// The jump table of a switch lists targets in its function.
+				if strings.HasPrefix(data, m[2]+".jump") {
+					pc, _ := strconv.Atoi(m[3])
+					jumps[m[2]] = append(jumps[m[2]], pc)
+					continue
+				}
 				l.dataRefs[m[2]] = append(l.dataRefs[m[2]], data)
+			}
+		}
+	}
+	for name, pcs := range jumps {
+		if f := l.funcs[name]; f != nil {
+			for _, pc := range pcs {
+				f.jumps = append(f.jumps, f.at(pc))
 			}
 		}
 	}
 	return l
 }
 
-var asmNoReturnRe = regexp.MustCompile(`^runtime\.(panic|goPanic|gopanic|throw|fatal)`)
+// at returns the index of the instruction at pc, or of the next one: the
+// instruction there may be a NOP, which the parser drops.
+func (f *asmFunc) at(pc int) int {
+	return sort.Search(len(f.insts), func(k int) bool { return f.insts[k].pc >= pc })
+}
+
+// each calls fn for every instruction j that may run after insts[i]: with
+// k = 0 for the target of a branch, k = 1 for the next instruction and
+// k = 2 for the targets of a jump table.
+func (f *asmFunc) each(i int, fn func(k, j int)) error {
+	target, next, err := f.succ(i)
+	if err != nil {
+		return err
+	}
+	if target == -2 {
+		for _, j := range f.jumps {
+			fn(2, j)
+		}
+	} else if target >= 0 {
+		fn(0, target)
+	}
+	if next >= 0 {
+		fn(1, next)
+	}
+	return nil
+}
+
+// asmNoReturnRe matches the functions that do not return to their caller:
+// the runtime's panics, and the testing methods that end the test.
+var asmNoReturnRe = regexp.MustCompile(`^runtime\.(panic|goPanic|gopanic|throw|fatal)|` +
+	`^testing\.\(\*(common|T|B)\)\.(Skip|Skipf|SkipNow|Fatal|Fatalf|FailNow)$`)
 
 // callee returns the symbol an instruction calls (also as a tail call),
 // "?" for an indirect call and "" for other instructions.
@@ -152,8 +212,8 @@ func (in *asmInst) callee() string {
 	if in.op != "CALL" && in.op != "JMP" {
 		return ""
 	}
-	if m := asmSBRe.FindStringSubmatch(in.args); m != nil {
-		return m[1]
+	if len(in.syms) > 0 {
+		return in.syms[0][1]
 	}
 	if in.op == "CALL" {
 		return "?"
@@ -165,7 +225,8 @@ func (in *asmInst) callee() string {
 }
 
 // succ returns the indices of the instructions that may run after insts[i]:
-// the branch target (-1 if none) and the next instruction (-1 if none).
+// the branch target (-1 if none, -2 for the targets of the function's jump
+// tables) and the next instruction (-1 if none).
 func (f *asmFunc) succ(i int) (target, next int, err error) {
 	in := &f.insts[i]
 	target, next = -1, i+1
@@ -176,20 +237,22 @@ func (f *asmFunc) succ(i int) (target, next int, err error) {
 	case in.op == "RET" || in.op == "UNDEF":
 		return -1, -1, nil
 	case in.op == "CALL":
-		if asmNoReturnRe.MatchString(in.callee()) {
+		if in.noReturn {
 			next = -1
 		}
 		return -1, next, nil
 	case strings.HasPrefix(in.op, "J"):
 		pc, aerr := strconv.Atoi(in.args)
 		if aerr != nil {
-			if in.op == "JMP" && asmSBRe.MatchString(in.args) {
+			if in.op == "JMP" && len(in.syms) > 0 {
 				return -1, -1, nil // tail call
+			}
+			if in.op == "JMP" && len(f.jumps) > 0 {
+				return -2, -1, nil // through a jump table
 			}
 			return 0, 0, fmt.Errorf("%s: %s: unsupported jump", f.name, in)
 		}
-		// The target may be a NOP, which the parser drops.
-		t := sort.Search(len(f.insts), func(k int) bool { return f.insts[k].pc >= pc })
+		t := f.at(pc)
 		if t == len(f.insts) {
 			return 0, 0, fmt.Errorf("%s: %s: no instruction at the target", f.name, in)
 		}
@@ -227,7 +290,7 @@ var simdVexOps = map[string]simdFeat{
 // a Y register counts as AVX2, whatever its own requirement: without AVX2
 // the runtime does not preserve the upper halves across a preemption.
 func (in *asmInst) needs() (simdFeat, error) {
-	args := asmNameRe.ReplaceAllString(in.args, "")
+	args := in.regs
 	wide := asmWideRe.FindString(args)
 	if !strings.HasPrefix(in.op, "V") {
 		if wide != "" {
@@ -377,7 +440,7 @@ var simdGuard = sync.OnceValue(func() *simdGuardData {
 		return d
 	}
 	d.module = strings.TrimSuffix(reflect.TypeOf(FftData{}).PkgPath(), "/internal/aec3")
-	out, err := simdGuardBuild(d.root, "")
+	out, err := simdGuardBuild(d.root, "", true)
 	if err != nil {
 		d.err = err
 		return d
@@ -386,8 +449,19 @@ var simdGuard = sync.OnceValue(func() *simdGuardData {
 	return d
 })
 
-func simdGuardBuild(root, tags string) (string, error) {
+// simdGuardBuild returns the compiler's listing of the packages, with their
+// tests if tests is set: a test that calls a kernel directly is held to the
+// same rules as the code that dispatches to it.
+func simdGuardBuild(root, tags string, tests bool) (string, error) {
 	args := []string{"build", "-tags", tags, "-gcflags=-S"}
+	if tests {
+		tmp, err := os.MkdirTemp("", "simdguard")
+		if err != nil {
+			return "", err
+		}
+		defer os.RemoveAll(tmp)
+		args = []string{"test", "-c", "-o", tmp + string(filepath.Separator), "-tags", tags, "-gcflags=-S"}
+	}
 	for _, p := range simdGuardPackages {
 		args = append(args, "./"+p)
 	}
@@ -493,25 +567,21 @@ func TestSimdInstructionsGated(t *testing.T) {
 		}
 		// gateOf[i] holds the features implied on the edge from i to its
 		// branch target ([0]) and to the next instruction ([1]).
-		type edges struct{ target, next int }
-		es := make([]edges, n)
-		gateOf := make([][2]simdFeat, n)
+		gateOf := make([][3]simdFeat, n)
 		for i := range f.insts {
 			in := &f.insts[i]
-			tg, nx, err := f.succ(i)
-			if err != nil {
-				t.Fatal(err)
-			}
-			es[i] = edges{tg, nx}
-			if m := asmSBRe.FindAllStringSubmatch(in.args, -1); m != nil {
-				for _, s := range m {
+			if in.syms != nil {
+				for _, s := range in.syms {
 					g, ok := d.gates[s[1]]
 					if !ok {
 						continue
 					}
 					// A store to a feature variable outside the package
 					// initializer would make the analysis unsound.
-					if strings.HasSuffix(in.args, s[0]) && !strings.HasSuffix(name, ".init") {
+					// (Tests switch kernels off, and on where an emulator
+					// executes what it does not report.)
+					if strings.HasSuffix(in.args, s[0]) && !strings.HasSuffix(name, ".init") &&
+						!strings.Contains(in.pos, "_test.go:") {
 						t.Errorf("%s: %s: store to a feature variable", d.short(name), in)
 					}
 					if in.op == "CMPB" && in.args == s[0]+", $0" && i+1 < n {
@@ -536,12 +606,14 @@ func TestSimdInstructionsGated(t *testing.T) {
 			for len(stack) > 0 {
 				i := stack[len(stack)-1]
 				stack = stack[:len(stack)-1]
-				for k, j := range [2]int{es[i].target, es[i].next} {
-					if j < 0 || gateOf[i][k]&feat != 0 || reach[j]&feat != 0 {
-						continue
+				err := f.each(i, func(k, j int) {
+					if gateOf[i][k]&feat == 0 && reach[j]&feat == 0 {
+						reach[j] |= feat
+						stack = append(stack, j)
 					}
-					reach[j] |= feat
-					stack = append(stack, j)
+				})
+				if err != nil {
+					t.Fatal(err)
 				}
 			}
 		}
@@ -559,7 +631,7 @@ func TestSimdInstructionsGated(t *testing.T) {
 				}
 				sites[name] = append(sites[name], site{need: need, guard: guard, in: in})
 			}
-			for _, s := range asmSBRe.FindAllStringSubmatch(in.args, -1) {
+			for _, s := range in.syms {
 				ref := strings.TrimSuffix(s[1], "·f")
 				if _, ok := l.funcs[ref]; ok && ref != name {
 					sites[name] = append(sites[name], site{fn: ref, guard: guard, in: in})
@@ -635,7 +707,7 @@ func TestSimdInstructionsGated(t *testing.T) {
 		len(l.names), len(d.gates), nGateEdges, nWide, nKernels)
 
 	// The purego build of the experiment has no vector instructions at all.
-	out, err := simdGuardBuild(d.root, "purego")
+	out, err := simdGuardBuild(d.root, "purego", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -709,7 +781,6 @@ func TestNoLegacySSEWithDirtyUpperState(t *testing.T) {
 			i := work[len(work)-1]
 			work = work[:len(work)-1]
 			inst := &f.insts[i]
-			args := asmNameRe.ReplaceAllString(inst.args, "")
 			var out uint8
 			for _, s := range []uint8{clean, dirty} {
 				if in[i]&s == 0 {
@@ -720,12 +791,12 @@ func TestNoLegacySSEWithDirtyUpperState(t *testing.T) {
 				switch {
 				case inst.op == "VZEROUPPER" || inst.op == "VZEROALL":
 					o = clean
-				case asmYRe.MatchString(args):
+				case inst.hasY:
 					o = dirty
 				case callee != "":
 					cs, known := sum[callee]
 					switch {
-					case strings.HasPrefix(callee, "runtime.morestack") || asmNoReturnRe.MatchString(callee):
+					case strings.HasPrefix(callee, "runtime.morestack") || inst.noReturn:
 						// The stack check runs before any vector
 						// instruction; a failed bounds check does not
 						// return.
@@ -745,20 +816,19 @@ func TestNoLegacySSEWithDirtyUpperState(t *testing.T) {
 				case inst.op == "RET":
 					res.exit |= s
 				case s == dirty && (inst.op == "DUFFZERO" || inst.op == "DUFFCOPY" ||
-					!strings.HasPrefix(inst.op, "V") && asmXRe.MatchString(args)):
+					!strings.HasPrefix(inst.op, "V") && inst.hasX):
 					hit(i, inst.String())
 				}
 				out |= o
 			}
-			tg, nx, err := f.succ(i)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, j := range [2]int{tg, nx} {
-				if j >= 0 && in[j]|out != in[j] {
+			err := f.each(i, func(_, j int) {
+				if in[j]|out != in[j] {
 					in[j] |= out
 					work = append(work, j)
 				}
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
 		}
 		if report {

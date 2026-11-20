@@ -2,6 +2,10 @@
 
 package ooura
 
+// useSimd reports whether the archsimd kernels can run: NEON is always
+// present on arm64.
+const useSimd = true
+
 func fft(a *[128]float32)        { fftSimd(a) }
 func inverseFft(a *[128]float32) { inverseFftSimd(a) }
 

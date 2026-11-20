@@ -19,9 +19,12 @@ func poisonScratch(s *PairScratch) {
 
 // TestPairMatchesSingle checks the 256-bit pair kernel against two runs of
 // the 128-bit split kernel and of the SSE2 reference with the FftData copy,
-// whatever the CPU reports; with NaNs and infinities in either frame it has
+// on a CPU with AVX2; with NaNs and infinities in either frame it has
 // a NaN wherever the single transform has one and the same bits elsewhere.
 func TestPairMatchesSingle(t *testing.T) {
+	if !usePair {
+		t.Skip("no AVX2")
+	}
 	comparePairs(t, "simd", testInputs(), false, fftSplitPairSimd, inverseFftSplitPairSimd, simdFftSplit, simdInverseFftSplit)
 	comparePairs(t, "sse2", testInputs(), false, fftSplitPairSimd, inverseFftSplitPairSimd,
 		func(a *[128]float32, re, im *[65]float32) { fftSSE2Ref(a); unpack(a, re, im) },
@@ -30,6 +33,9 @@ func TestPairMatchesSingle(t *testing.T) {
 }
 
 func BenchmarkFftSplitPairSimd(b *testing.B) {
+	if !usePair {
+		b.Skip("no AVX2")
+	}
 	b.Run("pair", func(b *testing.B) { benchSplitPair(b, fftSplitPairSimd, inverseFftSplitPairSimd) })
 	b.Run("two", func(b *testing.B) { benchSplitPair(b, twoSplits(simdFftSplit), twoInverseSplits(simdInverseFftSplit)) })
 }
