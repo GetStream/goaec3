@@ -93,7 +93,13 @@ func (e *stErleInstantaneous) updateQualityEstimate() {
 // FullBandErleEstimator mirrors fullband_erle_estimator.h: estimates the
 // fullband ERLE and the linear filter quality.
 type FullBandErleEstimator struct {
-	more               *fbErleChannels // with more than inlineChannels channels
+	*fullBandErleEstimatorState
+	more *fbErleChannels // with more than inlineChannels channels
+}
+
+// fullBandErleEstimatorState is the state of a FullBandErleEstimator but its
+// pointer.
+type fullBandErleEstimatorState struct {
 	numCaptureChannels int
 	minErleLog2        float32
 	maxErleLfLog2      float32
@@ -130,19 +136,31 @@ func (f *FullBandErleEstimator) channels() fbErleChannels {
 	}
 }
 
+// bind makes f the view of st.
+func (f *FullBandErleEstimator) bind(st *fullBandErleEstimatorState, b *binder) {
+	f.fullBandErleEstimatorState = st
+	if b != nil {
+		bindPtr(b, &f.more, &b.x.fbErleMore)
+	}
+}
+
 func NewFullBandErleEstimator(config *EchoCanceller3Config, numCaptureChannels int) *FullBandErleEstimator {
 	f := &FullBandErleEstimator{}
+	f.bind(&fullBandErleEstimatorState{}, nil)
 	f.init(config, numCaptureChannels)
 	return f
 }
 
 // init sets up f in place.
 func (f *FullBandErleEstimator) init(config *EchoCanceller3Config, numCaptureChannels int) {
-	*f = FullBandErleEstimator{
+	st := f.fullBandErleEstimatorState
+	*st = fullBandErleEstimatorState{
 		numCaptureChannels: numCaptureChannels,
 		minErleLog2:        FastApproxLog2f(config.Erle.Min + stErleEpsilon),
 		maxErleLfLog2:      FastApproxLog2f(config.Erle.MaxL + stErleEpsilon),
 	}
+	*f = FullBandErleEstimator{}
+	f.bind(st, nil)
 	if n := numCaptureChannels; n > inlineChannelLimit {
 		f.more = &fbErleChannels{
 			holdCountersInstantaneousErle: make([]int, n),

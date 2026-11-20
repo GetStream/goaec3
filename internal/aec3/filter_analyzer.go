@@ -123,10 +123,17 @@ func (s *stFilterAnalysisState) Reset(defaultGain float32) {
 // impulse responses for delay, gain and consistency.
 //
 // The high-pass filtered impulse responses of all channels share one array
-// (storage), hCap samples per channel.
+// (storage), hCap samples per channel: room for the longest filter of the
+// config.
 type FilterAnalyzer struct {
-	more                 *faChannels // with more than inlineChannels channels
-	storage              []float32
+	*filterAnalyzerState
+	more    *faChannels // with more than inlineChannels channels
+	storage []float32
+}
+
+// filterAnalyzerState is the state of a FilterAnalyzer but its pointers.
+type filterAnalyzerState struct {
+	storageSpan          span
 	numCaptureChannels   int
 	hCap                 int
 	boundedErl           bool
@@ -171,8 +178,18 @@ func (f *FilterAnalyzer) hHighpass(ch, n int) []float32 {
 	return f.storage[ch*f.hCap : ch*f.hCap+n : (ch+1)*f.hCap]
 }
 
+// bind makes f the view of st.
+func (f *FilterAnalyzer) bind(st *filterAnalyzerState, b *binder) {
+	f.filterAnalyzerState = st
+	b.f32(&f.storage, &st.storageSpan)
+	if b != nil {
+		bindPtr(b, &f.more, &b.x.faMore)
+	}
+}
+
 func NewFilterAnalyzer(config *EchoCanceller3Config, numCaptureChannels int) *FilterAnalyzer {
 	f := &FilterAnalyzer{}
+	f.bind(&filterAnalyzerState{}, nil)
 	f.init(config, numCaptureChannels, make([]float32, faStorageSize(config, numCaptureChannels)))
 	return f
 }
@@ -180,18 +197,27 @@ func NewFilterAnalyzer(config *EchoCanceller3Config, numCaptureChannels int) *Fi
 // faStorageSize returns the number of samples a FilterAnalyzer keeps for
 // config.
 func faStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
-	return numCaptureChannels * GetTimeDomainLength(config.Filter.Refined.LengthBlocks)
+	return numCaptureChannels * faChannelSize(config)
+}
+
+// faChannelSize returns the number of samples a FilterAnalyzer keeps per
+// channel for config: those of the longest refined filter, the initial one
+// included, so that the filters of a Subtractor never make it grow.
+func faChannelSize(config *EchoCanceller3Config) int {
+	return GetTimeDomainLength(max(config.Filter.Refined.LengthBlocks, config.Filter.RefinedInitial.LengthBlocks))
 }
 
 // init sets up f in place over storage, which holds faStorageSize zeros.
 func (f *FilterAnalyzer) init(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
-	*f = FilterAnalyzer{
-		storage:            storage,
+	st := f.filterAnalyzerState
+	*st = filterAnalyzerState{
 		numCaptureChannels: numCaptureChannels,
-		hCap:               GetTimeDomainLength(config.Filter.Refined.LengthBlocks),
+		hCap:               faChannelSize(config),
 		boundedErl:         config.EpStrength.BoundedErl,
 		defaultGain:        config.EpStrength.DefaultGain,
 	}
+	*f = FilterAnalyzer{storage: storage}
+	f.bind(st, nil)
 	if n := numCaptureChannels; n > inlineChannelLimit {
 		f.more = &faChannels{
 			hLen:                 make([]int, n),
@@ -302,7 +328,8 @@ func (f *FilterAnalyzer) updateFilterGain(filterTimeDomain []float32, st *stFilt
 
 var stHighpassCoeffs = [3]float32{0.7929742, -0.36072128, -0.47047766}
 
-// grow gives every channel room for n samples.
+// grow gives every channel room for n samples. Only a FilterAnalyzer that
+// stands alone grows: the filters of a canceller fit the storage of init.
 func (f *FilterAnalyzer) grow(c faChannels, n int) {
 	storage := make([]float32, f.numCaptureChannels*n)
 	for ch := range c.hLen {

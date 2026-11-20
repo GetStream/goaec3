@@ -3,22 +3,43 @@ package aec3
 // ErleEstimator mirrors erle_estimator.h: combines the fullband, subband and
 // (when erle.num_sections > 1) signal dependent ERLE estimators.
 type ErleEstimator struct {
+	*erleEstimatorState
 	signalDependentErleEstimator *SignalDependentErleEstimator
 	fullbandErleEstimator        FullBandErleEstimator
 	subbandErleEstimator         SubbandErleEstimator
-	startupPhaseLengthBlocks     int
-	blocksSinceReset             int
+}
+
+// erleEstimatorState is the state of an ErleEstimator but its pointers.
+type erleEstimatorState struct {
+	fullbandErleEstimator    fullBandErleEstimatorState
+	subbandErleEstimator     subbandErleEstimatorState
+	startupPhaseLengthBlocks int
+	blocksSinceReset         int
+}
+
+// bind makes e the view of st.
+func (e *ErleEstimator) bind(st *erleEstimatorState, b *binder) {
+	e.erleEstimatorState = st
+	if b != nil {
+		bindPtr(b, &e.signalDependentErleEstimator, &b.x.signalDependentErleEstimator)
+	}
+	e.fullbandErleEstimator.bind(&st.fullbandErleEstimator, b)
+	e.subbandErleEstimator.bind(&st.subbandErleEstimator, b)
 }
 
 func NewErleEstimator(startupPhaseLengthBlocks int, config *EchoCanceller3Config, numCaptureChannels int) *ErleEstimator {
 	e := &ErleEstimator{}
+	e.bind(&erleEstimatorState{}, nil)
 	e.init(startupPhaseLengthBlocks, config, numCaptureChannels)
 	return e
 }
 
 // init sets up e in place.
 func (e *ErleEstimator) init(startupPhaseLengthBlocks int, config *EchoCanceller3Config, numCaptureChannels int) {
-	*e = ErleEstimator{startupPhaseLengthBlocks: startupPhaseLengthBlocks}
+	st := e.erleEstimatorState
+	*st = erleEstimatorState{startupPhaseLengthBlocks: startupPhaseLengthBlocks}
+	*e = ErleEstimator{}
+	e.bind(st, nil)
 	e.fullbandErleEstimator.init(config, numCaptureChannels)
 	e.subbandErleEstimator.init(config, numCaptureChannels)
 	if config.Erle.NumSections > 1 {

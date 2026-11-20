@@ -3,14 +3,47 @@ package aec3
 // SubtractorOutputAnalyzer mirrors subtractor_output_analyzer.h: analyzes
 // the properties of the subtractor output.
 type SubtractorOutputAnalyzer struct {
-	moreFiltersConverged []bool // with more than inlineChannels channels
-	numCaptureChannels   int
-	filtersConverged     [inlineChannels]bool
+	*subtractorOutputAnalyzerState
+	more *soaMore // with more than inlineChannels channels
+}
+
+// subtractorOutputAnalyzerState is the state of a SubtractorOutputAnalyzer
+// but its pointer.
+type subtractorOutputAnalyzerState struct {
+	numCaptureChannels int
+	filtersConverged   [inlineChannels]bool
+}
+
+// soaMore is the per-channel state of a SubtractorOutputAnalyzer with more
+// than inlineChannels capture channels.
+type soaMore struct {
+	filtersConverged []bool
+}
+
+// bind makes s the view of st.
+func (s *SubtractorOutputAnalyzer) bind(st *subtractorOutputAnalyzerState, b *binder) {
+	s.subtractorOutputAnalyzerState = st
+	if b != nil {
+		bindPtr(b, &s.more, &b.x.soaMore)
+	}
 }
 
 func NewSubtractorOutputAnalyzer(numCaptureChannels int) *SubtractorOutputAnalyzer {
-	return &SubtractorOutputAnalyzer{numCaptureChannels: numCaptureChannels,
-		moreFiltersConverged: moreChannels[bool](numCaptureChannels)}
+	s := &SubtractorOutputAnalyzer{}
+	s.bind(&subtractorOutputAnalyzerState{}, nil)
+	s.init(numCaptureChannels)
+	return s
+}
+
+// init sets up s in place.
+func (s *SubtractorOutputAnalyzer) init(numCaptureChannels int) {
+	st := s.subtractorOutputAnalyzerState
+	*st = subtractorOutputAnalyzerState{numCaptureChannels: numCaptureChannels}
+	*s = SubtractorOutputAnalyzer{}
+	s.bind(st, nil)
+	if numCaptureChannels > inlineChannelLimit {
+		s.more = &soaMore{filtersConverged: make([]bool, numCaptureChannels)}
+	}
 }
 
 // Update analyzes the subtractor output.
@@ -38,7 +71,10 @@ func (s *SubtractorOutputAnalyzer) Update(subtractorOutput []SubtractorOutput) (
 
 // ConvergedFilters returns the per-channel convergence flags.
 func (s *SubtractorOutputAnalyzer) ConvergedFilters() []bool {
-	return channelState(&s.filtersConverged, s.numCaptureChannels, s.moreFiltersConverged)
+	if s.more != nil {
+		return s.more.filtersConverged
+	}
+	return s.filtersConverged[:s.numCaptureChannels:s.numCaptureChannels]
 }
 
 // HandleEchoPathChange clears the convergence flags.

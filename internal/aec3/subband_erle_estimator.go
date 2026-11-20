@@ -5,7 +5,13 @@ const stBlocksForOnsetDetection = stBlocksToHoldErle + 150
 // SubbandErleEstimator mirrors subband_erle_estimator.h: estimates the ERLE
 // per frequency band.
 type SubbandErleEstimator struct {
-	more                   *sbErleChannels // with more than inlineChannels channels
+	*subbandErleEstimatorState
+	more *sbErleChannels // with more than inlineChannels channels
+}
+
+// subbandErleEstimatorState is the state of a SubbandErleEstimator but its
+// pointer.
+type subbandErleEstimatorState struct {
 	numCaptureChannels     int
 	useOnsetDetection      bool
 	minErle                float32
@@ -67,18 +73,30 @@ func (s *SubbandErleEstimator) channels() sbErleChannels {
 // defaults (WebRTC-Aec3MinErleDuringOnsetsKillSwitch disabled).
 func NewSubbandErleEstimator(config *EchoCanceller3Config, numCaptureChannels int) *SubbandErleEstimator {
 	s := &SubbandErleEstimator{}
+	s.bind(&subbandErleEstimatorState{}, nil)
 	s.init(config, numCaptureChannels)
 	return s
 }
 
+// bind makes s the view of st.
+func (s *SubbandErleEstimator) bind(st *subbandErleEstimatorState, b *binder) {
+	s.subbandErleEstimatorState = st
+	if b != nil {
+		bindPtr(b, &s.more, &b.x.sbErleMore)
+	}
+}
+
 // init sets up s in place.
 func (s *SubbandErleEstimator) init(config *EchoCanceller3Config, numCaptureChannels int) {
-	*s = SubbandErleEstimator{
+	st := s.subbandErleEstimatorState
+	*st = subbandErleEstimatorState{
 		numCaptureChannels:     numCaptureChannels,
 		useOnsetDetection:      config.Erle.OnsetDetection,
 		minErle:                config.Erle.Min,
 		useMinErleDuringOnsets: true,
 	}
+	*s = SubbandErleEstimator{}
+	s.bind(st, nil)
 	if n := numCaptureChannels; n > inlineChannelLimit {
 		s.more = &sbErleChannels{
 			accumY2:              make([][FftLengthBy2Plus1]float32, n),

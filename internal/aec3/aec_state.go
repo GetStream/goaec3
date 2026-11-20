@@ -214,15 +214,24 @@ func (t *stTransparentState) Update(filterDelayBlocks int, anyFilterConsistent, 
 // AecState mirrors aec_state.h: the state and the conditions for the echo
 // removal functionality. Field trials are at their defaults.
 //
-// The estimators and analyzers are part of the AecState, as is the
-// per-channel state of up to inlineChannels capture channels. Those that
-// hold pointers come first, each with its pointers at its start.
+// An AecState is the view of an aecStateState, which holds the estimators
+// and analyzers and the per-channel state of up to inlineChannels capture
+// channels; the view holds the views of those that have pointers.
 type AecState struct {
+	*aecStateState
 	more                     *aecMore // with more than inlineChannels channels
 	subtractorOutputAnalyzer SubtractorOutputAnalyzer
 	filterAnalyzer           FilterAnalyzer
 	reverbModelEstimator     ReverbModelEstimator
 	erleEstimator            ErleEstimator
+}
+
+// aecStateState is the state of an AecState but its pointers.
+type aecStateState struct {
+	subtractorOutputAnalyzer subtractorOutputAnalyzerState
+	filterAnalyzer           filterAnalyzerState
+	reverbModelEstimator     reverbModelEstimatorState
+	erleEstimator            erleEstimatorState
 
 	config                                      EchoCanceller3Config
 	numCaptureChannels                          int
@@ -275,6 +284,18 @@ func (a *AecState) usableLinearFilterEstimates() []bool {
 	return a.inline.usableLinearFilterEstimates[:a.numCaptureChannels:a.numCaptureChannels]
 }
 
+// bind makes a the view of st.
+func (a *AecState) bind(st *aecStateState, b *binder) {
+	a.aecStateState = st
+	if b != nil {
+		bindPtr(b, &a.more, &b.x.aecMore)
+	}
+	a.subtractorOutputAnalyzer.bind(&st.subtractorOutputAnalyzer, b)
+	a.filterAnalyzer.bind(&st.filterAnalyzer, b)
+	a.reverbModelEstimator.bind(&st.reverbModelEstimator, b)
+	a.erleEstimator.bind(&st.erleEstimator, b)
+}
+
 // aecStorageSize returns the number of samples an AecState keeps for config:
 // those of its FilterAnalyzer and of its ReverbModelEstimator.
 func aecStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
@@ -282,11 +303,12 @@ func aecStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
 }
 
 // NewAecState builds an AecState with the transparent mode classifier of
-// CreateTransparentMode. The estimators and analyzers are part of the
-// AecState, which is one heap object apart from the buffers whose size
-// depends on the filter length.
+// CreateTransparentMode. The estimators and analyzers are part of its
+// state, which is one heap object; the buffers whose size depends on the
+// filter length are another.
 func NewAecState(config *EchoCanceller3Config, numCaptureChannels int) *AecState {
 	a := &AecState{}
+	a.bind(&aecStateState{}, nil)
 	a.initDefault(config, numCaptureChannels, make([]float32, aecStorageSize(config, numCaptureChannels)))
 	return a
 }
@@ -307,6 +329,7 @@ func (a *AecState) initDefault(config *EchoCanceller3Config, numCaptureChannels 
 // which is a *LegacyTransparentMode or a *TransparentModeHmm.
 func NewAecStateWithTransparentMode(config *EchoCanceller3Config, numCaptureChannels int, tm TransparentMode) *AecState {
 	a := &AecState{}
+	a.bind(&aecStateState{}, nil)
 	a.init(config, numCaptureChannels, make([]float32, aecStorageSize(config, numCaptureChannels)))
 	switch t := tm.(type) {
 	case nil:
@@ -329,12 +352,15 @@ func NewAecStateWithTransparentMode(config *EchoCanceller3Config, numCaptureChan
 // init sets up a in place, without a transparent mode classifier, over
 // storage, which holds aecStorageSize zeros.
 func (a *AecState) init(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
-	*a = AecState{
+	st := a.aecStateState
+	*st = aecStateState{
 		config:                                  *config,
 		numCaptureChannels:                      numCaptureChannels,
 		fullResetAtEchoPathChange:               true,
 		subtractorAnalyzerResetAtEchoPathChange: true,
 	}
+	*a = AecState{}
+	a.bind(st, nil)
 	c := &a.config
 	if n := numCaptureChannels; n > inlineChannelLimit {
 		a.more = &aecMore{
@@ -366,7 +392,7 @@ func (a *AecState) init(config *EchoCanceller3Config, numCaptureChannels int, st
 	a.filterAnalyzer.init(c, numCaptureChannels, storage[:fa:fa])
 	a.echoAudibility.init(c.EchoAudibility.UseStationarityPropertiesAtInit)
 	a.reverbModelEstimator.init(c, numCaptureChannels, storage[fa:])
-	a.subtractorOutputAnalyzer = *NewSubtractorOutputAnalyzer(numCaptureChannels)
+	a.subtractorOutputAnalyzer.init(numCaptureChannels)
 }
 
 // UsableLinearEstimate reports whether the echo subtractor can be used to

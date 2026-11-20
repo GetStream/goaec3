@@ -6,8 +6,15 @@ package aec3
 // The samples of the decay estimators of all channels share one array
 // (storage), perChannel values each.
 type ReverbModelEstimator struct {
-	more               *rmChannels // with more than inlineChannels channels
-	storage            []float32
+	*reverbModelEstimatorState
+	more    *rmChannels // with more than inlineChannels channels
+	storage []float32
+}
+
+// reverbModelEstimatorState is the state of a ReverbModelEstimator but its
+// pointers.
+type reverbModelEstimatorState struct {
+	storageSpan        span
 	numCaptureChannels int
 	perChannel         int
 
@@ -37,8 +44,18 @@ func (r *ReverbModelEstimator) channels() rmChannels {
 	}
 }
 
+// bind makes r the view of st.
+func (r *ReverbModelEstimator) bind(st *reverbModelEstimatorState, b *binder) {
+	r.reverbModelEstimatorState = st
+	b.f32(&r.storage, &st.storageSpan)
+	if b != nil {
+		bindPtr(b, &r.more, &b.x.rmMore)
+	}
+}
+
 func NewReverbModelEstimator(config *EchoCanceller3Config, numCaptureChannels int) *ReverbModelEstimator {
 	r := &ReverbModelEstimator{}
+	r.bind(&reverbModelEstimatorState{}, nil)
 	r.init(config, numCaptureChannels, make([]float32, rmStorageSize(config, numCaptureChannels)))
 	return r
 }
@@ -51,11 +68,13 @@ func rmStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
 
 // init sets up r in place over storage, which holds rmStorageSize zeros.
 func (r *ReverbModelEstimator) init(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
-	*r = ReverbModelEstimator{
-		storage:            storage,
+	st := r.reverbModelEstimatorState
+	*st = reverbModelEstimatorState{
 		numCaptureChannels: numCaptureChannels,
 		perChannel:         stReverbDecayStorageSize(config),
 	}
+	*r = ReverbModelEstimator{storage: storage}
+	r.bind(st, nil)
 	if n := numCaptureChannels; n > inlineChannelLimit {
 		r.more = &rmChannels{
 			reverbDecayEstimators:    make([]reverbDecayState, n),

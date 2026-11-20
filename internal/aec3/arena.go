@@ -60,6 +60,14 @@ type arenaSizes struct{ f32, fft, spec, i32 int32 }
 type bpExtra struct {
 	erMore  *erMore
 	subMore *subMore
+
+	aecMore                      *aecMore
+	soaMore                      *soaMore
+	faMore                       *faChannels
+	rmMore                       *rmChannels
+	fbErleMore                   *fbErleChannels
+	sbErleMore                   *sbErleChannels
+	signalDependentErleEstimator *SignalDependentErleEstimator
 }
 
 // bpNoExtra is what a view binds to without extras; it is never written.

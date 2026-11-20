@@ -565,8 +565,8 @@ func TestEc3AllocationFree(t *testing.T) {
 }
 
 // TestAecStateObjects checks that an AecState of up to inlineChannels capture
-// channels is one object apart from the three buffers that depend on the
-// filter length or come with the subtractor output analyzer.
+// channels is its view, its state and the buffers that depend on the filter
+// length.
 func TestAecStateObjects(t *testing.T) {
 	cfg := DefaultEchoCanceller3Config()
 	for ch := 1; ch <= inlineChannels; ch++ {

@@ -17,13 +17,14 @@ type EchoControlMetrics struct {
 type EchoRemover struct {
 	*echoRemoverState
 	more       *erMore // with more than inlineChannels channels
+	aecState   AecState
 	subtractor Subtractor
 }
 
 // echoRemoverState is the state of an EchoRemover but its pointers.
 type echoRemoverState struct {
 	_                     noCopy
-	aecState              AecState
+	aecState              aecStateState
 	subtractor            subtractorState
 	suppressionGain       SuppressionGain
 	cng                   ComfortNoiseGenerator
@@ -96,6 +97,7 @@ func (e *EchoRemover) bind(st *echoRemoverState, b *binder) {
 	if b != nil {
 		bindPtr(b, &e.more, &b.x.erMore)
 	}
+	e.aecState.bind(&st.aecState, b)
 	e.subtractor.bind(&st.subtractor, b)
 }
 
