@@ -33,6 +33,8 @@ var boundsCheckFree = map[string][]string{
 	"simd/amd64": {
 		"bitrv2Cft1stPair", "cftmdlPair", "cftfsubTailPair", "cftbsubTailScatter",
 		"rftfsubSplitPair", "rftbsubSplitPair", "fftSplitPairSimd", "inverseFftSplitPairSimd",
+		"soaCft1stPackedPair", "soaCft1stSplitPair", "soaCftmdlPair", "soaCftfsubTailPair", "soaCftbsubTailPair",
+		"soaRftfsubPair", "soaRftbsubPair", "fftSplitPairSoa", "inverseFftSplitPairSoa",
 	},
 }
 
