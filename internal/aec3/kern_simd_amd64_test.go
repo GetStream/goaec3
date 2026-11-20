@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+// TestExpectAVXOnly fails under GOAEC3_EXPECT_AVX_ONLY=1 unless the CPU
+// reports AVX and no AVX2, so that a run meant to exercise the 128-bit
+// kernels on such a CPU (the avx-only job of ci.yml, under QEMU) cannot
+// pass on another one.
+func TestExpectAVXOnly(t *testing.T) {
+	if os.Getenv("GOAEC3_EXPECT_AVX_ONLY") != "1" {
+		t.Skip("GOAEC3_EXPECT_AVX_ONLY is not set")
+	}
+	if !kernHasAVX || kernHasAVX2 || kernHasFMA || DetectOptimization() != OptSse2 {
+		t.Fatalf("AVX=%v AVX2=%v FMA(with AVX2)=%v lane=%v: want AVX without AVX2 and the SSE2 lane",
+			kernHasAVX, kernHasAVX2, kernHasFMA, DetectOptimization())
+	}
+}
+
 // TestKernSpectrumAvx2Kernel checks the Float32x8.MulAdd kernel against
 // kernSpectrumAvx2Ref. It runs when CPUID reports FMA, or when
 // GOAEC3_FORCE_FMA=1: Rosetta 2 executes VFMADD but does not advertise FMA,

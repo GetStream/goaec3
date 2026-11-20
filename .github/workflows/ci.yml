@@ -107,6 +107,31 @@ jobs:
       - name: go test -race -short
         run: go test -count=1 -race -short ./...
 
+  # The archsimd build on a CPU with AVX but without AVX2 (Sandy Bridge, Ivy
+  # Bridge, AMD families 15h and 16h), emulated by QEMU: an AVX2 instruction
+  # in a 128-bit kernel faults there. GOAEC3_EXPECT_AVX_ONLY fails the run
+  # unless the emulated CPU reports AVX and no AVX2. 256-bit AVX instructions
+  # do not fault on such a CPU; TestSimdInstructionsGated proves their
+  # absence from the machine code that runs without AVX2.
+  avx-only:
+    name: avx-only (qemu)
+    runs-on: ubuntu-latest
+    env:
+      GOEXPERIMENT: simd
+      GOAEC3_EXPECT_AVX_ONLY: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: qemu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
+          qemu-x86_64 --version
+      - name: go test -short on an emulated Sandy Bridge
+        run: go test -count=1 -short -timeout 40m -exec 'qemu-x86_64 -cpu SandyBridge' ./...
+
   # End-to-end (BlockProcessor, EchoCanceller3, public API, the random-config
   # and fuzz-seed differential tests) and per-kernel (matched filter,
   # adaptive filter) parity against the C++ reference built from the pinned
