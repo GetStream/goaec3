@@ -104,6 +104,57 @@ func afirFreqRespBlockSse2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 	}
 }
 
+// afirInfBits is the bit pattern of +Inf. The float32 values whose pattern
+// is not above it as an unsigned integer are +0, the positive numbers and
+// +Inf, and on them the order of the patterns is the order of the values.
+const afirInfBits = 0x7F800000
+
+// afirFreqRespBlockSse2Fast is afirFreqRespBlockSse2Go without a branch on
+// the data. With more than one render channel the comparison of the stored
+// maximum with a channel's power is as good as random, and a float
+// comparison that selects between two floats compiles to a branch.
+//
+// For a and b that are +0, positive or +Inf, _mm_max_ps(a, b) = a > b ? a : b
+// has the larger bit pattern: a > b holds exactly when the pattern of a is
+// the larger one, and patterns that are equal are the same value. So the
+// maximum of the two patterns as unsigned integers (a conditional move) is
+// the result, and it exceeds afirInfBits exactly when a or b is a NaN, a
+// negative number or -0. The first group of four bins with such a value
+// hands the rest of the block to afirFreqRespBlockSse2From and returns.
+func afirFreqRespBlockSse2Fast(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
+	for j := 0; j < FftLengthBy2; j += 4 {
+		re := (*[4]float32)(h.Re[j : j+4])
+		im := (*[4]float32)(h.Im[j : j+4])
+		o := (*[4]float32)(h2[j : j+4])
+		t0 := float32(re[0]*re[0]) + float32(im[0]*im[0])
+		t1 := float32(re[1]*re[1]) + float32(im[1]*im[1])
+		t2 := float32(re[2]*re[2]) + float32(im[2]*im[2])
+		t3 := float32(re[3]*re[3]) + float32(im[3]*im[3])
+		m0 := max(math.Float32bits(o[0]), math.Float32bits(t0))
+		m1 := max(math.Float32bits(o[1]), math.Float32bits(t1))
+		m2 := max(math.Float32bits(o[2]), math.Float32bits(t2))
+		m3 := max(math.Float32bits(o[3]), math.Float32bits(t3))
+		if m0 > afirInfBits || m1 > afirInfBits || m2 > afirInfBits || m3 > afirInfBits {
+			afirFreqRespBlockSse2From(h, h2, j)
+			return
+		}
+		o[0] = math.Float32frombits(m0)
+		o[1] = math.Float32frombits(m1)
+		o[2] = math.Float32frombits(m2)
+		o[3] = math.Float32frombits(m3)
+	}
+}
+
+// afirFreqRespBlockSse2From is afirFreqRespBlockSse2Go for bins from..63.
+//
+//go:noinline
+func afirFreqRespBlockSse2From(h *FftData, h2 *[FftLengthBy2Plus1]float32, from int) {
+	for j := from; j < FftLengthBy2; j++ {
+		tmp := float32(h.Re[j]*h.Re[j]) + float32(h.Im[j]*h.Im[j])
+		h2[j] = sseMax(h2[j], tmp)
+	}
+}
+
 // AdaptPartitions is aec3::AdaptPartitions (scalar): H(t+1)=H(t)+G(t)*conj(X(t)).
 func AdaptPartitions(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H FirCoefficients) {
 	data := renderBuffer.GetFftBuffer()

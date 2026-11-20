@@ -2,6 +2,8 @@ package aec3
 
 // Port of adaptive_fir_filter_avx2.cc.
 
+import "math"
+
 // ComputeFrequencyResponseAvx2 is aec3::ComputeFrequencyResponse_Avx2: bins
 // 0..63 compute fma(im, im, re*re) with a single rounding.
 func ComputeFrequencyResponseAvx2(numPartitions int, H FirCoefficients, H2 [][FftLengthBy2Plus1]float32) {
@@ -25,6 +27,11 @@ func ApplyFilterAvx2(renderBuffer *RenderBuffer, numPartitions int, H FirCoeffic
 // The loop computes the fast path of fmaf (fmaf.go) for four bins at a time
 // and makes no call: the first group with a sum that needs the slow path
 // hands the rest of the block to afirFreqRespBlockAvx2From and returns.
+//
+// The maximum is the one of afirFreqRespBlockSse2Fast, the larger bit
+// pattern, taken without a branch on the data; a group with a NaN, a
+// negative number or -0 among its operands goes to
+// afirFreqRespBlockAvx2From as well.
 func afirFreqRespBlockAvx2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 	for j := 0; j < FftLengthBy2; j += 4 {
 		re := (*[4]float32)(h.Re[j : j+4])
@@ -38,10 +45,18 @@ func afirFreqRespBlockAvx2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 			afirFreqRespBlockAvx2From(h, h2, j)
 			return
 		}
-		o[0] = sseMax(o[0], float32(q0))
-		o[1] = sseMax(o[1], float32(q1))
-		o[2] = sseMax(o[2], float32(q2))
-		o[3] = sseMax(o[3], float32(q3))
+		m0 := max(math.Float32bits(o[0]), math.Float32bits(float32(q0)))
+		m1 := max(math.Float32bits(o[1]), math.Float32bits(float32(q1)))
+		m2 := max(math.Float32bits(o[2]), math.Float32bits(float32(q2)))
+		m3 := max(math.Float32bits(o[3]), math.Float32bits(float32(q3)))
+		if m0 > afirInfBits || m1 > afirInfBits || m2 > afirInfBits || m3 > afirInfBits {
+			afirFreqRespBlockAvx2From(h, h2, j)
+			return
+		}
+		o[0] = math.Float32frombits(m0)
+		o[1] = math.Float32frombits(m1)
+		o[2] = math.Float32frombits(m2)
+		o[3] = math.Float32frombits(m3)
 	}
 }
 

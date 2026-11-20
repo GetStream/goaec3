@@ -377,3 +377,52 @@ func BenchmarkAfirErlComputer(b *testing.B) {
 		})
 	}
 }
+
+// The branch-free maxima of the SSE2 and AVX2 frequency-response blocks
+// against their definitions (_mm_max_ps as sseMax, the fused sum as fmaf),
+// on stored maxima as the filter has them (+0, earlier powers, equal to the
+// new power) and with a NaN, an infinity, a negative number or -0 at
+// single positions of the stored maxima or of the coefficients.
+func TestAfirFreqRespBlockFastMax(t *testing.T) {
+	rng := rand.New(rand.NewSource(77))
+	edges := []float32{float32(math.NaN()), float32(math.Inf(1)), float32(math.Inf(-1)),
+		float32(math.Copysign(0, -1)), -1, -1e-30, 0, math.MaxFloat32, math.SmallestNonzeroFloat32}
+	for trial := 0; trial < 4000; trial++ {
+		var h FftData
+		afirTestRandFft(rng, &h, 0.1)
+		var h2 [FftLengthBy2Plus1]float32
+		for j := range h2 {
+			switch rng.Intn(4) {
+			case 0:
+				h2[j] = 0
+			case 1:
+				h2[j] = float32(h.Re[j]*h.Re[j]) + float32(h.Im[j]*h.Im[j])
+			default:
+				v := float32(rng.NormFloat64() * 0.1)
+				h2[j] = float32(v * v)
+			}
+		}
+		for n := trial % 4; n > 0; n-- {
+			e := edges[rng.Intn(len(edges))]
+			switch j := rng.Intn(FftLengthBy2); rng.Intn(3) {
+			case 0:
+				h2[j] = e
+			case 1:
+				h.Re[j] = e
+			default:
+				h.Im[j] = e
+			}
+		}
+		got, want := h2, h2
+		afirFreqRespBlockSse2Fast(&h, &got)
+		afirFreqRespBlockSse2Go(&h, &want)
+		kernCheckExact(t, "sse2 freqresp block", got[:], want[:])
+
+		got, want = h2, h2
+		afirFreqRespBlockAvx2Go(&h, &got)
+		for j := 0; j < FftLengthBy2; j++ {
+			want[j] = sseMax(want[j], fmaf(h.Im[j], h.Im[j], float32(h.Re[j]*h.Re[j])))
+		}
+		kernCheckExact(t, "avx2 freqresp block", got[:], want[:])
+	}
+}
