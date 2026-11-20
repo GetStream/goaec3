@@ -176,17 +176,15 @@ func ec3CheckFrame(frame [][]float32, numChannels, frameLength int) error {
 // (ProcessCapture, ProcessCaptureWithLinearOutput, SetAudioBufferDelay,
 // SetCaptureOutputUsage, Metrics). Calls on each side must be serialized.
 //
-// The canceller is one heap object whose few pointers come first; they are
-// all the garbage collector reads of it. The state of every component
-// follows by value and holds no pointers: its buffers are views of a few
-// pointer-free arrays, bound on the stack of each call.
+// The canceller is one heap object whose few pointer words come first; they
+// are all the garbage collector reads of it. The state of every component
+// follows by value and holds no pointers: its buffers are views, bound on
+// the stack of each call, of the arrays of one more pointer-free object (the
+// arena; see arena.go).
 type EchoCanceller struct {
-	// splitters are the band-splitting filters of the capture channels and
-	// then of the render channels; nil at 16 kHz.
-	splitters []bands.ChannelSplitter
-	core      aec3.Ec3Core
-	render    ec3Side
-	capture   ec3Side
+	core    aec3.Ec3Core
+	render  ec3Side
+	capture ec3Side
 
 	sampleRateHz       int
 	frameLength        int
@@ -246,10 +244,14 @@ func newEchoCanceller(cfg, multichannelCfg *Config, sampleRateHz, numRenderChann
 	// last.
 	extra := e.capture.init(sampleRateHz, numCaptureChannels, 0, 0)
 	extra += e.render.init(sampleRateHz, numRenderChannels, extra, numCaptureChannels)
+	// The arena holds the band-splitting filters, of the capture channels
+	// first.
+	numSplitters := 0
 	if sampleRateHz > 16000 {
-		e.splitters = make([]bands.ChannelSplitter, numCaptureChannels+numRenderChannels)
+		numSplitters = numCaptureChannels + numRenderChannels
 	}
-	e.core.Init(cfg, multichannelCfg, sampleRateHz, numRenderChannels, numCaptureChannels, extra)
+	e.core.Init(cfg, multichannelCfg, sampleRateHz, numRenderChannels, numCaptureChannels, extra,
+		func(n aec3.ArenaSizes) aec3.Arena { return newEcArena(n, numSplitters) })
 	return e, nil
 }
 
@@ -273,7 +275,7 @@ func (e *EchoCanceller) AnalyzeRender(render [][]float32) error {
 	}
 	var ec aec3.EchoCanceller3
 	e.core.BindRender(&ec)
-	e.render.split(render, ec.RenderFrame(), ec.ExtraSamples(), e.splitters)
+	e.render.split(render, ec.RenderFrame(), ec.ExtraSamples(), e.splitters())
 	ec.AnalyzeRenderFrame()
 	return nil
 }
@@ -365,6 +367,10 @@ func ec3CheckCompatible(a, b *Config) error {
 func (e *EchoCanceller) processCapture(ec *aec3.EchoCanceller3, capture [][]float32) {
 	frame := ec.CaptureFrame()
 	extra := ec.ExtraSamples()
+	var splitters []bands.ChannelSplitter
+	if e.capture.numBands > 1 {
+		splitters = e.splitters()
+	}
 	if e.capture.numBands == 1 {
 		for ch, x := range capture {
 			bands.FloatToFloatS16Slice(x, frame.View(0, ch))
@@ -375,13 +381,13 @@ func (e *EchoCanceller) processCapture(ec *aec3.EchoCanceller3, capture [][]floa
 			bands.FloatToFloatS16Slice(x, e.capture.channel(extra, ch))
 		}
 		ec.AnalyzeCaptureSamples(e.capture.full(extra))
-		e.capture.analysis(frame, extra, e.splitters)
+		e.capture.analysis(frame, extra, splitters)
 	}
 	levelChange := e.echoPathGainChange.Swap(false)
 	// With Filter.ExportLinearAecOutput the linear output framer must see
 	// every frame.
 	ec.ProcessCaptureFrame(e.exportLinearOutput, levelChange)
-	e.capture.merge(frame, capture, extra, e.splitters)
+	e.capture.merge(frame, capture, extra, splitters)
 }
 
 // NotifyEchoPathGainChange flags a change of the echo path gain, such as an
@@ -424,6 +430,11 @@ func (e *EchoCanceller) NumRenderChannels() int { return e.numRenderChannels }
 
 // NumCaptureChannels returns the number of capture channels.
 func (e *EchoCanceller) NumCaptureChannels() int { return e.numCaptureChannels }
+
+// splitters returns the band-splitting filters of e, which its arena holds.
+func (e *EchoCanceller) splitters() []bands.ChannelSplitter {
+	return e.core.Arena().(ecArena).splitters()
+}
 
 // stereoActive reports whether e processes its render signal in stereo (for
 // tests; it belongs to the capture side).

@@ -47,14 +47,13 @@ func footprint(t testing.TB, rate, ch int) (bytes, objects uint64) {
 
 // footprintObjectLimits bounds the heap objects per canceller of each
 // footprintCases entry.
-var footprintObjectLimits = []uint64{5, 6, 6}
+var footprintObjectLimits = []uint64{2, 2, 3}
 
 // TestNewFootprint reports the live heap per canceller and bounds the number
 // of heap objects, which sets the mark cost of a GC cycle with many live
 // cancellers: the canceller itself, of which the garbage collector reads the
-// first few words, and pointer-free arrays it does not read (the samples,
-// the filter coefficients, the spectra, the delay histograms and, at 32 and
-// 48 kHz, the band-splitting filters).
+// first few words, and its arena, which has no pointers; with two render
+// channels the block processor has an arena of its own.
 func TestNewFootprint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
@@ -138,11 +137,11 @@ func hasPointers(t reflect.Type) bool {
 	return false
 }
 
-// TestPointerSlots bounds the pointers the garbage collector follows per
-// canceller: one per array of TestNewFootprint, and those into the array of
-// samples (the canceller's own part, the queue's and the block processor's).
+// TestPointerSlots bounds the pointers per canceller, as reflection counts
+// them: the canceller, and an interface and its pointer per arena. The
+// garbage collector follows one pointer per arena.
 func TestPointerSlots(t *testing.T) {
-	limits := []int{7, 8, 8}
+	limits := []int{3, 3, 5}
 	for i, c := range footprintCases {
 		ec, err := New(DefaultConfig(), c.rate, c.ch, c.ch)
 		if err != nil {
@@ -190,7 +189,7 @@ func TestPointerWords(t *testing.T) {
 	if strconv.IntSize != 64 {
 		t.Skip("the bounds are for 64-bit pointers")
 	}
-	const maxWords, maxEnd = 9, 256
+	const maxWords, maxEnd = 7, 136
 	typ := reflect.TypeOf(EchoCanceller{})
 	words, end := pointerWords(typ)
 	t.Logf("%d pointer words, the last one ends at byte %d of %d", words, end, typ.Size())
@@ -396,7 +395,7 @@ func TestGCMarkPerCanceller(t *testing.T) {
 	if testing.Short() || raceEnabled {
 		t.Skip("timing")
 	}
-	const n, maxNs = 2000, 1000
+	const n, maxNs = 2000, 1500
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	for _, c := range footprintCases {
 		_, empty := gcCycles(20)

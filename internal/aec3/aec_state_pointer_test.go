@@ -53,7 +53,7 @@ func TestAecStateBoundView(t *testing.T) {
 			config := DefaultEchoCanceller3Config()
 			config.Erle.NumSections = sections
 			var c Ec3Core
-			c.Init(&config, nil, 16000, numCh, numCh, 0)
+			c.Init(&config, nil, 16000, numCh, numCh, 0, nil)
 			var e EchoCanceller3
 			c.Bind(&e)
 			a := &e.blockProcessor.ownEchoRemover.aecState

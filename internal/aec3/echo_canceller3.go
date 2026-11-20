@@ -123,63 +123,81 @@ func ec3RenderTransferQueueInitialSize(maxFrames, numBands, numChannels int) int
 	return min(maxFrames, ec3RenderTransferQueueInitialFrames) * numBands * numChannels * SplitBandSize
 }
 
-// init sets up q over initial, which holds
-// ec3RenderTransferQueueInitialSize samples: the queue allocates only when
-// it grows.
-func (q *ec3RenderTransferQueue) init(maxFrames, numBands, numChannels int, initial []float32) {
+// init sets up q. The queue starts with the
+// ec3RenderTransferQueueInitialSize samples of buffer and allocates only
+// when it grows; with a nil buffer it starts with those the caller passes
+// to insert and remove (the canceller's, which keeps no pointer for them).
+func (q *ec3RenderTransferQueue) init(maxFrames, numBands, numChannels int, buffer []float32) {
 	q.frameSize, q.maxFrames = numBands*numChannels*SplitBandSize, maxFrames
-	q.buffer = initial
+	q.buffer = buffer
+}
+
+// buf returns the frames of the queue: its buffer, or initial before it has
+// one.
+func (q *ec3RenderTransferQueue) buf(initial []float32) []float32 {
+	if q.buffer != nil {
+		return q.buffer
+	}
+	return initial
 }
 
 func (q *ec3RenderTransferQueue) capacity() int { return len(q.buffer) / q.frameSize }
 
-func (q *ec3RenderTransferQueue) slot(index int) []float32 {
-	n := q.frameSize
-	return q.buffer[index*n : (index+1)*n : (index+1)*n]
+func ec3QueueSlot(buffer []float32, n, index int) []float32 {
+	return buffer[index*n : (index+1)*n : (index+1)*n]
 }
 
 // grow doubles the capacity (up to maxFrames), keeping the queued frames in
 // order at the start of the new buffer.
-func (q *ec3RenderTransferQueue) grow() {
+func (q *ec3RenderTransferQueue) grow(old []float32) {
 	n := q.frameSize
-	capacity := q.capacity()
+	capacity := len(old) / n
 	buffer := make([]float32, min(q.maxFrames, 2*capacity)*n)
 	for i := 0; i < q.numElements; i++ {
-		copy(buffer[i*n:(i+1)*n], q.slot((q.nextReadIndex+i)%capacity))
+		copy(buffer[i*n:(i+1)*n], ec3QueueSlot(old, n, (q.nextReadIndex+i)%capacity))
 	}
 	q.buffer = buffer
 	q.nextReadIndex = 0
 	q.nextWriteIndex = q.numElements
 }
 
-func (q *ec3RenderTransferQueue) Insert(input Frame) bool {
+func (q *ec3RenderTransferQueue) Insert(input Frame) bool { return q.insert(input, nil) }
+
+func (q *ec3RenderTransferQueue) Remove(output Frame) bool { return q.remove(output, nil) }
+
+// insert is Insert for a queue that starts with the frames of initial.
+func (q *ec3RenderTransferQueue) insert(input Frame, initial []float32) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.numElements == q.capacity() {
+	buffer := q.buf(initial)
+	if q.numElements == len(buffer)/q.frameSize {
 		if q.numElements == q.maxFrames {
 			return false
 		}
-		q.grow()
+		q.grow(buffer)
+		buffer = q.buffer
 	}
-	copy(q.slot(q.nextWriteIndex), input.data)
+	copy(ec3QueueSlot(buffer, q.frameSize, q.nextWriteIndex), input.data)
 	q.numElements++
 	q.nextWriteIndex++
-	if q.nextWriteIndex == q.capacity() {
+	if q.nextWriteIndex == len(buffer)/q.frameSize {
 		q.nextWriteIndex = 0
 	}
 	return true
 }
 
-func (q *ec3RenderTransferQueue) Remove(output Frame) bool {
+// remove is Remove for a queue that starts with the frames of initial.
+func (q *ec3RenderTransferQueue) remove(output Frame, initial []float32) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.numElements == 0 {
 		return false
 	}
-	copy(output.data, q.slot(q.nextReadIndex))
+	buffer := q.buf(initial)
+	copy(output.data, ec3QueueSlot(buffer, q.frameSize, q.nextReadIndex))
 	q.numElements--
 	q.nextReadIndex++
-	if q.nextReadIndex == q.capacity() {
+	if q.nextReadIndex == len(buffer)/q.frameSize {
 		q.nextReadIndex = 0
 	}
 	return true
@@ -215,7 +233,8 @@ func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numChannels int) (m
 
 // Insert moves renderQueueInputFrame into the transfer queue; more is what
 // init returned.
-func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue, renderQueueInputFrame Frame, more []BiQuad) {
+func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue, renderQueueInputFrame Frame, more []BiQuad,
+	initial []float32) {
 	if w.hasHighPassFilter {
 		sections := channelState(&w.sections, renderQueueInputFrame.numChannels, more)
 		for channel := range sections {
@@ -224,7 +243,7 @@ func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue, re
 		}
 	}
 
-	_ = renderTransferQueue.Insert(renderQueueInputFrame)
+	_ = renderTransferQueue.insert(renderQueueInputFrame, initial)
 }
 
 // EchoCanceller3 is the main AEC3 class (echo_canceller3.h). It receives
@@ -257,37 +276,110 @@ type EchoCanceller3 struct {
 	core                     *Ec3Core
 	storage                  []float32 // every sample buffer but the transfer queue
 	renderTransferQueue      *ec3RenderTransferQueue
-	hpMore                   []BiQuad        // of the render writer
-	blockProcessorForTesting *BlockProcessor // set by SetBlockProcessorForTesting
+	hpMore                   []BiQuad               // of the render writer
+	alloc                    func(ArenaSizes) Arena // what init hands to the first adopt
+	blockProcessorForTesting *BlockProcessor        // set by SetBlockProcessorForTesting
 	blockProcessor           BlockProcessor
 }
 
-// Ec3Core is what a canceller keeps between calls: a few pointers at its
-// start (the sample buffers, the render transfer queue, the arenas of the
-// block processor), which is all the garbage collector reads of it, and the
-// pointer-free state of every component. Bind and BindRender make an
-// EchoCanceller3 the view of it that has the methods.
+// Ec3Core is what a canceller keeps between calls: a few pointer words at
+// its start, of which one is not nil in a canceller with up to
+// inlineChannels channels and the default components (its arena), and the
+// pointer-free state of every component. That start is all the garbage
+// collector reads of it. Bind and BindRender make an EchoCanceller3 the view
+// of it that has the methods.
 //
 // The render side (BindRender and the render-side methods of its view) may
-// run concurrently with the capture side: it reads storage and hpMore, which
+// run concurrently with the capture side: it reads arena and hpMore, which
 // are set once, and the queue.
 type Ec3Core struct {
-	storage []float32
+	// arena holds the storage of the canceller and, with one render
+	// channel, after it the arrays of the block processor.
+	arena Arena
+	// bpArena holds the arrays of the block processor of a canceller with
+	// several render channels, which sets it up again, at another size, when
+	// stereo content starts or ends; nil otherwise.
+	bpArena Arena
 	queue   ec3RenderTransferQueue
 	hpMore  []BiQuad
-	bp      bpArenas
 	bpExtra *bpExtra
 	st      ec3State
 }
 
+// Arena is one object that holds the arrays of a canceller. One whose
+// arrays are part of it (a struct of arrays, which has no pointers) costs
+// the garbage collector one object and the canceller one pointer.
+type Arena interface {
+	// Views returns the arrays; every call returns the same.
+	Views() ArenaViews
+	// Alloc returns another arena that holds at least the given sizes.
+	Alloc(ArenaSizes) Arena
+}
+
+// ArenaViews are the arrays of an Arena, one per element type.
+type ArenaViews struct {
+	F32  []float32
+	Fft  []FftData
+	Spec [][FftLengthBy2Plus1]float32
+	I32  []int32
+}
+
+// ArenaSizes are the lengths a canceller needs of the arrays of its Arena.
+type ArenaSizes struct{ F32, Fft, Spec, I32 int }
+
+// sliceArena is an Arena of four allocations.
+type sliceArena struct{ v ArenaViews }
+
+func (a *sliceArena) Views() ArenaViews { return a.v }
+
+func (a *sliceArena) Alloc(n ArenaSizes) Arena { return NewSliceArena(n) }
+
+// NewSliceArena returns an Arena of any size: its arrays are allocated one
+// by one, so it costs the garbage collector five objects.
+func NewSliceArena(n ArenaSizes) Arena {
+	return &sliceArena{v: ArenaViews{
+		F32:  make([]float32, n.F32),
+		Fft:  make([]FftData, n.Fft),
+		Spec: make([][FftLengthBy2Plus1]float32, n.Spec),
+		I32:  make([]int32, n.I32),
+	}}
+}
+
 // Init sets up c, which must be the zero value. The storage has room for
-// extraSamples samples of the caller (EchoCanceller3.ExtraSamples).
+// extraSamples samples of the caller (EchoCanceller3.ExtraSamples). alloc
+// returns the arena, which holds at least the given sizes (nil:
+// NewSliceArena).
 func (c *Ec3Core) Init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
-	numRenderChannels, numCaptureChannels, extraSamples int) {
+	numRenderChannels, numCaptureChannels, extraSamples int, alloc func(ArenaSizes) Arena) {
 	var e EchoCanceller3
 	c.BindRender(&e)
 	e.blockProcessor.bind(&c.st.blockProcessor, nil)
-	e.init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels, extraSamples)
+	if alloc == nil {
+		alloc = NewSliceArena
+	}
+	e.init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels, extraSamples, alloc)
+}
+
+// Arena returns the arena Init allocated.
+func (c *Ec3Core) Arena() Arena { return c.arena }
+
+// storage returns the samples of the canceller itself.
+func (c *Ec3Core) storage() []float32 {
+	if c.arena == nil {
+		return nil
+	}
+	n := c.st.offsets.size
+	return c.arena.Views().F32[:n:n]
+}
+
+// bp returns the arenas of the block processor.
+func (c *Ec3Core) bp() bpArenas {
+	if c.bpArena != nil {
+		v := c.bpArena.Views()
+		return bpArenas{f32: v.F32, fft: v.Fft, spec: v.Spec, i32: v.I32}
+	}
+	v := c.arena.Views()
+	return bpArenas{f32: v.F32[c.st.offsets.size:], fft: v.Fft, spec: v.Spec, i32: v.I32}
 }
 
 // BindRender makes e the view of c for the render-side methods (RenderFrame,
@@ -295,7 +387,7 @@ func (c *Ec3Core) Init(config, multichannelConfig *EchoCanceller3Config, sampleR
 func (c *Ec3Core) BindRender(e *EchoCanceller3) {
 	e.ec3State = &c.st
 	e.core = c
-	e.storage = c.storage
+	e.storage = c.storage()
 	e.renderTransferQueue = &c.queue
 	e.hpMore = c.hpMore
 }
@@ -303,40 +395,46 @@ func (c *Ec3Core) BindRender(e *EchoCanceller3) {
 // Bind makes e the view of c for the capture side.
 func (c *Ec3Core) Bind(e *EchoCanceller3) {
 	c.BindRender(e)
-	b := binder{mode: bindView, a: c.bp, x: c.bpExtra}
+	b := binder{mode: bindView, a: c.bp(), x: c.bpExtra}
 	if b.x == nil {
 		b.x = &bpNoExtra
 	}
 	e.blockProcessor.bind(&c.st.blockProcessor, &b)
 }
 
-// adopt moves the slices that the init of p allocated into arenas of c, and
-// its pointers into the extras: afterwards a view of c needs nothing else.
-// The first time, the storage of the canceller (storageSize samples) and the
-// samples of the block processor are one array; a block processor set up
-// again gets arenas of its own.
-func (c *Ec3Core) adopt(p *BlockProcessor, storageSize int) {
-	st := &c.st.blockProcessor
+// measure returns the lengths of the slices that the init of p allocated,
+// per arena, and records them in the state.
+func (c *Ec3Core) measure(p *BlockProcessor) arenaSizes {
 	b := binder{mode: bindMeasure, x: &bpNoExtra}
-	p.bind(st, &b)
-	if c.storage == nil {
-		samples := make([]float32, storageSize+int(b.n.f32))
-		c.storage, b.a.f32 = samples[:storageSize:storageSize], samples[storageSize:]
-	} else if b.n.f32 > 0 {
-		b.a.f32 = make([]float32, b.n.f32)
+	p.bind(&c.st.blockProcessor, &b)
+	return b.n
+}
+
+// adopt moves the slices that the init of p allocated into the arena of c,
+// and its pointers into the extras: afterwards a view of c needs nothing
+// else. The first time it allocates the arena with alloc: one for the
+// storage of the canceller and the slices of p, or, when the block processor
+// can be set up again (separate), one for each. Later the slices of a block
+// processor set up again go where those of the last one were, or, when they
+// do not fit, into a new arena that replaces it.
+func (c *Ec3Core) adopt(p *BlockProcessor, alloc func(ArenaSizes) Arena, separate bool) {
+	n := c.measure(p)
+	need := ArenaSizes{F32: int(n.f32), Fft: int(n.fft), Spec: int(n.spec), I32: int(n.i32)}
+	switch {
+	case c.arena != nil:
+		if a := c.bp(); len(a.f32) < need.F32 || len(a.fft) < need.Fft || len(a.spec) < need.Spec || len(a.i32) < need.I32 {
+			c.bpArena = c.arena.Alloc(need)
+		}
+	case separate:
+		c.arena = alloc(ArenaSizes{F32: c.st.offsets.size})
+		c.bpArena = c.arena.Alloc(need)
+	default:
+		need.F32 += c.st.offsets.size
+		c.arena = alloc(need)
 	}
-	if b.n.fft > 0 {
-		b.a.fft = make([]FftData, b.n.fft)
-	}
-	if b.n.spec > 0 {
-		b.a.spec = make([][FftLengthBy2Plus1]float32, b.n.spec)
-	}
-	if b.n.i32 > 0 {
-		b.a.i32 = make([]int32, b.n.i32)
-	}
-	b.mode, b.x = bindMove, &bpExtra{}
-	p.bind(st, &b)
-	c.bp, c.bpExtra = b.a, nil
+	b := binder{mode: bindMove, a: c.bp(), x: &bpExtra{}}
+	p.bind(&c.st.blockProcessor, &b)
+	c.bpExtra = nil
 	if b.hasExtra {
 		c.bpExtra = b.x
 	}
@@ -386,6 +484,7 @@ type ec3Offsets struct {
 	linearOutputFrame      int // [capture channel][SplitBandSize]
 	renderQueueInputFrame  int // [band][render channel][SplitBandSize]
 	extra                  int // the caller's samples
+	queue, queueSize       int // the first frames of the render transfer queue
 	size                   int // of the storage
 }
 
@@ -462,7 +561,7 @@ func (e *EchoCanceller3) blockDelayBuffer() BlockDelayBuffer {
 func NewEchoCanceller3(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
 	numRenderChannels, numCaptureChannels int) *EchoCanceller3 {
 	c := &Ec3Core{}
-	c.Init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels, 0)
+	c.Init(config, multichannelConfig, sampleRateHz, numRenderChannels, numCaptureChannels, 0, nil)
 	e := &EchoCanceller3{}
 	c.Bind(e)
 	return e
@@ -470,7 +569,7 @@ func NewEchoCanceller3(config, multichannelConfig *EchoCanceller3Config, sampleR
 
 // init sets up the core of e, which must be the zero value.
 func (e *EchoCanceller3) init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
-	numRenderChannels, numCaptureChannels, extraSamples int) {
+	numRenderChannels, numCaptureChannels, extraSamples int, alloc func(ArenaSizes) Arena) {
 	if !ValidFullBandRate(sampleRateHz) {
 		panic("aec3: invalid sample rate for EchoCanceller3")
 	}
@@ -516,19 +615,20 @@ func (e *EchoCanceller3) init(config, multichannelConfig *EchoCanceller3Config, 
 		e.offsets.linearOutputFrame = take(e.numCaptureChannels * SplitBandSize)
 	}
 	queueSize := ec3RenderTransferQueueInitialSize(RenderTransferQueueSizeFrames, e.numBands, e.numRenderInputChannels)
-	queueOffset := take(queueSize)
+	e.offsets.queue, e.offsets.queueSize = take(queueSize), queueSize
 	e.offsets.renderQueueInputFrame = take(renderViews * SplitBandSize)
 	e.offsets.extra = take(extraSamples)
 	e.offsets.size = n
 
-	// initialize allocates the storage.
+	e.alloc = alloc
+
+	// initialize allocates the arena.
 	e.initialize()
 
 	// The framers start with BlockSize zeros, the blockers empty.
 	e.outputFramerFill = BlockSize
 	e.linearOutputFramerFill = BlockSize
-	e.renderTransferQueue.init(RenderTransferQueueSizeFrames, e.numBands, e.numRenderInputChannels,
-		e.storage[queueOffset:queueOffset+queueSize:queueOffset+queueSize])
+	e.renderTransferQueue.init(RenderTransferQueueSizeFrames, e.numBands, e.numRenderInputChannels, nil)
 	e.hpMore = e.renderWriter.init(active, e.numRenderInputChannels)
 	e.core.hpMore = e.hpMore
 }
@@ -551,8 +651,10 @@ func (e *EchoCanceller3) initialize() {
 
 	e.blockProcessor.init(e.configSelector.ActiveConfig(), e.sampleRateHz,
 		e.numRenderChannelsToAec, e.numCaptureChannels)
-	e.core.adopt(&e.blockProcessor, e.offsets.size)
-	e.storage = e.core.storage
+	// A canceller with several render channels sets its block processor up
+	// again when stereo content starts or ends.
+	e.core.adopt(&e.blockProcessor, e.alloc, e.numRenderInputChannels > 1)
+	e.storage = e.core.storage()
 
 	renderBlock := e.renderBlock()
 	clear(renderBlock.data)
@@ -591,6 +693,12 @@ func (e *EchoCanceller3) GetActiveConfigForTesting() *EchoCanceller3Config {
 	return e.configSelector.ActiveConfig()
 }
 
+// queueInitial returns the frames the render transfer queue starts with.
+func (e *EchoCanceller3) queueInitial() []float32 {
+	i, n := e.offsets.queue, e.offsets.queueSize
+	return e.storage[i : i+n : i+n]
+}
+
 // ExtraSamples returns the samples Ec3Core.Init set aside for the caller.
 func (e *EchoCanceller3) ExtraSamples() []float32 { return e.storage[e.offsets.extra:] }
 
@@ -601,7 +709,7 @@ func (e *EchoCanceller3) RenderFrame() Frame { return e.renderQueueInputFrame() 
 // AnalyzeRenderFrame analyzes and stores an internal copy of RenderFrame,
 // whose contents are unspecified afterwards.
 func (e *EchoCanceller3) AnalyzeRenderFrame() {
-	e.renderWriter.Insert(e.renderTransferQueue, e.renderQueueInputFrame(), e.hpMore)
+	e.renderWriter.Insert(e.renderTransferQueue, e.renderQueueInputFrame(), e.hpMore, e.queueInitial())
 }
 
 // AnalyzeRender analyzes and stores an internal copy of the split-band
@@ -797,7 +905,8 @@ func (e *EchoCanceller3) bufferRemainingRenderFrameContent() {
 // emptyRenderQueue empties the render transfer queue.
 func (e *EchoCanceller3) emptyRenderQueue() {
 	renderQueueOutputFrame := e.renderQueueOutputFrame()
-	frameToBuffer := e.renderTransferQueue.Remove(renderQueueOutputFrame)
+	queueInitial := e.queueInitial()
+	frameToBuffer := e.renderTransferQueue.remove(renderQueueOutputFrame, queueInitial)
 	for frameToBuffer {
 		if e.multichannelContentDetector.UpdateDetection(renderQueueOutputFrame) {
 			// Reinitialize the AEC when proper stereo is detected.
@@ -809,7 +918,7 @@ func (e *EchoCanceller3) emptyRenderQueue() {
 		e.bufferRenderFrameContent(e.multichannelContentDetector.IsTemporaryMultiChannelContentDetected(), 1)
 		e.bufferRemainingRenderFrameContent()
 
-		frameToBuffer = e.renderTransferQueue.Remove(renderQueueOutputFrame)
+		frameToBuffer = e.renderTransferQueue.remove(renderQueueOutputFrame, queueInitial)
 	}
 }
 
@@ -847,3 +956,7 @@ func (e *EchoCanceller3) SampleRateHz() int { return e.sampleRateHz }
 
 // NumBands returns the number of split bands.
 func (e *EchoCanceller3) NumBands() int { return e.numBands }
+
+// ArenasForTesting returns the arena of c and, when the block processor has
+// its own, that one.
+func (c *Ec3Core) ArenasForTesting() (arena, blockProcessor Arena) { return c.arena, c.bpArena }

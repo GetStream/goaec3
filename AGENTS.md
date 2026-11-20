@@ -270,8 +270,8 @@ it reads (every pointer word of a live object, nil or not, and about 15 ns
 more for one that is not nil, also when it points into an object that is
 already marked), and the length of an object up to its last pointer word
 (about 5 ns per KB). A pointer-free object is marked without being read,
-whatever its size. So a canceller is one object whose few pointers are its
-first words, and a few pointer-free arrays.
+whatever its size. So a canceller is one object whose few pointer words are
+its first, and one pointer-free object for its arrays (the arena).
 
 - A component that needs a pointer (a slice whose size depends on the
   config, the state of more than `inlineChannels` channels, an optional
@@ -280,20 +280,33 @@ first words, and a few pointer-free arrays.
   a view: `*xState` next to the slices and the views of its children. The
   methods are those of the view and the fields of the state are promoted
   into it, so a method body reads as if there were one struct.
-- `Ec3Core` is what a canceller keeps: the pointers (the samples, the render
-  transfer queue, the arenas of the block processor) and the state of every
-  component. Every entry point binds the views on its stack
+- `Ec3Core` is what a canceller keeps: the pointer words (the arena, and
+  those that are nil in the usual canceller: the grown render transfer
+  queue, the extras) and the state of every component. Every entry point
+  binds the views on its stack
   (`Ec3Core.Bind`, `BindRender`) and calls their methods. A view must not
   escape: it is not stored in an interface or a closure (the allocation
   tests show it).
 - `init` allocates the slices of a view as if it stood alone. `Ec3Core.adopt`
   then walks the views twice with a binder (`bind`, one method per view
   type that lists its slices and children): it records the length of every
-  slice in a `span` of the state and moves the slices into one arena per
-  element type (`[]float32`, `[]FftData`, `[][65]float32`, `[]int32`). The
-  samples of the block processor and the canceller's own are one array. A
-  slice a view registers owns its memory; a slice whose length changes while
-  processing keeps the length in the state (`Subtractor`).
+  slice in a `span` of the state and moves the slices into the arena, which
+  has one array per element type (`[]float32`, `[]FftData`, `[][65]float32`,
+  `[]int32`). A slice a view registers owns its memory; a slice whose length
+  changes while processing keeps the length in the state (`Subtractor`).
+- The arena (`aec3.Arena`) is one object behind an interface, so the
+  canceller holds one pointer whatever the number of arrays. The public
+  package allocates it as a struct of arrays (an arena class, `arena.go`):
+  the classes are sized for the default configs with up to two channels a
+  side (`TestArenaClassOfDefaults`), and a canceller takes the smallest that
+  holds what it needs; one that fits no class gets an arena of slices
+  (`NewSliceArena`), as the views of `NewEchoCanceller3` do. The arena also
+  holds the band-splitting filters and the full-band copies of the public
+  package, and the first frames of the render transfer queue. A canceller
+  with several render channels sets its block processor up again, at
+  another size, when stereo content starts or ends: its block processor has
+  an arena of its own, which is reused when the new arrays fit and replaced
+  when they do not.
 - A view made by `NewX` stands alone (`bind(st, nil)`): tests and the
   oracle harness use the components as before.
 - Per-channel state of up to `inlineChannels` capture channels lives in
@@ -310,12 +323,12 @@ first words, and a few pointer-free arrays.
   it. An optional implementation is a tagged value, not an interface
   (`stTransparentState`).
 - The render side runs concurrently with the capture side: it reads only
-  the pointers that are set once (`storage`, `hpMore`) and the queue. The
-  arenas of the block processor change when it is set up again (stereo
-  content detected), on the capture side.
+  the pointers that are set once (`arena`, `hpMore`) and the queue. The
+  arena of the block processor changes on the capture side.
 - The tests: `TestPointerWords` (the pointer words of the canceller type and
   where the last one ends: the state has none), `TestPointerSlots` (the
-  non-nil pointers of a canceller), `TestNewFootprint` (its objects),
+  pointers of a canceller), `TestNewFootprint` (its objects: two, or three
+  with several render channels), `TestArenaClasses`,
   `TestGCMarkPerCanceller` (the mark time a canceller adds to a cycle) and
   the `Test...PointerFree` tests of `internal/aec3`. `BenchmarkGCMark -cpu 1`
   times a cycle with 1000 cancellers; `net-mark-ns/op` is the mark phase
