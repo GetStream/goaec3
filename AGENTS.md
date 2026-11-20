@@ -110,6 +110,13 @@ write changelog narrative.
   operation, so for those lengths a helper stores the 65th element and runs
   its 64-element form (`kern_bins_simd64.go`; 256-bit forms in
   `kern_bins_simd_amd64.go`), written with constant-offset closures.
+- A loop over slices of any length gets the same addressing by advancing
+  the slices: the loop tests `len(s) >= 64` for each slice, takes
+  `(*[64]float32)(s)` and ends with `s = s[64:]`, so the block pointer is
+  the slice pointer and every access is pointer plus constant. An array
+  pointer taken at `s[i : i+16]` with a loop counter `i` costs two LEAs per
+  access instead (the Sum kernels of the matched filter,
+  `matched_filter_simd_amd64.go`).
 - The term kernels of the adaptive filter (`afirApplyTerms`,
   `afirAdaptTerms`) pass over their (X, H) pairs once per block of bins, so
   the per-pair bookkeeping runs four to eight times per call and the loop is
