@@ -120,7 +120,8 @@ func TestDlyMatchedFilterCoreQuietNeverUpdates(t *testing.T) {
 // The capture is the delayed render, so the filters lock whenever they run.
 // The lag estimates must agree on every block, and the Go filter must take
 // the quiet-render skip on some blocks, run on others, and skip single quiet
-// filters in those.
+// filters in those. The capture is muted at the start and after every reset,
+// where the Go filter must skip its zero filters.
 func TestDlyMatchedFilterQuietParity(t *testing.T) {
 	for _, factor := range []int{4, 8} {
 		for _, preEcho := range []bool{false, true} {
@@ -189,6 +190,11 @@ func TestDlyMatchedFilterQuietParity(t *testing.T) {
 							}
 							y[i] += float32(rng.NormFloat64())
 						}
+						if blk < 300 || (blk%997 >= 500 && blk%997 < 560) {
+							// A muted capture from the start and after each
+							// reset: the zero-filter skip.
+							clear(y)
+						}
 						slow := blk%7 == 0
 						g.Update(buf, y, slow)
 						eg, okg := g.GetBestLagEstimate()
@@ -213,6 +219,9 @@ func TestDlyMatchedFilterQuietParity(t *testing.T) {
 					}
 					if filterSkips < 200 {
 						t.Errorf("skipped %d filter cores: the scenario must skip single quiet filters", filterSkips)
+					}
+					if zeroSkips := g.ZeroFilterSkipsForTesting(); zeroSkips < 200 {
+						t.Errorf("skipped %d cores of zero filters under a zero capture", zeroSkips)
 					}
 					if reports[0] == 0 || reports[5] == 0 {
 						t.Errorf("lag reports per mode %v: loud render and render just above the excitation limit must report lags",

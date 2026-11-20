@@ -158,7 +158,9 @@ frame (`matched_filter_kernels.go`, `matched_filter_scalar.go`).
   render buffer is quiet, skips the core of a filter whose windows are quiet
   (`filterIsQuiet`), and the cores that have their x*x sums first skip the
   h*x sums of a filter that no sample of the block updates
-  (`dlyLaneFilter.idle`); the arguments are in `matched_filter.go`. Blocks
+  (`dlyLaneFilter.idle`), and under a zero capture block the cores of
+  filters that are zero (`filterStaysZero`); the arguments are in
+  `matched_filter.go`. Blocks
   whose windows do not wrap run without the list of stretches
   (`dlyCoreDirect`).
 - Where the unfused lanes are bound by the instruction count (two multiplies

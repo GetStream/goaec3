@@ -1431,6 +1431,11 @@ type MatchedFilter struct {
 	// quietFilterSkips counts the cores of single quiet filters that were
 	// not run (see filterIsQuiet).
 	quietFilterSkips uint64
+	// zeroCapture is set during an Update whose capture block is all +-0
+	// (with the skips enabled), and zeroFilterSkips counts the cores of
+	// zero filters that were not run in such blocks (see filterStaysZero).
+	zeroCapture     bool
+	zeroFilterSkips uint64
 }
 
 // NewMatchedFilter mirrors the MatchedFilter constructor (without the data
@@ -1604,6 +1609,21 @@ func (m *MatchedFilter) resetAccumulatedErrors() {
 // h*x sums and its error sum are not computed. The filter that computes the
 // accumulated error always runs.
 
+// Zero-filter skip.
+//
+// When every capture sample of a block is +-0, the anchor of the error sums
+// is +0 and no error sum, which is a sum of squares, is below a multiple of
+// it: the block has no winner whatever the cores compute, so they matter
+// only through the filters they update. A filter whose coefficients are all
+// +0 stays that way in such a block if the render samples in its windows
+// are finite: its output is +0 (a sum of +-0 products from +0), the error
+// y - s is +-0, the step alpha = smoothing*e/x2_sum is +-0 (an update needs
+// x2_sum above the threshold, which is not negative, and smoothing is
+// finite), and +0 plus +-0 times a finite sample is +0, fused or not.
+// Update does not run the core of such a filter (filterStaysZero). This is
+// the state of a canceller whose capture is muted from the start or since
+// a reset.
+
 // dlyQuietMargin is the relative margin of the quiet limit for a filter of
 // n samples.
 func dlyQuietMargin(n int) float64 { return 4 * float64(n+40) / (1 << 24) }
@@ -1705,6 +1725,54 @@ func (m *MatchedFilter) filterIsQuiet(renderBuffer *DownsampledRenderBuffer, n i
 	m.quietFilterSkips++
 	return true
 }
+
+// dlyZeroCapture reports whether every capture sample is +-0 and the
+// smoothing is finite (see the zero-filter skip).
+func dlyZeroCapture(y []float32, smoothing float32) bool {
+	var bits uint32
+	for _, v := range y {
+		bits |= math.Float32bits(v)
+	}
+	return bits&0x7fffffff == 0 && math.Float32bits(smoothing)&0x7fffffff < 0x7f800000
+}
+
+// filterStaysZero reports whether filter n is all +0 and the render samples
+// in its windows for the current block are finite, and counts the cores
+// skipped for it (see the zero-filter skip).
+func (m *MatchedFilter) filterStaysZero(renderBuffer *DownsampledRenderBuffer, n int) bool {
+	var bits uint32
+	for _, v := range m.filter(n) {
+		bits |= math.Float32bits(v)
+	}
+	if bits != 0 {
+		return false
+	}
+	// Finite: at most the largest finite magnitude.
+	const maxFinite = 0x7f7fffff
+	x := renderBuffer.Buffer
+	span := m.filterSize + m.subBlockSize - 1
+	if span > len(x) {
+		if !dlyQuiet(x, maxFinite) {
+			return false
+		}
+	} else {
+		lo := m.xStartIndex(renderBuffer, n) - (m.subBlockSize - 1)
+		if lo < 0 {
+			lo += len(x)
+		}
+		n1 := min(span, len(x)-lo)
+		if !dlyQuiet(x[lo:lo+n1], maxFinite) || !dlyQuiet(x[:span-n1], maxFinite) {
+			return false
+		}
+	}
+	m.zeroFilterSkips++
+	return true
+}
+
+// ZeroFilterSkipsForTesting returns the number of filter cores this matched
+// filter did not run because the filter was zero and the capture block was
+// zero.
+func (m *MatchedFilter) ZeroFilterSkipsForTesting() uint64 { return m.zeroFilterSkips }
 
 // renderIsQuiet reports whether every sample of the render buffer has a
 // magnitude of at most the quiet limit.
@@ -1827,6 +1895,9 @@ func (m *MatchedFilter) runCoresPaired(renderBuffer *DownsampledRenderBuffer, y 
 	var fa, fb dlyLaneFilter
 	first := -1
 	for n := 0; n < m.numFilters; n++ {
+		if m.zeroCapture && m.filterStaysZero(renderBuffer, n) {
+			continue
+		}
 		if m.detectPreEcho && n == m.lastDetectedBestLagFilter {
 			m.runCore(m.xStartIndex(renderBuffer, n), x2SumThreshold, smoothing, x, y, m.filter(n),
 				&updated[n], &errorSums[n], true)
@@ -1874,13 +1945,20 @@ func (m *MatchedFilter) runCoresScalar(renderBuffer *DownsampledRenderBuffer, y 
 	var order [dlyMaxPairedFilters]int
 	count := 0
 	accFilter := -1
-	if m.detectPreEcho && m.lastDetectedBestLagFilter >= 0 && m.lastDetectedBestLagFilter < m.numFilters {
-		accFilter = m.lastDetectedBestLagFilter
+	var stays [dlyMaxPairedFilters]bool
+	for n := 0; n < m.numFilters; n++ {
+		stays[n] = m.zeroCapture && m.filterStaysZero(renderBuffer, n)
+	}
+	if n := m.lastDetectedBestLagFilter; m.detectPreEcho && n >= 0 && n < m.numFilters && !stays[n] {
+		accFilter = n
 		order[0] = accFilter
 		count = 1
 		clear(m.instantaneousAccumulatedError())
 	}
 	for n := 0; n < m.numFilters; n++ {
+		if stays[n] {
+			continue
+		}
 		if n != accFilter && !m.filterIsQuiet(renderBuffer, n) {
 			order[count] = n
 			count++
@@ -1947,6 +2025,7 @@ func (m *MatchedFilter) UpdateWide(renderBuffer *DownsampledRenderBuffer, captur
 		}
 		return
 	}
+	m.zeroCapture = m.quietSkip && dlyZeroCapture(y, smoothing)
 	var xw []float64
 	if m.optimization == OptAvx2 && wide != nil {
 		xw = wide.fill(renderBuffer.Buffer)
@@ -1978,7 +2057,9 @@ func (m *MatchedFilter) UpdateWide(renderBuffer *DownsampledRenderBuffer, captur
 			errorSum, filtersUpdated = pairedErrorSums[n], pairedUpdated[n]
 		} else {
 			computePreEcho := m.detectPreEcho && n == m.lastDetectedBestLagFilter
-			if computePreEcho || !m.filterIsQuiet(renderBuffer, n) {
+			if m.zeroCapture && m.filterStaysZero(renderBuffer, n) {
+				// Nothing to run.
+			} else if computePreEcho || !m.filterIsQuiet(renderBuffer, n) {
 				m.runCoreSkip(m.xStartIndex(renderBuffer, n), x2SumThreshold, smoothing, renderBuffer.Buffer, xw, y,
 					m.filter(n), &filtersUpdated, &errorSum, computePreEcho, true)
 			}

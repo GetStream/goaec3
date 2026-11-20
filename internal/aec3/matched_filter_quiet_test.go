@@ -520,3 +520,77 @@ func TestDlyQuietFilterSkipRunsAccumulatedErrorFilter(t *testing.T) {
 		}
 	}
 }
+
+// TestDlyZeroFilterSkipStateMatchesNoSkip runs the matched filter with and
+// without the skips on a capture that is zero (+0 and -0) for stretches,
+// from the start and after resets, over loud, quiet and non-finite render,
+// with stretches of real capture in between, and requires identical state
+// after every block. Some zero stretches start with -0 planted in a filter,
+// which the skip must not take for a zero filter, and some blocks of a zero
+// stretch have one sample that is not zero.
+func TestDlyZeroFilterSkipStateMatchesNoSkip(t *testing.T) {
+	const numFilters = 5
+	numBlocks := 4000
+	if testing.Short() {
+		numBlocks = 1200
+	}
+	negZero := float32(math.Copysign(0, -1))
+	for _, opt := range []Aec3Optimization{OptNone, OptNeon, OptSse2, OptAvx2} {
+		for _, preEcho := range []bool{false, true} {
+			sub := BlockSize / 4
+			newFilter := func() *MatchedFilter {
+				return NewMatchedFilter(opt, sub, MatchedFilterWindowSizeSubBlocks, numFilters,
+					MatchedFilterAlignmentShiftSizeSubBlocks, 150, 0.7, 0.3, 0.2, preEcho)
+			}
+			skip, ref := newFilter(), newFilter()
+			ref.quietSkip = false
+			s := newDlyQuietScene(int64(60+int(opt)), 4, numFilters, math.Float32frombits(skip.quietLimitBits))
+			zero, left, mode := true, 150, dlyQuietLoud
+			for blk := 0; blk < numBlocks; blk++ {
+				if left == 0 {
+					zero = !zero
+					left = 20 + s.rng.Intn(150)
+					mode = []int{dlyQuietLoud, dlyQuietLoud, dlyQuietNaN, dlyQuietBelowLimit, dlyQuietSparseLoud}[s.rng.Intn(5)]
+					if zero {
+						// A zero stretch starts from zero filters, sometimes
+						// with a -0 among the coefficients.
+						skip.Reset(false)
+						ref.Reset(false)
+						if s.rng.Intn(3) == 0 {
+							n, k := s.rng.Intn(numFilters), s.rng.Intn(skip.filterSize)
+							skip.filter(n)[k] = negZero
+							ref.filter(n)[k] = negZero
+						}
+					}
+				}
+				left--
+				y := s.block(mode, 150)
+				if zero {
+					for i := range y {
+						y[i] = 0
+						if s.rng.Intn(4) == 0 {
+							y[i] = negZero
+						}
+					}
+					if s.rng.Intn(40) == 0 {
+						// One sample that is not zero before the last one:
+						// the block is not a zero block.
+						y[s.rng.Intn(len(y)-1)] = []float32{0x1p-20, -0.5, 3}[s.rng.Intn(3)]
+					}
+				}
+				slow := s.rng.Intn(3) == 0
+				skip.Update(s.buf, y, slow)
+				ref.Update(s.buf, y, slow)
+				if d := dlyQuietStateDiff(skip, ref); d != "" {
+					t.Fatalf("opt %d preEcho %v block %d (zero %v, mode %d): %s", opt, preEcho, blk, zero, mode, d)
+				}
+			}
+			if n := skip.ZeroFilterSkipsForTesting(); n < uint64(numBlocks/8) {
+				t.Errorf("opt %d preEcho %v: only %d zero-filter skips", opt, preEcho, n)
+			}
+			if ref.ZeroFilterSkipsForTesting() != 0 {
+				t.Errorf("opt %d preEcho %v: the filter without the skips skipped", opt, preEcho)
+			}
+		}
+	}
+}
