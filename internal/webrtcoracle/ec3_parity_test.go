@@ -813,6 +813,13 @@ func ec3RunPublic(t *testing.T, rate, nr, nc int, passthrough, linear bool) {
 	cfg := goaec3.DefaultConfig()
 	cfg.Delay.UseExternalDelayEstimator = passthrough
 	cfg.Filter.ExportLinearAecOutput = linear
+	ec3RunPublicConfig(t, cfg, rate, nr, nc, 1000)
+}
+
+// ec3RunPublicConfig compares the public API with the C++ on frames frames
+// of the echo scene: output, linear output and metrics, bit for bit.
+func ec3RunPublicConfig(t *testing.T, cfg goaec3.Config, rate, nr, nc, frames int) {
+	passthrough, linear := cfg.Delay.UseExternalDelayEstimator, cfg.Filter.ExportLinearAecOutput
 	cpp := NewEc3Canceller(&cfg, nil, rate, nr, nc, ec3Scalar)
 	defer cpp.Free()
 	e, err := goaec3.New(cfg, rate, nr, nc)
@@ -827,7 +834,7 @@ func ec3RunPublic(t *testing.T, rate, nr, nc int, passthrough, linear bool) {
 	lin := ec3Frame(nc, goaec3.LinearOutputFrameSize)
 	cppLin := make([]float32, nc*160)
 	var flat, cppCap []float32
-	for frame := 0; frame < 1000; frame++ {
+	for frame := 0; frame < frames; frame++ {
 		scene.next(render, capture)
 		// Out-of-range samples exercise the clamping in the conversion.
 		if frame%37 == 0 {
@@ -884,6 +891,48 @@ func TestEc3PublicAPIPassthroughParity(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// TestEc3PublicAPIParityAtTheLimits runs the largest configs New accepts:
+// the filter lengths, the delay filters and the channel counts at their
+// limits, and the fields that size a buffer at their Validate bounds.
+func TestEc3PublicAPIParityAtTheLimits(t *testing.T) {
+	cfg := goaec3.DefaultConfig()
+	cfg.Delay.NumFilters = goaec3.MaxDelayFilters
+	cfg.Delay.FixedCaptureDelaySamples = 5000
+	cfg.Filter.Refined.LengthBlocks = goaec3.MaxFilterLengthBlocks
+	cfg.Filter.Coarse.LengthBlocks = goaec3.MaxFilterLengthBlocks
+	cfg.Filter.ExportLinearAecOutput = true
+	cfg.Erle.NumSections = goaec3.MaxFilterLengthBlocks
+	cfg.EchoModel.RenderPreWindowSize = 100
+	cfg.EchoModel.RenderPostWindowSize = 100
+	cfg.Suppressor.NearendAverageBlocks = 5000
+	cfg.Suppressor.UseSubbandNearendDetection = true
+	cfg.Suppressor.SubbandNearendDetection.NearendAverageBlocks = 1024
+	long := cfg
+	long.Filter.RefinedInitial.LengthBlocks = goaec3.MaxFilterLengthBlocks
+	long.Filter.CoarseInitial.LengthBlocks = goaec3.MaxFilterLengthBlocks
+	long.Delay.DownSamplingFactor = 8
+	long.Delay.FixedCaptureDelaySamples = 0
+	for _, c := range []struct {
+		name                 string
+		cfg                  goaec3.Config
+		rate, nr, nc, frames int
+	}{
+		{"48k_mono", cfg, 48000, 1, 1, 1500},
+		{"16k_mono_initial_lengths_ds8", long, 16000, 1, 1, 1500},
+		{"32k_stereo", cfg, 32000, 2, 2, 600},
+		{"48k_16x16", cfg, 48000, goaec3.MaxChannels, goaec3.MaxChannels, 60},
+		{"16k_16x1_initial_lengths_ds8", long, 16000, goaec3.MaxChannels, 1, 200},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			frames := c.frames
+			if testing.Short() {
+				frames /= 10
+			}
+			ec3RunPublicConfig(t, c.cfg, c.rate, c.nr, c.nc, frames)
+		})
 	}
 }
 
