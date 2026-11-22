@@ -10,15 +10,23 @@ import (
 // libwebrtc cannot run them (the EchoCanceller3 constructor segfaults with
 // zero matched filters and aborts on a negative vector size with a refined
 // filter shorter than 9 blocks; a subband nearend region ending at bin 65
-// reads past the 65-bin spectrum). New rejects them with ErrConfig, also
+// reads past the 65-bin spectrum; a refined filter ErrorFloor or NoiseGate
+// of 0 turns the output into NaN for good once the capture signal is digital
+// silence). New rejects them with ErrConfig, also
 // when only the multichannel config carries the value.
 // TestConfigsNextToTheCrashSetRun pins the neighboring values that must stay
 // accepted.
 func TestConfigsTheCppCannotRunAreRejected(t *testing.T) {
 	cases := map[string]func(*Config){
-		"NumFilters=0":    func(c *Config) { c.Delay.NumFilters = 0 },
-		"RefinedLength=1": func(c *Config) { c.Filter.Refined.LengthBlocks = 1 },
-		"RefinedLength=8": func(c *Config) { c.Filter.Refined.LengthBlocks = 8 },
+		"NumFilters=0":                    func(c *Config) { c.Delay.NumFilters = 0 },
+		"RefinedLength=1":                 func(c *Config) { c.Filter.Refined.LengthBlocks = 1 },
+		"RefinedLength=8":                 func(c *Config) { c.Filter.Refined.LengthBlocks = 8 },
+		"Refined.ErrorFloor=0":            func(c *Config) { c.Filter.Refined.ErrorFloor = 0 },
+		"RefinedInitial.ErrorFloor=0":     func(c *Config) { c.Filter.RefinedInitial.ErrorFloor = 0 },
+		"RefinedInitial.ErrorFloor=1e-45": func(c *Config) { c.Filter.RefinedInitial.ErrorFloor = 1e-45 },
+		"Refined.NoiseGate=0":             func(c *Config) { c.Filter.Refined.NoiseGate = 0 },
+		"RefinedInitial.NoiseGate=0":      func(c *Config) { c.Filter.RefinedInitial.NoiseGate = 0 },
+		"RefinedInitial.NoiseGate=9e-13":  func(c *Config) { c.Filter.RefinedInitial.NoiseGate = 9e-13 },
 		"Subband1High=65": func(c *Config) {
 			c.Suppressor.UseSubbandNearendDetection = true
 			c.Suppressor.SubbandNearendDetection.Subband1.High = 65
@@ -141,6 +149,7 @@ func robustRejected(cfg *Config) bool {
 		(cfg.Suppressor.UseSubbandNearendDetection && (sn.Subband1.High > 64 || sn.Subband2.High > 64)) ||
 		cfg.Buffering.ExcessRenderDetectionIntervalBlocks < 0 ||
 		cfg.Buffering.MaxAllowedExcessRenderBlocks < 0 ||
+		ec3RefinedStepUndefined(&cfg.Filter.Refined) || ec3RefinedStepUndefined(&cfg.Filter.RefinedInitial) ||
 		cfg.Filter.Refined.LengthBlocks > MaxFilterLengthBlocks ||
 		cfg.Filter.Coarse.LengthBlocks > MaxFilterLengthBlocks ||
 		cfg.Delay.NumFilters > MaxDelayFilters

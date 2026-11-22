@@ -353,6 +353,13 @@ func fzRenderDelayBufferSize(cfg *aec3.EchoCanceller3Config) int {
 //   - Delay.DefaultDelay >= the render buffer size: RenderDelayBuffer::Reset
 //     applies OffsetIndex(write, -default_delay), a negative ring index.
 //
+// New also rejects a defined config whose output turns NaN on finite input:
+//   - ErrorFloor or NoiseGate of Filter.Refined or Filter.RefinedInitial
+//     below 1e-12: the step size of the refined filter is 0/0 or infinite
+//     once the capture signal is digital silence
+//     (refined_filter_update_gain.cc); TestEc3RefinedStepNaN has the C++ do
+//     it.
+//
 // A further exclusion is a value the C++ config cannot hold:
 //   - Buffering.ExcessRenderDetectionIntervalBlocks and
 //     Buffering.MaxAllowedExcessRenderBlocks < 0: both are size_t in the
@@ -365,6 +372,11 @@ func fzDefined(cfg *aec3.EchoCanceller3Config) bool {
 	}
 	if cfg.Delay.NumFilters == 0 || cfg.Filter.Refined.LengthBlocks < 9 {
 		return false
+	}
+	for _, r := range []*aec3.RefinedConfiguration{&cfg.Filter.Refined, &cfg.Filter.RefinedInitial} {
+		if r.ErrorFloor < 1e-12 || r.NoiseGate < 1e-12 {
+			return false
+		}
 	}
 	sn := &cfg.Suppressor.SubbandNearendDetection
 	if cfg.Suppressor.UseSubbandNearendDetection &&
