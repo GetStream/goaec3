@@ -188,43 +188,6 @@ func TestMatchedFilterLagAggregatorAllocationFree(t *testing.T) {
 	}
 }
 
-func benchmarkLags() []int {
-	rng := rand.New(rand.NewSource(1))
-	seq := &lagSequence{rng: rng, maxLag: 2432, peak: 700}
-	lags := make([]int, 4096)
-	for i := range lags {
-		lags[i] = seq.next(i)
-	}
-	return lags
-}
-
-func BenchmarkHighestPeakAggregator(b *testing.B) {
-	jittered := benchmarkLags()
-	alternating := make([]int, 4096)
-	for i := range alternating {
-		alternating[i] = 700 + i&1
-	}
-	for _, c := range []struct {
-		name string
-		lags []int
-	}{{"jittered", jittered}, {"alternating", alternating}} {
-		lags := c.lags
-		b.Run(c.name+"/rescan", func(b *testing.B) {
-			a := newRefHighestPeakAggregator(2432)
-			for i := 0; i < b.N; i++ {
-				a.Aggregate(lags[i&4095])
-			}
-		})
-		b.Run(c.name+"/incremental", func(b *testing.B) {
-			var a dlyHighestPeakAggregator
-			a.init(2432)
-			for i := 0; i < b.N; i++ {
-				a.Aggregate(lags[i&4095])
-			}
-		})
-	}
-}
-
 func newDlyPreEchoLagAggregator(maxFilterLag, downSamplingFactor int) *dlyPreEchoLagAggregator {
 	a := &dlyPreEchoLagAggregator{}
 	a.init(downSamplingFactor, make([]int32, dlyPreEchoHistogramSize(maxFilterLag, downSamplingFactor)))
