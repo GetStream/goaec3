@@ -8,7 +8,7 @@ import (
 func TestSubtractorProcessZeroAlloc(t *testing.T) {
 	for _, opt := range []Aec3Optimization{OptNone, DetectOptimization()} {
 		cfg := DefaultEchoCanceller3Config()
-		// Coarse longer than refined exercises the SpectralSums path.
+		// A coarse filter longer than the refined one runs SpectralSums.
 		cfg.Filter.Coarse.LengthBlocks = 15
 		cfg.Filter.CoarseInitial.LengthBlocks = 15
 		const size, numRender, numCapture = 40, 1, 2

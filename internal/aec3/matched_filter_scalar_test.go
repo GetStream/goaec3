@@ -7,12 +7,11 @@ import (
 	"testing"
 )
 
-// TestDlyCoreScalarMatchesMatchedFilterCore drives dlyCoreScalar with one
-// to three filters in step, with and without the accumulated error on the
-// first, against MatchedFilterCore on each filter alone: windows that wrap
-// at different places, mixed updating and non-updating samples, saturated
-// capture samples, zeros and tiny values, calls longer than one run of x*x
-// sums.
+// TestDlyCoreScalarMatchesMatchedFilterCore checks dlyCoreScalar with one to
+// three filters in step, with and without the accumulated error on the
+// first, against MatchedFilterCore on each filter alone. The windows wrap at
+// different places, samples update or not, capture samples saturate, values
+// are zero or tiny, and calls are longer than one run of x*x sums.
 func TestDlyCoreScalarMatchesMatchedFilterCore(t *testing.T) {
 	rng := rand.New(rand.NewSource(31))
 	trials := 6000
@@ -99,9 +98,9 @@ func TestDlyCoreScalarMatchesMatchedFilterCore(t *testing.T) {
 	}
 }
 
-// TestDlyMatchedFilterScalarInStepMatchesSingle drives two scalar-lane
-// matched filters side by side, one running its filters in step and one
-// through MatchedFilterCore, and compares their state after every block.
+// TestDlyMatchedFilterScalarInStepMatchesSingle checks that a scalar-lane
+// MatchedFilter that runs its filters in step and one that runs
+// MatchedFilterCore have the same state after every block.
 func TestDlyMatchedFilterScalarInStepMatchesSingle(t *testing.T) {
 	saved := dlyScalarInStep
 	defer func() { dlyScalarInStep = saved }()
@@ -163,8 +162,8 @@ func TestDlyMatchedFilterScalarInStepMatchesSingle(t *testing.T) {
 	}
 }
 
-// TestDlyMatchedFilterUpdateAllocationFree locks Update to zero allocations
-// in every lane, whatever lane the machine selects.
+// TestDlyMatchedFilterUpdateAllocationFree checks that Update does not
+// allocate in any lane.
 func TestDlyMatchedFilterUpdateAllocationFree(t *testing.T) {
 	for _, opt := range []Aec3Optimization{OptNone, OptNeon, OptSse2, OptAvx2} {
 		for _, preEcho := range []bool{false, true} {

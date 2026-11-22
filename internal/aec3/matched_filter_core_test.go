@@ -7,12 +7,11 @@ import (
 	"testing"
 )
 
-// dlyLiteralReduce is the reduction of a lane's vector accumulators, added
-// to the scalar tail sum, in the order of the C++: NEON adds lanes pairwise;
-// SSE2 adds its two accumulators and then the four lanes in sequence; AVX2
-// adds its two accumulators and reduces pairwise (hsum_ab), or, in the
-// accumulated-error core, adds the two halves and then the four lanes in
-// sequence.
+// dlyLiteralReduce adds the vector accumulators of a lane to the scalar tail
+// sum in the order of the C++. NEON adds lanes pairwise. SSE2 adds its two
+// accumulators and then the four lanes in sequence. AVX2 adds its two
+// accumulators and reduces pairwise (hsum_ab) or, in the accumulated-error
+// core, adds the two halves and then the four lanes in sequence.
 func dlyLiteralReduce(g int, accErrX2 bool, lanes *[16]float32, tail float32) float32 {
 	switch {
 	case g == 4:
@@ -43,11 +42,11 @@ func dlyLiteralReduce(g int, accErrX2 bool, lanes *[16]float32, tail float32) fl
 	return tail
 }
 
-// dlyLiteralCore is the per-sample loop of MatchedFilterCore_NEON (g = 4),
-// _SSE2 (8) and _AVX2 (16) written directly from the C++, one scalar
-// operation per lane: h*x and x*x accumulated side by side over the two
-// circular-buffer chunks, reduction, then a separate update pass. It shares
-// no code with the lane cores under test.
+// dlyLiteralCore is the sample loop of MatchedFilterCore_NEON (g = 4), _SSE2
+// (8) and _AVX2 (16) written from the C++, one scalar operation per lane:
+// h*x and x*x accumulated side by side over the two chunks of the circular
+// buffer, the reduction, then the update pass. It shares no code with the
+// lane cores.
 func dlyLiteralCore(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32) {
 	hSize := len(h)
@@ -91,8 +90,8 @@ func dlyLiteralCore(g int, xStartIndex int, x2SumThreshold, smoothing float32, x
 			hp, xp := 0, xStartIndex
 			for _, limit := range [2]int{chunk1, chunk2} {
 				for k := 0; k < limit; k++ {
-					// The AVX2 update is fused over whole groups of 8 of
-					// each chunk and unfused in the chunk's tail.
+					// The AVX2 update is fused over the whole groups of 8 of
+					// a chunk and unfused in its tail.
 					if g == 16 && k < limit&^7 {
 						h[hp] = fmaf(x[xp], alpha, h[hp])
 					} else {
@@ -113,13 +112,11 @@ func dlyLiteralCore(g int, xStartIndex int, x2SumThreshold, smoothing float32, x
 	}
 }
 
-// dlyLiteralAccErrCore is the per-sample loop of the accumulated-error
-// cores (MatchedFilterCoreWithAccumulatedError_NEON,
-// MatchedFilterCore_AccumulatedError_SSE2 and _AVX2) written directly from
-// the C++ for filter lengths that are a multiple of g: the window copied
-// out of the circular buffer, x*x in lanes, the filter output as a running
-// scalar sum over sub-groups of four with the squared error accumulated
-// after each, then a separate update pass.
+// dlyLiteralAccErrCore is the sample loop of the accumulated-error cores
+// written from the C++, for filter lengths that are a multiple of g: the
+// window copied out of the circular buffer, x*x in lanes, the filter output
+// as a running scalar sum over sub-groups of four with the squared error
+// accumulated after each, then the update pass.
 func dlyLiteralAccErrCore(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32, accumulatedError []float32) {
 	hSize := len(h)
@@ -190,8 +187,9 @@ func dlyLaneGroup(opt Aec3Optimization) int {
 }
 
 // dlyCoreTrial is one random core call: filter and buffer sizes of every
-// residue, start indices sweeping the circular-buffer wrap and the run-down
-// to index zero, updating and non-updating samples, saturated captures.
+// residue, start indices that sweep the wrap of the circular buffer and the
+// run down to index zero, samples that update and samples that do not,
+// saturated captures.
 type dlyCoreTrial struct {
 	x, y, h []float32
 	xs      int
@@ -236,8 +234,7 @@ func dlyRandCoreTrial(rng *rand.Rand, trial, multiple int) dlyCoreTrial {
 		c.thr = float32(float64(hSize) * 3000 * 3000 * (0.7 + 0.6*rng.Float64()))
 	}
 	if trial%11 == 0 {
-		// Exact zeros and small integers put the software fma on its
-		// boundary tests.
+		// Exact zeros and small integers put the software fma on its ties.
 		for k := range c.x {
 			c.x[k] = float32(rng.Intn(7) - 3)
 		}
@@ -247,8 +244,7 @@ func dlyRandCoreTrial(rng *rand.Rand, trial, multiple int) dlyCoreTrial {
 		c.thr = 0.5
 	}
 	if trial%11 == 5 {
-		// Sums of few bits below 2^-126 send the software fma to its
-		// per-element path.
+		// Sums of few bits below 2^-126 send the software fma to fmaf.
 		for k := range c.x {
 			c.x[k] = float32(rng.Intn(9)-4) * 0x1p-70
 		}
@@ -263,10 +259,9 @@ func dlyRandCoreTrial(rng *rand.Rand, trial, multiple int) dlyCoreTrial {
 	return c
 }
 
-// TestDlyMatchedFilterCoreLanesMatchReference drives the lane cores (x*x
-// from the shared lane chains, the update deferred into the next dot
-// product) against the literal cores, one filter at a time and two filters
-// in step, with and without the two-filter kernels.
+// TestDlyMatchedFilterCoreLanesMatchReference checks the lane cores against
+// the literal cores, one filter at a time and two filters in step, with and
+// without the two-filter kernels.
 func TestDlyMatchedFilterCoreLanesMatchReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(5))
 	savedPair := dlyPairNeon
@@ -347,12 +342,10 @@ func TestDlyMatchedFilterCoreLanesMatchReference(t *testing.T) {
 	}
 }
 
-// TestDlyMatchedFilterAccErrCoresMatchReference drives the accumulated-error
-// cores (windows of the whole call on one contiguous stretch, x*x from the
-// shared lane chains, the update fused into the next filter loop) against
-// the literal cores, with a scratch for the whole call and with one for a
-// single window, which takes the per-sample fallback when the stretch of
-// the call wraps.
+// TestDlyMatchedFilterAccErrCoresMatchReference checks the accumulated-error
+// cores against the literal cores, with a scratch for the whole call and
+// with one for a single window, which runs dlyAccErrCoreSeparate when the
+// stretch of the call wraps.
 func TestDlyMatchedFilterAccErrCoresMatchReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(8))
 	for trial := 0; trial < 3000; trial++ {
@@ -367,15 +360,13 @@ func TestDlyMatchedFilterAccErrCoresMatchReference(t *testing.T) {
 			esWant := es0
 			dlyLiteralAccErrCore(g, c.xs, c.thr, 0.7, c.x, c.y, hWant, &updWant, &esWant, accWant)
 
-			// A scratch for the whole call, and one for a single window,
-			// which takes the fallback when the call's stretch wraps.
 			for _, scratchSize := range []int{hSize + len(c.y), hSize} {
 				hA := append([]float32(nil), c.h...)
 				accA := dlyRandSlice(rng, hSize/4, 10)
 				scratch := dlyRandSlice(rng, scratchSize, 1)
 				var updA bool
 				esA := es0
-				// A filter bank without filters: the storage holds the
+				// A MatchedFilter without filters: the storage holds the
 				// instantaneous accumulated error and the scratch.
 				mf := &MatchedFilter{matchedFilterState: &matchedFilterState{optimization: opt, detectPreEcho: true, filterSize: hSize,
 					accumulatedSize: len(accA), scratchSize: len(scratch)}, storage: append(accA, scratch...)}
@@ -393,8 +384,8 @@ func TestDlyMatchedFilterAccErrCoresMatchReference(t *testing.T) {
 }
 
 // TestDlyMaxSquarePeakIndexMatchesReference checks MaxSquarePeakIndex
-// against the scalar reference on random data with ties, zeros, infinities
-// and NaNs.
+// against its reference on random data with ties, zeros, infinities and
+// NaNs.
 func TestDlyMaxSquarePeakIndexMatchesReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(6))
 	special := []float32{0, float32(math.Copysign(0, -1)), 1, -1, float32(math.Inf(1)), float32(math.Inf(-1)),
@@ -469,8 +460,8 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 		})
 	}
 	// Two updating filters per iteration through dlyCoreLanes, as Update
-	// runs them: in step with the two-filter kernels (Pair) and in step
-	// with the one-filter kernels (Two).
+	// runs them: in step with the two-filter kernels (Pair) and with the
+	// one-filter kernels (Two).
 	for _, tc := range []struct {
 		name     string
 		g        int
@@ -495,9 +486,9 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 			}
 		})
 	}
-	// The x*x sums of the 16 samples of one sub-block for one filter: from
-	// the shared lane chains (windows that do not wrap) and from the chunk
-	// loops (windows that wrap).
+	// The x*x sums of the 16 samples of a sub-block for one filter: from the
+	// shared lane chains, for windows that do not wrap, and from the chunk
+	// loops, for windows that wrap.
 	for _, g := range []int{4, 8, 16} {
 		b.Run(fmt.Sprintf("X2Lanes%d", g), func(b *testing.B) {
 			var out [dlyX2Run]float32
@@ -513,9 +504,9 @@ func BenchmarkMatchedFilterCoreUpdating(b *testing.B) {
 		})
 	}
 
-	// Update of the scalar lane for one block (five filters, one of them
-	// with the accumulated error): through MatchedFilterCore one filter at
-	// a time, and with the filters in step.
+	// Update of the scalar lane for one block of five filters, one with the
+	// accumulated error: one filter at a time through MatchedFilterCore, and
+	// with the filters in step.
 	savedInStep := dlyScalarInStep
 	defer func() { dlyScalarInStep = savedInStep }()
 	for _, inStep := range []bool{false, true} {

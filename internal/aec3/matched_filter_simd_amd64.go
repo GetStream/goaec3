@@ -4,23 +4,19 @@ package aec3
 
 import "simd/archsimd"
 
-// x86 kernels for MatchedFilterCore_SSE2 and MatchedFilterCore_AVX2. The
-// 128-bit archsimd operations are VEX encoded (AVX); VMULPS/VADDPS on XMM
-// registers round exactly like MULPS/ADDPS, so they reproduce the SSE2 lane.
-// The NEON lane runs its pure-Go reference on amd64.
+// x86 kernels of MatchedFilterCore_SSE2 and MatchedFilterCore_AVX2. The
+// 128-bit archsimd operations are VEX encoded and round like the SSE2
+// instructions. The NEON lane runs its pure-Go references.
 //
-// The loops index fixed-size array views of slices resliced to a common
-// length and capacity (x[:n:n]) with an index bounded by len-15 (or len-7),
-// so the compiler proves every access in bounds and the loop carries a
-// single induction variable. fma(a, b, c) is symmetric in a and b, and
-// VFMADD213PS overwrites the receiver, so the receiver of each MulAdd is the
-// multiplicand that dies there.
+// The loops index array views of slices cut to one length and capacity, so
+// the compiler proves every access in bounds. fma(a, b, c) is symmetric in a
+// and b and VFMADD213PS overwrites its receiver, so the receiver of a MulAdd
+// is the multiplicand that dies there.
 //
-// The 256-bit kernels that produce a float32 store it to the caller's
-// memory from a function that does not inline, and return nothing: a
-// float32 live across ClearAVXUpperBits is spilled with a 4-byte store and
-// restored with a 16-byte load, which the CPU cannot forward from that
-// store.
+// A 256-bit kernel that produces a float32 stores it to memory of the caller
+// from a function that does not inline. A float32 live across
+// ClearAVXUpperBits is spilled with a 4-byte store and restored with a
+// 16-byte load, which the store cannot forward to.
 
 var (
 	dlyUseAvx = archsimd.X86.AVX()
@@ -30,8 +26,6 @@ var (
 func dlyLd4(p *[4]float32) archsimd.Float32x4 { return archsimd.LoadFloat32x4Array(p) }
 
 func dlyLd8(p *[8]float32) archsimd.Float32x8 { return archsimd.LoadFloat32x8Array(p) }
-
-// The NEON lane runs its pure-Go references on amd64.
 
 func dlyDotSNeon(h, x []float32, acc *[4]float32) { dlyDotSNeonRef(h, x, acc) }
 
@@ -49,8 +43,7 @@ func dlyAxpyAccErrNeon(h, xa, xb []float32, alpha, y float32, accErr []float32) 
 	return dlyAxpyAccErrNeonRef(h, xa, xb, alpha, y, accErr)
 }
 
-// dlyPairNeon selects the two-filter kernels for the NEON lane; they exist
-// as archsimd kernels on arm64 only.
+// dlyPairNeon reports whether the NEON lane has two-filter kernels.
 var dlyPairNeon = false
 
 func dlyDotS2Neon(hA, xA []float32, accA *[4]float32, hB, xB []float32, accB *[4]float32) {
@@ -62,8 +55,8 @@ func dlyAxpyDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
 	dlyAxpyDotS2NeonRef(hA, xaA, xbA, alphaA, accA, hB, xaB, xbB, alphaB, accB)
 }
 
-// dlySqStreams is the number of stretches dlySqMulti accumulates at once:
-// three for the SSE2 lane and two for the AVX2 lane.
+// dlySqStreams returns the number of stretches dlySqMulti accumulates at
+// once: three in the SSE2 lane, two in the AVX2 lane.
 func dlySqStreams(g int) int {
 	if g == 8 {
 		return 3
@@ -105,7 +98,7 @@ func dlySqSse2(x []float32, acc *[8]float32) {
 }
 
 // dlySq3Sse2 runs dlySqSse2Ref on the three stretches x[offs[t]:offs[t]+n]
-// in one loop, so that their chains overlap in time; acc[t] holds the
+// in one loop, so that their chains run side by side. acc[t] holds the
 // accumulators of stretch t.
 func dlySq3Sse2(x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32) {
 	n &^= 7
@@ -138,7 +131,7 @@ func dlySq3Sse2(x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStream
 }
 
 // dlySq2Avx2 runs dlySqAvx2Ref on the two stretches x[offs[t]:offs[t]+n] in
-// one loop; acc[t] holds the accumulators of stretch t.
+// one loop. acc[t] holds the accumulators of stretch t.
 //
 //go:noinline
 func dlySq2Avx2(x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32) {
@@ -165,8 +158,8 @@ func dlySq2Avx2(x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStream
 }
 
 // dlyX2Lanes is dlyX2LanesRef with the chains of several groups of lanes
-// accumulated in one loop: three groups of eight for the SSE2 lane, two
-// groups of sixteen for the AVX2 lane.
+// accumulated in one loop: three groups of eight in the SSE2 lane, two
+// groups of sixteen in the AVX2 lane.
 func dlyX2Lanes(g int, x []float32, n int, lanes []float32) {
 	if (g == 8 && dlyUseAvx) || (g == 16 && dlyUseFma) {
 		dlyX2LanesMulti(g, x, n, lanes)
@@ -176,7 +169,7 @@ func dlyX2Lanes(g int, x []float32, n int, lanes []float32) {
 }
 
 // dlyHsumSSse2 reduces the two SSE2 accumulators of one sum as dlyReduceS
-// does: lane 0 of the result runs ((v0 + v1) + v2) + v3 over v = s + s4.
+// does: lane 0 of the result is ((v0 + v1) + v2) + v3 for v = s + s4.
 func dlyHsumSSse2(s, s4 archsimd.Float32x4) archsimd.Float32x4 {
 	v := s.Add(s4)
 	t := v.Add(v.ConcatPermuteScalars(1, 1, 5, 5, v))
@@ -184,9 +177,9 @@ func dlyHsumSSse2(s, s4 archsimd.Float32x4) archsimd.Float32x4 {
 	return t.Add(v.ConcatPermuteScalars(3, 3, 7, 7, v))
 }
 
-// dlyHsumSAvx2 reduces the two AVX2 accumulators of one sum as hsum_ab
-// does: lane 0 of the result is ((b0+b1) + (b2+b3)) + ((b4+b5) + (b6+b7))
-// over b = s + s8.
+// dlyHsumSAvx2 reduces the two AVX2 accumulators of one sum as hsum_ab does:
+// lane 0 of the result is ((b0+b1) + (b2+b3)) + ((b4+b5) + (b6+b7)) for b =
+// s + s8.
 func dlyHsumSAvx2(s, s8 archsimd.Float32x8) archsimd.Float32x4 {
 	b := s.Add(s8)
 	p := b.ConcatAddPairsGrouped(b) // b01 b23 b01 b23 | b45 b67 b45 b67
@@ -214,9 +207,9 @@ func dlyX2Reduce(g int, accErr bool, lanes *[dlyX2Run + 15]float32, r int, out *
 }
 
 // dlyX2ReduceAvx2 is dlyX2Reduce for the AVX2 lane. The reduced lanes of
-// sample j land in lane 0 of a 128-bit store at tmp[j] (the stores of later
-// samples overwrite the other lanes), and the scalar addition to the zero
-// x2_sum of the C++ runs after the VZEROUPPER.
+// sample j go to lane 0 of a 128-bit store at tmp[j], which the stores of
+// later samples overwrite in the other lanes. The scalar addition to the
+// zero x2_sum of the C++ runs after the VZEROUPPER.
 //
 //go:noinline
 func dlyX2ReduceAvx2(accErr bool, lanes *[dlyX2Run + 15]float32, r int, out *[dlyX2Run]float32) {
@@ -245,8 +238,8 @@ func dlyX2ReduceAvx2(accErr bool, lanes *[dlyX2Run + 15]float32, r int, out *[dl
 }
 
 // dlyAccErrSums returns in lanes 0 and 1 the sums of the four products of
-// the two sub-groups p and q of a group, each added in sequence as the C++
-// does: ((v0 + v1) + v2) + v3.
+// the sub-groups p and q of a group, each added in sequence as in the C++:
+// ((v0 + v1) + v2) + v3.
 func dlyAccErrSums(p, q archsimd.Float32x4) archsimd.Float32x4 {
 	a, b := p.ToBits(), q.ToBits()
 	lo := a.InterleaveLo(b).BitsToFloat32() // p0 q0 p1 q1
@@ -256,11 +249,10 @@ func dlyAccErrSums(p, q archsimd.Float32x4) archsimd.Float32x4 {
 	return t.Add(hi.ConcatPermuteScalars(2, 3, 6, 7, hi))
 }
 
-// dlyAccErrSse2 keeps the running sum s in lane 0 of a register: the two
+// dlyAccErrSse2 keeps the running sum s in lane 0 of a register. The two
 // sub-group sums of a group enter it in turn, and the errors of two groups
-// are gathered into one vector for the update of accErr. The chain of s is
-// two additions per group; nothing else of a group waits for it but its
-// errors.
+// are gathered into one vector for the update of accErr. Only the errors of
+// a group wait for the chain of s.
 func dlyAccErrSse2(h, x []float32, y float32, accErr []float32) float32 {
 	if !dlyUseAvx {
 		return dlyAccErrSse2Ref(h, x, y, accErr)
@@ -441,11 +433,10 @@ func dlyAccErrAvx2(h, x []float32, y float32, accErr []float32) float32 {
 }
 
 // dlyAccErrAvx2Lanes stores the filter output of dlyAccErrAvx2 in r[0]. It
-// keeps the running sum s in lane 0 of a 128-bit register. Each group's
-// four sub-group sums (hadd lanes [0], [4], [1], [5]) enter lane 0 in turn;
-// lane 0 of each step is the scalar running sum of the C++ and the other
-// lanes are unused. The four errors are then gathered into one vector for
-// the fused update of accErr.
+// keeps the running sum s in lane 0 of a 128-bit register, which the four
+// sub-group sums of a group (hadd lanes [0], [4], [1], [5]) enter in turn.
+// The four errors are gathered into one vector for the fused update of
+// accErr.
 //
 //go:noinline
 func dlyAccErrAvx2Lanes(h, x []float32, y float32, accErr []float32, r *[4]float32) {
@@ -456,7 +447,7 @@ func dlyAccErrAvx2Lanes(h, x []float32, y float32, accErr []float32, r *[4]float
 	accErr = accErr[: 4*groups : 4*groups]
 	yv := archsimd.BroadcastFloat32x4(y)
 	// The running sum starts from r, which the caller zeroes: a zero made
-	// here would be a legacy-SSE instruction inside the 256-bit section.
+	// here would be a legacy-SSE instruction in the 256-bit section.
 	sv := dlyLd4(r)
 	for g, i := 0, 0; g < len(accErr)-3 && i < len(h)-15; g, i = g+4, i+16 {
 		hh := (*[16]float32)(h[i : i+16])
@@ -502,8 +493,8 @@ func dlyAxpyFmaAccErrAvx2Lanes(h, xa, xb []float32, alpha, y float32, accErr []f
 	accErr = accErr[: 4*groups : 4*groups]
 	a := archsimd.BroadcastFloat32x8(alpha)
 	yv := archsimd.BroadcastFloat32x4(y)
-	// The running sum starts from r, which the caller zeroes: a zero made
-	// here would be a legacy-SSE instruction inside the 256-bit section.
+	// The running sum starts from r, which the caller zeroes (see
+	// dlyAccErrAvx2Lanes).
 	sv := dlyLd4(r)
 	for g, i := 0, 0; g < len(accErr)-3 && i < len(h)-15; g, i = g+4, i+16 {
 		hh := (*[16]float32)(h[i : i+16])
@@ -544,9 +535,9 @@ func dlyAxpyFma(h, x []float32, alpha float32) {
 	}
 }
 
-// dlyAxpyFma256 runs dlyAxpyFma over the whole groups of 8 and returns
-// their length. It does not inline, so alpha does not cross the
-// VZEROUPPER as a float32.
+// dlyAxpyFma256 runs dlyAxpyFma over the whole groups of 8 and returns their
+// length. It does not inline, so that alpha does not cross the VZEROUPPER as
+// a float32.
 //
 //go:noinline
 func dlyAxpyFma256(h, x []float32, alpha float32) int {
@@ -577,12 +568,11 @@ func dlyAxpyFma256(h, x []float32, alpha float32) int {
 var dlyPeakSimd = dlyUseAvx
 
 // dlyZeroAcc clears the lane accumulators with 256-bit stores. The AVX2
-// kernels load them as 256-bit vectors, and a load cannot be forwarded from
-// the narrower stores a Go zero value is written with: it would wait for
-// them to reach the cache at the start of every capture sample.
+// kernels load them as 256-bit vectors, and narrower stores cannot forward
+// to such a load.
 //
-// It does not inline, so its ClearAVXUpperBits does not make the caller's
-// float32 values cross a VZEROUPPER.
+// It does not inline, so that no float32 of the caller crosses its
+// VZEROUPPER.
 //
 //go:noinline
 func dlyZeroAcc(acc *[16]float32) {
@@ -593,7 +583,8 @@ func dlyZeroAcc(acc *[16]float32) {
 		z.StoreArray((*[8]float32)(acc[8:16]))
 		archsimd.ClearAVXUpperBits()
 	case dlyUseAvx:
-		// AVX without AVX2 (the SSE2 lane's kernels): 128-bit stores.
+		// AVX without AVX2, for the kernels of the SSE2 lane: 128-bit
+		// stores.
 		var z archsimd.Float32x4
 		z.StoreArray((*[4]float32)(acc[0:4]))
 		z.StoreArray((*[4]float32)(acc[4:8]))
@@ -605,7 +596,7 @@ func dlyZeroAcc(acc *[16]float32) {
 }
 
 // dlyPeakLanes256 is dlyPeakLanes128 with two 256-bit vectors per 16
-// samples (lanes 0-7 and 8-15, the same index residues). It reports false
+// samples: lanes 0-7 and 8-15, the same index residues. It reports false
 // without AVX2.
 func dlyPeakLanes256(p []float32, mv *[16]float32, iv *[16]int32) bool {
 	if !kernHasAVX2 {
@@ -647,8 +638,8 @@ func dlyX2Lanes2(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
 	dlyX2Lanes2Ref(g, xA, xB, n, lanesA, lanesB)
 }
 
-// The plain-core kernels of dlyCoreLanes run their references in the SSE2
-// and AVX2 lanes (see dlyCoreSimple).
+// The kernels of dlyCoreLanes run their references in the SSE2 and AVX2
+// lanes, whose cores run dlyCoreSimple.
 
 func dlyDotSSse2(h, x []float32, acc *[8]float32) { dlyDotSSse2Ref(h, x, acc) }
 
@@ -678,29 +669,28 @@ func dlyX2Wrapped(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) 
 	dlyX2WrappedRef(g, x, hSize, lo, r, out)
 }
 
-// Plain cores of the SSE2 and AVX2 lanes.
+// Cores of the SSE2 and AVX2 lanes.
 //
-// On x86 the MatchedFilterCore loop is bound by its loads and stores, not
-// by the accumulator chains: accumulating x*x next to h*x costs nothing
-// there, while a separate x*x pass does, and two filters in step run no
-// faster than one after the other. With their archsimd kernels, the two
-// lanes therefore run dlyCoreSimple, whose kernels keep the layout of the
-// C++ loop (h*x and x*x side by side); the references of these lanes, and
-// the NEON lane, run dlyCoreLanes.
+// On x86 the MatchedFilterCore loop is bound by its loads and stores, not by
+// its accumulator chains: a separate x*x pass costs, and two filters in step
+// gain nothing. With archsimd kernels the two lanes run dlyCoreSimple, whose
+// kernels accumulate h*x and x*x side by side as the C++ loop does. Their
+// references, and the NEON lane, run dlyCoreLanes.
 //
-// Accumulator layouts of the kernels below:
-//   - SSE2  (*[16]float32): [0:4] s_128, [4:8] s_128_4, [8:12] x2_sum_128,
-//     [12:16] x2_sum_128_4.
-//   - AVX2  (*[32]float32): [0:8] s_256, [8:16] s_256_8, [16:24] x2_sum_256,
-//     [24:32] x2_sum_256_8.
+// The accumulators of the kernels below:
+//
+//	SSE2  *[16]float32  [0:4] s_128, [4:8] s_128_4,
+//	                    [8:12] x2_sum_128, [12:16] x2_sum_128_4
+//	AVX2  *[32]float32  [0:8] s_256, [8:16] s_256_8,
+//	                    [16:24] x2_sum_256, [24:32] x2_sum_256_8
 
-// dlyLanesPureGo selects what serves the pure-Go references and the
-// archsimd kernels have no use for (the tables of squares of the x*x sums).
+// dlyLanesPureGo reports whether the lanes run their pure-Go references,
+// which use the tables of squares for the x*x sums.
 const dlyLanesPureGo = false
 
 // dlyCoreLaneKernel runs the MatchedFilterCore loop of the lane with group
-// size g on one filter where the lane has its own core, and reports whether
-// it did.
+// size g on one filter if the lane has a core of its own, and reports
+// whether it did.
 func dlyCoreLaneKernel(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32) bool {
 	if (g == 8 && dlyUseAvx) || (g == 16 && dlyUseFma) {
@@ -710,16 +700,15 @@ func dlyCoreLaneKernel(g int, xStartIndex int, x2SumThreshold, smoothing float32
 	return false
 }
 
-// dlyCoreSimple runs the MatchedFilterCore loop of the SSE2 (g = 8) or AVX2
-// (g = 16) lane on one filter. The update of a sample is deferred and fused
-// into the next sample's dot product: when neither sample wraps around the
-// circular buffer and h is a whole number of groups, one update-and-dot
-// kernel call covers all of h; the other samples run dlyWrapSample. The
-// update of every element is the same operation either way.
+// dlyCoreSimple runs the MatchedFilterCore loop of the SSE2 (g = 8) or the
+// AVX2 (g = 16) lane on one filter. The update of a sample is deferred and
+// fused into the dot product of the next one: one kernel call covers all of
+// h when neither sample wraps and h is a whole number of groups, and
+// dlyWrapSample runs the other samples. An element sees the same update
+// either way.
 //
-// dlyCoreLaneKernel admits g = 16 only with dlyUseFma; the AVX2 kernels are
-// called behind their own test of it so that every 256-bit instruction
-// follows one (TestSimdInstructionsGated).
+// dlyCoreLaneKernel admits g = 16 only with dlyUseFma. The AVX2 kernels are
+// called behind a test of their own (TestSimdInstructionsGated).
 func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32) {
 	hSize := len(h)
@@ -780,9 +769,9 @@ func dlyCoreSimple(g int, xStartIndex int, x2SumThreshold, smoothing float32, x,
 	}
 }
 
-// dlyHsumSse2 reduces the SSE2 lane accumulators as dlyReduceSse2Ref does,
-// with the x2 and s sums side by side: lanes 0 and 1 of the result run
-// ((v0 + v1) + v2) + v3 for x2 and for s.
+// dlyHsumSse2 reduces the SSE2 lane accumulators of the x2 and the s sum
+// side by side: lanes 0 and 1 of the result are ((v0 + v1) + v2) + v3 for x2
+// and for s.
 func dlyHsumSse2(s, s4, x2, x24 archsimd.Float32x4) archsimd.Float32x4 {
 	a := x2.Add(x24).ToBits()
 	b := s.Add(s4).ToBits()
@@ -793,9 +782,9 @@ func dlyHsumSse2(s, s4, x2, x24 archsimd.Float32x4) archsimd.Float32x4 {
 	return t.Add(hi.ConcatPermuteScalars(2, 3, 6, 7, hi))
 }
 
-// dlyHsumAvx2 reduces the AVX2 lane accumulators as hsum_ab does
-// (dlyReduceAvx2Ref): pairwise sums of a = x2_sum_256 + x2_sum_256_8 and
-// b = s_256 + s_256_8, the x2 sum in lane 0 and the s sum in lane 1.
+// dlyHsumAvx2 reduces the AVX2 lane accumulators as hsum_ab does: pairwise
+// sums of a = x2_sum_256 + x2_sum_256_8 and b = s_256 + s_256_8, the x2 sum
+// in lane 0 and the s sum in lane 1.
 func dlyHsumAvx2(s, s8, x2, x28 archsimd.Float32x8) archsimd.Float32x4 {
 	p := x2.Add(x28).ConcatAddPairsGrouped(s.Add(s8)) // a01 a23 b01 b23 | a45 a67 b45 b67
 	lo, hi := p.GetLo(), p.GetHi()
@@ -804,12 +793,11 @@ func dlyHsumAvx2(s, s8, x2, x28 archsimd.Float32x8) archsimd.Float32x4 {
 	return t.Add(t.ConcatPermuteScalars(2, 3, 6, 7, t))
 }
 
-// The Sum kernels run over blocks of 64 elements with the slices advanced
-// block by block: the block pointer is the slice pointer, so every vector of
-// a block is addressed as pointer plus constant. An array pointer taken at
-// h[i : i+16] with a loop counter costs two address computations per access
-// instead, nine per group, and the loop then waits for its instructions
-// where the instruction window is narrow, not for its accumulator chains.
+// The Sum kernels run over blocks of 64 elements and advance the slices
+// block by block: the block pointer is the slice pointer, and every vector
+// of a block is addressed as pointer plus constant. An array pointer taken
+// at h[i : i+16] with a loop counter costs two address computations per
+// access.
 
 func dlyDotSse2Sum(h, x []float32) (s, x2Sum float32) {
 	n := len(h) &^ 7
@@ -923,8 +911,8 @@ func dlyDotAvx2Sum(h, x []float32) (s, x2Sum float32) {
 	return 0 + r[1], 0 + r[0]
 }
 
-// dlyDotAvx2SumLanes stores the reduced lane sums of dlyDotAvx2Sum in r: a
-// float32 result would cross the VZEROUPPER (see the head of the file).
+// dlyDotAvx2SumLanes stores the reduced lane sums of dlyDotAvx2Sum in r. A
+// float32 result would cross the VZEROUPPER.
 //
 //go:noinline
 func dlyDotAvx2SumLanes(h, x []float32, r *[4]float32) {
@@ -973,7 +961,7 @@ func dlyAxpyFmaDotAvx2Sum(h, xa, xb []float32, alpha float32) (s, x2Sum float32)
 }
 
 // dlyAxpyFmaDotAvx2SumLanes stores the reduced lane sums of
-// dlyAxpyFmaDotAvx2Sum in r (see dlyDotAvx2SumLanes).
+// dlyAxpyFmaDotAvx2Sum in r.
 //
 //go:noinline
 func dlyAxpyFmaDotAvx2SumLanes(h, xa, xb []float32, alpha float32, r *[4]float32) {
@@ -1033,24 +1021,22 @@ func dlyAxpyFmaDotAvx2SumLanes(h, xa, xb []float32, alpha float32, r *[4]float32
 	archsimd.ClearAVXUpperBits()
 }
 
-// Samples whose window wraps around the circular buffer, or whose filter is
+// Samples whose window wraps around the circular buffer or whose filter is
 // not a whole number of groups.
 //
-// The C++ loop runs such a sample as two chunks (up to the end of the
-// buffer, then from its start): the whole groups of each chunk in the lane
-// accumulators and the rest of each chunk in two scalars. The update of the
-// sample before it is pending and has its own two chunks, one element
-// apart. dlyWrapSample applies that update to the scalar tails and to the
-// groups that the lane's vector update does not cover alike (the tails of
-// the update's chunks, a group that straddles them) with the small update
-// routines, takes the scalar sums of the tails, and hands the groups to one
+// The C++ loop runs such a sample as two chunks, up to the end of the buffer
+// and from its start: the whole groups of a chunk in the lane accumulators,
+// the rest in two scalars. The pending update of the sample before it has
+// its own two chunks, one element apart. dlyWrapSample applies that update
+// to the scalar tails and to the groups the vector update of the lane does
+// not cover, takes the scalar sums of the tails, and hands the groups to a
 // kernel that keeps the accumulators of both chunks in registers and fuses
 // the update into the groups it covers.
 
-// fused returns the length n of the whole groups from a, within [a, b),
-// that one stretch of the pending update covers with the vector update of
-// the lane with group size g, and the offset off of that stretch: the
-// update of h[k] reads x[k+off].
+// fused returns the length n of the whole groups from a, within [a, b), that
+// one stretch of the pending update covers with the vector update of the
+// lane with group size g, and the offset off of that stretch: the update of
+// h[k] reads x[k+off].
 func (p *dlyPendingAxpy) fused(g, a, b int) (n, off int) {
 	for i := 0; i < p.n; i++ {
 		r := &p.runs[i]
@@ -1077,11 +1063,11 @@ func (p *dlyPendingAxpy) applySmall(h, x []float32, a, b int) {
 	}
 }
 
-// dlyAxpyFma128 is dlyAxpyFma with 128-bit vectors, for a few elements: it
+// dlyAxpyFma128 is dlyAxpyFma with 128-bit vectors, for a few elements. It
 // leaves the upper halves of the registers clean. The last vector of a
-// length that is not a multiple of four overlaps the one before it; both
-// are computed from the elements as they were, so the elements they share
-// are updated once.
+// length that is not a multiple of four overlaps the one before it; both are
+// computed from the elements as they were, so a shared element is updated
+// once.
 func dlyAxpyFma128(h, x []float32, alpha float32) {
 	if !dlyUseFma {
 		dlyAxpyFmaRef(h, x, alpha)
@@ -1116,10 +1102,10 @@ func dlyAxpyFma128(h, x []float32, alpha float32) {
 }
 
 // dlyWrapSample computes the filter output s and the x*x sum of the sample
-// with start index xs, whose first chunk has c elements, v1 of them in whole
-// groups, and whose second chunk has v2 elements in whole groups. It applies
-// the pending update, of the sample with start index pendStart and a first
-// chunk of pendChunk1 elements, to all of h.
+// with start index xs. Its first chunk has c elements, v1 of them in whole
+// groups; its second chunk has v2 elements in whole groups. It applies the
+// pending update, of the sample with start index pendStart and a first chunk
+// of pendChunk1 elements, to all of h.
 func dlyWrapSample(g int, h, x []float32, xs, c, v1, v2 int, pend *dlyPendingAxpy, pendStart, pendChunk1 int) (s, x2Sum float32) {
 	hSize := len(h)
 	nA, offA, nB, offB := 0, 0, 0, 0
@@ -1164,12 +1150,11 @@ func dlyWrapSample(g int, h, x []float32, xs, c, v1, v2 int, pend *dlyPendingAxp
 	return s, x2Sum
 }
 
-// dlyWrapPendSse2 applies the update of the sample before the one with
-// start index xs and first chunk c, whose first chunk has c-1 elements, to
-// the elements of h that dlyWrapSse2 does not update, and returns the
-// lengths nA and nB of the groups it does: the update of h[k] reads
-// x[xs+1+k] below c-1 and x[k-c+1] from there on, and is the same operation
-// for every element in this lane.
+// dlyWrapPendSse2 applies the update of the sample before the one with start
+// index xs and a first chunk of c elements to the elements of h that
+// dlyWrapSse2 does not update. It returns the lengths nA and nB of the
+// groups dlyWrapSse2 updates. The update of h[k] reads x[xs+1+k] below c-1
+// and x[k-c+1] from there on.
 func dlyWrapPendSse2(h, x []float32, xs, c, v1, v2 int, alpha float32) (nA, nB int) {
 	nA = min(v1, (c-1)&^7)
 	xa := x[xs+1 : xs+c]
@@ -1187,8 +1172,8 @@ func dlyWrapPendSse2(h, x []float32, xs, c, v1, v2 int, alpha float32) (nA, nB i
 }
 
 // dlyWrapPendAvx2 is dlyWrapPendSse2 for the AVX2 lane, whose update is
-// fused over the whole groups of eight of each chunk of its sample and
-// unfused over the rest of the chunk.
+// fused over the whole groups of eight of each of its chunks and unfused
+// over the rest.
 func dlyWrapPendAvx2(h, x []float32, xs, c, v1, v2 int, alpha float32) (nA, nB int) {
 	p1 := (c - 1) &^ 7
 	p2 := (len(h) - c + 1) &^ 7
@@ -1201,7 +1186,7 @@ func dlyWrapPendAvx2(h, x []float32, xs, c, v1, v2 int, alpha float32) (nA, nB i
 	for k := p1; k < len(hh) && k < len(xa); k++ {
 		hh[k] += float32(alpha * xa[k])
 	}
-	// The second chunk of the update starts at c-1; its fused part has p2
+	// The second chunk of the update starts at c-1. Its fused part has p2
 	// elements.
 	hh = h[c-1:]
 	xa = x[:len(hh)]
@@ -1219,10 +1204,10 @@ func dlyWrapPendAvx2(h, x []float32, xs, c, v1, v2 int, alpha float32) (nA, nB i
 }
 
 // dlyWrapSse2 accumulates h*x and x*x over the whole groups of the two
-// chunks of a sample: h[:v1] against x[xs:] and h[c:c+v2] against x[0:]. The
-// first nA elements of the first stretch and the first nB of the second are
-// updated first, h[k] += alpha*x[k+offA] (x[k+offB]). It returns the reduced
-// x*x sum and the reduced h*x sum.
+// chunks of a sample: h[:v1] against x[xs:] and h[c:c+v2] against x[0:]. It
+// first updates the first nA elements of the first stretch, h[k] +=
+// alpha*x[k+offA], and the first nB of the second with offB. It returns the
+// reduced x*x sum and the reduced h*x sum.
 func dlyWrapSse2(h, x []float32, xs, c, v1, v2, nA, offA, nB, offB int, alpha float32) (r0, r1 float32) {
 	hA, aA, bA := h[:nA:nA], x[offA:][:nA:nA], x[xs:][:nA:nA]
 	hP, bP := h[nA:v1], x[xs+nA:xs+v1]
@@ -1292,9 +1277,9 @@ func dlyWrapSse2(h, x []float32, xs, c, v1, v2, nA, offA, nB, offB int, alpha fl
 	return t.GetElem(0), t.GetElem(1)
 }
 
-// dlyWrapAvx2 is dlyWrapSse2 for the AVX2 lane, with the update
-// h[k] = fma(x[k+off], alpha, h[k]). It stores the reduced x*x sum in r[0]
-// and the reduced h*x sum in r[1] (see dlyDotAvx2SumLanes).
+// dlyWrapAvx2 is dlyWrapSse2 for the AVX2 lane, with the update h[k] =
+// fma(x[k+off], alpha, h[k]). It stores the reduced x*x sum in r[0] and the
+// reduced h*x sum in r[1].
 //
 //go:noinline
 func dlyWrapAvx2(h, x []float32, xs, c, v1, v2, nA, offA, nB, offB int, alpha float32, r *[4]float32) {

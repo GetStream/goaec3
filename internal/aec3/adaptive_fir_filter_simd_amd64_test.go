@@ -8,7 +8,8 @@ import (
 	"testing"
 )
 
-// Direct archsimd kernel vs pure-Go lane reference checks.
+// TestAfirSimdKernelsAmd64 checks the archsimd kernels against the pure-Go
+// lane references.
 func TestAfirSimdKernelsAmd64(t *testing.T) {
 	t.Logf("AVX=%v AVX2=%v AVX2+FMA=%v", afirHasAVX, afirHasAVX2, afirHasAVX2FMA)
 	if !afirHasAVX {
@@ -70,8 +71,8 @@ func TestAfirSimdKernelsAmd64(t *testing.T) {
 	}
 }
 
-// TestAfirAVXOnlyKernels runs the lane and row-sum checks with the 128-bit
-// AVX paths of the term and row kernels (CPUs with AVX but not AVX2).
+// TestAfirAVXOnlyKernels runs the lane and row-sum checks on the 128-bit
+// paths of the term and row kernels, as on a CPU with AVX and no AVX2.
 func TestAfirAVXOnlyKernels(t *testing.T) {
 	if !afirHasAVX {
 		t.Skip("no AVX")
@@ -89,8 +90,8 @@ func TestAfirAVXOnlyKernels(t *testing.T) {
 }
 
 // TestAfirFreqRespPartitionX86 checks the partition kernels against the
-// per-channel lane references, the AVX2 one also when the CPU executes FMA
-// without reporting it (GOAEC3_FORCE_FMA=1, Rosetta 2).
+// per-channel lane references. GOAEC3_FORCE_FMA=1 runs the AVX2 one on a CPU
+// that executes FMA without reporting it (Rosetta 2).
 func TestAfirFreqRespPartitionX86(t *testing.T) {
 	if !afirHasAVX {
 		t.Skip("no AVX")

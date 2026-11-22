@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// TestDecimateDs4Kernel runs dlyDecimateDs4 against the sections applied one
-// after the other: the outputs and the section states are bit-identical
-// after every block, and a block with a value that is not finite is refused
-// with the states untouched.
+// TestDecimateDs4Kernel checks dlyDecimateDs4 against the sections applied
+// one after the other: the outputs and the states agree bit for bit after
+// every block, and a block with a value that is not finite is refused with
+// the states untouched.
 func TestDecimateDs4Kernel(t *testing.T) {
 	if !dlyDs4HasSimd {
 		t.Skip("the CPU does not run the kernel")

@@ -16,8 +16,8 @@ import (
 // 2^256 down to 2^-298.
 const fmafExactPrec = 600
 
-// fmafExact rounds a*b+c once to float32 with exact big.Float arithmetic.
-// z and t are scratch values reused across calls.
+// fmafExact returns a*b+c rounded once to float32, computed exactly. z and t
+// are scratch.
 func fmafExact(a, b, c float32, z, t *big.Float) float32 {
 	fa, fb, fc := float64(a), float64(b), float64(c)
 	if math.IsInf(fa, 0) || math.IsInf(fb, 0) || math.IsInf(fc, 0) || a != a || b != b || c != c {
@@ -35,12 +35,11 @@ func fmafExact(a, b, c float32, z, t *big.Float) float32 {
 	return f
 }
 
-// fmafOperands returns case i of the fmaf test corpus: random bit patterns
-// (NaN, Inf, subnormals included), values of moderate range, near
-// cancellation, exact float32 rounding ties perturbed or not, subnormal
-// results, the overflow boundary and special values, plus the operand
-// families of the spectrum, matched-filter and adaptive-filter kernels
-// (cases 8 to 11).
+// fmafOperands returns case i of the fmaf test corpus: random bit patterns,
+// values of moderate range, near cancellation, float32 rounding ties with
+// and without a perturbation, subnormal results, the overflow boundary,
+// special values, and the operands of the spectrum, the matched filter and
+// the adaptive filter kernels.
 func fmafOperands(rng *rand.Rand, i int) (a, b, c float32) {
 	pow := func(lo, hi int) float64 { return math.Ldexp(1, lo+rng.Intn(hi-lo+1)) }
 	sign := func() float32 {
@@ -93,8 +92,7 @@ func fmafOperands(rng *rand.Rand, i int) (a, b, c float32) {
 		c = math.Float32frombits(math.Float32bits(c) + uint32(rng.Intn(9)) - 4)
 	case 3, 4:
 		// Products of short odd integers: a*b has up to 26 significant bits,
-		// so a*b+c often is, or is a tiny step away from, a float32
-		// rounding tie.
+		// so a*b+c often is a float32 rounding tie or a tiny step from one.
 		ea, eb := rng.Intn(60)-30, rng.Intn(60)-30
 		a = sign() * float32(math.Ldexp(float64(rng.Intn(1<<13)|1), ea))
 		b = sign() * float32(math.Ldexp(float64(rng.Intn(1<<13)|1), eb))
@@ -161,26 +159,27 @@ func fmafOperands(rng *rand.Rand, i int) (a, b, c float32) {
 	return a, b, c
 }
 
-// fmafSpecials are the special values of the fmaf test corpus.
+// fmafSpecials holds the special values of the fmaf test corpus.
 var fmafSpecials = [...]float32{0, float32(math.Copysign(0, -1)), 1, -1, float32(math.Inf(1)), float32(math.Inf(-1)),
 	float32(math.NaN()), math.MaxFloat32, -math.MaxFloat32, math.SmallestNonzeroFloat32,
 	-math.SmallestNonzeroFloat32, 0x1p-126, -0x1p-126, math.Float32frombits(0x007fffff), 0x1p64, 0x1p-75, 0.5,
 	math.Float32frombits(0x7fa00000), 0x1p-149 * 3, -0x1p-75, 0x1p127, 0x1p-64}
 
 // fmafBoundaryCases calls f with operands whose exact a*b + c lies on, just
-// below and just above every kind of float32 rounding boundary:
+// below and just above every kind of float32 rounding boundary.
 //
-//   - every triple of special values (zeros of both signs, infinities, NaNs,
-//     the largest and smallest magnitudes);
-//   - for a float32 value v of every exponent, subnormals included, and
-//     mantissas of both parities, the midpoints next to v: c = v and
-//     a*b = +-hulp exactly (a tie), and a*b = +-hulp*(1 - 2^-46) (short of
-//     the tie by less than the float64 sum can hold, the double-rounding
-//     case); with v's neighbour as c the same product comes from the other
-//     side of the midpoint. hulp, half the spacing at v, is the product of
-//     two powers of two, and (1 + 2^-23)*(1 - 2^-23) = 1 - 2^-46;
-//   - the same around the overflow boundary 2^128 - 2^103, on products that
-//     alone overflow float32, and on sums that cancel to zero.
+// It covers every triple of special values.
+//
+// For a float32 value v of every exponent, subnormals included, and
+// mantissas of both parities it covers the midpoints next to v: c = v with
+// a*b = ±hulp, a tie, and with a*b = ±hulp*(1 - 2^-46), short of the tie by
+// less than the float64 sum can hold. With the neighbour of v as c the same
+// product comes from the other side of the midpoint. hulp, half the spacing
+// at v, is a product of two powers of two, and (1 + 2^-23)*(1 - 2^-23) = 1 -
+// 2^-46.
+//
+// It covers the same around the overflow boundary 2^128 - 2^103, products
+// that overflow float32 alone, and sums that cancel to zero.
 func fmafBoundaryCases(f func(a, b, c float32)) {
 	for _, a := range fmafSpecials {
 		for _, b := range fmafSpecials {
@@ -240,10 +239,10 @@ func fmafBoundaryCases(f func(a, b, c float32)) {
 	}
 }
 
-// TestFmafCorrectlyRounded checks fmaf, its slow path and the rounded
-// float64 sum wherever fmafTie does not flag it against exact arithmetic:
-// on the boundary cases of fmafBoundaryCases and on GOAEC3_FMAF_N random
-// cases (default 3e6; 3e5 with -short), spread over GOMAXPROCS workers.
+// TestFmafCorrectlyRounded checks fmaf, fmafSlow and the rounded float64 sum
+// where fmafTie does not hold against exact arithmetic, on the cases of
+// fmafBoundaryCases and on GOAEC3_FMAF_N random cases (3e6 by default, 3e5
+// with -short).
 func TestFmafCorrectlyRounded(t *testing.T) {
 	n := 3_000_000
 	if testing.Short() {
@@ -311,7 +310,7 @@ func TestFmafCorrectlyRounded(t *testing.T) {
 			for i := w; i < n; i += workers {
 				a, b, c := fmafOperands(rng, i)
 				check(a, b, c, &z, &t2)
-				// Commuted operands must give the same result.
+				// Commuted operands give the same result.
 				check(b, a, c, &z, &t2)
 			}
 		}(w)

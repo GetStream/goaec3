@@ -7,7 +7,8 @@ import (
 	"testing"
 )
 
-// Direct archsimd NEON kernel vs pure-Go lane reference checks.
+// TestAfirSimdKernelsArm64 checks the NEON archsimd kernels against the
+// pure-Go lane references.
 func TestAfirSimdKernelsArm64(t *testing.T) {
 	rng := rand.New(rand.NewSource(8))
 	for trial := 0; trial < 2000; trial++ {

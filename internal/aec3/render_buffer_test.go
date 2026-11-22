@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// rbSpectralSumRef is the scalar SpectralSum loop: per bin, +0 plus every
-// spectrum (all channels) from the read position in ring order.
+// rbSpectralSumRef is the loop of SpectralSum: per bin, +0 plus the spectra
+// of all channels from the read position in ring order.
 func rbSpectralSumRef(sb *SpectrumBuffer, numSpectra int, X2 *[FftLengthBy2Plus1]float32) {
 	*X2 = [FftLengthBy2Plus1]float32{}
 	position := sb.Read

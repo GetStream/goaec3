@@ -54,10 +54,10 @@ func afirEqualArr(t *testing.T, what string, got, want []float32) {
 	}
 }
 
-// The NEON/SSE2/AVX2 ApplyFilter and AdaptPartitions lanes (and every
-// ErlComputer lane, and the NEON/SSE2 frequency responses) perform the same
-// rounded operations per bin as the scalar code; in SIMD builds this also
-// proves the archsimd kernels against the scalar reference.
+// TestAfirLanesMatchScalar checks the lanes that perform the rounded
+// operations of the scalar code against it: ApplyFilter, AdaptPartitions and
+// ErlComputer in every lane, the frequency response in the NEON and SSE2
+// lanes. With archsimd this checks the kernels.
 func TestAfirLanesMatchScalar(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	type applyFn func(*RenderBuffer, int, FirCoefficients, *FftData)
@@ -121,8 +121,8 @@ func TestAfirLanesMatchScalar(t *testing.T) {
 	}
 }
 
-// The bounds-check-free and term-ordered pure-Go kernels against the plain
-// per-bin references.
+// TestAfirFastGoKernels checks the pure-Go term kernels against the plain
+// bin loops.
 func TestAfirFastGoKernels(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	for trial := 0; trial < 300; trial++ {
@@ -226,8 +226,8 @@ func BenchmarkAfirMaxAbsUpdate(b *testing.B) {
 
 func afirCopyH(H FirCoefficients) FirCoefficients { return H.Clone() }
 
-// The AVX2 frequency response (fused) against its pure-Go reference; in
-// amd64 SIMD builds with AVX2+FMA this checks the archsimd kernel.
+// TestAfirFreqRespAvx2 checks the fused frequency response of the AVX2 lane
+// against its pure-Go reference.
 func TestAfirFreqRespAvx2(t *testing.T) {
 	rng := rand.New(rand.NewSource(4))
 	im := float32(4097.0 / 4096.0)
@@ -256,9 +256,9 @@ func TestAfirFreqRespAvx2(t *testing.T) {
 	}
 }
 
-// afirFreqRespBlockAvx2Go against one fmaf per bin, with bins whose sum is
-// a float32 rounding boundary (the slow path of fmaf) at every position of
-// a group.
+// TestAfirFreqRespBlockAvx2GoMatchesFmaf checks afirFreqRespBlockAvx2Go
+// against one fmaf per bin, with a sum that is a float32 rounding boundary
+// at every position of a group.
 func TestAfirFreqRespBlockAvx2GoMatchesFmaf(t *testing.T) {
 	rng := rand.New(rand.NewSource(41))
 	im := float32(4097.0 / 4096.0)
@@ -393,11 +393,11 @@ func BenchmarkAfirErlComputer(b *testing.B) {
 	}
 }
 
-// The branch-free maxima of the SSE2 and AVX2 frequency-response blocks
-// against their definitions (_mm_max_ps as sseMax, the fused sum as fmaf),
-// on stored maxima as the filter has them (+0, earlier powers, equal to the
-// new power) and with a NaN, an infinity, a negative number or -0 at
-// single positions of the stored maxima or of the coefficients.
+// TestAfirFreqRespBlockFastMax checks the branch-free maxima of the SSE2 and
+// AVX2 frequency response blocks against sseMax and fmaf. The stored maxima
+// are +0, earlier powers or the new power, and a NaN, an infinity, a
+// negative number or -0 stands at single positions of the maxima or the
+// coefficients.
 func TestAfirFreqRespBlockFastMax(t *testing.T) {
 	rng := rand.New(rand.NewSource(77))
 	edges := []float32{float32(math.NaN()), float32(math.Inf(1)), float32(math.Inf(-1)),
@@ -442,10 +442,9 @@ func TestAfirFreqRespBlockFastMax(t *testing.T) {
 	}
 }
 
-// The frequency-response block of the first channel, which stores the
-// powers, against the lane blocks on stored maxima of +0, with NaN,
-// infinities and zeros of both signs among the coefficients and with sums
-// on the slow path of fmaf.
+// TestAfirFreqRespFirst checks afirFreqRespFirstGo against the lane blocks
+// on stored maxima of +0, with NaN, infinities and zeros of both signs among
+// the coefficients and with sums that need fmafSlow.
 func TestAfirFreqRespFirst(t *testing.T) {
 	rng := rand.New(rand.NewSource(78))
 	im := float32(4097.0 / 4096.0)

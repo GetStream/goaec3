@@ -7,7 +7,7 @@ import (
 )
 
 // refCascade applies the sections one after the other, each over the whole
-// signal (the C++ loop over biquads_).
+// signal, as the C++ does.
 func refCascade(x, y []float32, biquads []BiQuad) {
 	if len(biquads) == 0 {
 		copy(y[:len(x)], x)
@@ -61,10 +61,9 @@ func biquadTestSignal(rng *rand.Rand, x []float32) {
 	}
 }
 
-// equalBits returns the first index where a and b differ, -1 if none: bit
-// for bit, except that any two NaNs match (as in kernCheckExact; the NaN sign
-// and payload depend on the operand order the compiler picks for a
-// commutative operation on amd64, as they do for the C++).
+// equalBits returns the first index where a and b differ in their bits, or
+// -1. Any two NaNs match: the payload of a NaN depends on the operand order
+// the compiler picks for a commutative operation.
 func equalBits(a, b []float32) int {
 	for i := range a {
 		if a[i] != a[i] && b[i] != b[i] {

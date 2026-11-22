@@ -7,12 +7,10 @@ import (
 	"testing"
 )
 
-// TestEc3ViewPerCall runs two cancellers on the same signal: one through a
-// view that is bound once (NewEchoCanceller3) and one through a view that is
-// bound anew for every call, as the public package does. Their outputs and
-// metrics must agree bit for bit: whatever a component keeps between calls
-// is in its state, not in its view (a slice of a view that changes its
-// length, for instance).
+// TestEc3ViewPerCall runs two cancellers on one signal: one through a view
+// bound once, one through a view bound for every call, as the public package
+// does. Their outputs and metrics agree bit for bit only if whatever a
+// component keeps between calls is in its state.
 func TestEc3ViewPerCall(t *testing.T) {
 	frames := 600
 	if testing.Short() {
@@ -187,7 +185,7 @@ func TestEc3ViewPerCall(t *testing.T) {
 	}
 }
 
-// BenchmarkEc3Bind times binding the views of a canceller, which every
+// BenchmarkEc3Bind times the binding of the views of a canceller, which a
 // capture call does once.
 func BenchmarkEc3Bind(b *testing.B) {
 	cfg := DefaultEchoCanceller3Config()

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// ec3FakeRemover records the BlockProcessor -> EchoRemover calls.
+// ec3FakeRemover records the calls of a BlockProcessor to its EchoRemover.
 type ec3FakeRemover struct {
 	calls          int
 	variability    []EchoPathVariability
@@ -146,7 +146,7 @@ func TestEc3BlockProcessorExternalDelay(t *testing.T) {
 	}
 }
 
-// ec3Signals generates a deterministic speech-like FloatS16 signal.
+// ec3Signals generates a deterministic speech-like signal in FloatS16.
 type ec3Signals struct {
 	rng   *rand.Rand
 	phase float64
@@ -160,8 +160,8 @@ func (s *ec3Signals) next(amp float64) float32 {
 	return float32(amp * env * (math.Sin(s.phase) + 0.3*s.rng.NormFloat64()))
 }
 
-// ec3MakeFrame returns a [numBands][numChannels][SplitBandSize] frame for the
-// EchoCanceller3 methods that take the caller's frames.
+// ec3MakeFrame returns a frame for the EchoCanceller3 methods that take
+// frames of the caller.
 func ec3MakeFrame(numBands, numChannels int) [][][]float32 {
 	frame := make([][][]float32, numBands)
 	for band := range frame {
@@ -173,10 +173,10 @@ func ec3MakeFrame(numBands, numChannels int) [][][]float32 {
 	return frame
 }
 
-// TestEc3PassthroughFraming runs EchoCanceller3 in external-delay mode
-// without an audio buffer delay, where the echo remover is bypassed, and
-// checks that the capture output is the input delayed by the framing
-// (64 samples) plus the fixed capture delay.
+// TestEc3PassthroughFraming checks that a canceller with an external delay
+// estimator and no audio buffer delay, which bypasses the echo remover,
+// outputs the capture signal delayed by the framing, 64 samples, plus the
+// fixed capture delay.
 func TestEc3PassthroughFraming(t *testing.T) {
 	for _, rate := range []int{16000, 32000, 48000} {
 		for _, fixed := range []int{0, 37} {
@@ -265,9 +265,9 @@ func TestEc3RenderTransferQueue(t *testing.T) {
 }
 
 // TestEc3RenderTransferQueueGrowth drives the queue with random bursts of
-// inserts and removes against a FIFO that holds up to maxFrames frames, and
-// checks the accepted and dropped frames, their order and contents, and that
-// the capacity tracks the deepest burst.
+// inserts and removes against a FIFO of up to maxFrames frames. It checks
+// the accepted and the dropped frames, their order and contents, and that
+// the capacity follows the deepest burst.
 func TestEc3RenderTransferQueueGrowth(t *testing.T) {
 	rng := rand.New(rand.NewSource(9))
 	for _, c := range []struct{ maxFrames, numBands, numChannels int }{
@@ -368,9 +368,8 @@ func TestEc3RenderTransferQueueAllocationFree(t *testing.T) {
 	}
 }
 
-// TestEc3StereoDetectionSwitch checks that proper stereo render content
-// reconfigures the canceller to stereo processing and the multichannel
-// config.
+// TestEc3StereoDetectionSwitch checks that stereo render content switches
+// the canceller to stereo processing and to the multichannel config.
 func TestEc3StereoDetectionSwitch(t *testing.T) {
 	cfg := DefaultEchoCanceller3Config()
 	cfg.Delay.UseExternalDelayEstimator = true
@@ -451,8 +450,8 @@ func TestEc3RenderDownmix(t *testing.T) {
 			}
 		}
 	}
-	// Without a proper downmix, or when the AEC runs on every channel, the
-	// frame is left as it is.
+	// Without a proper downmix, and when the AEC runs on every channel, the
+	// frame stays as it is.
 	fill()
 	ec3DownmixRenderSubFrame(false, frame, 1, 1)
 	ec3DownmixRenderSubFrame(true, frame, 1, 3)
@@ -468,7 +467,7 @@ func TestEc3RenderDownmix(t *testing.T) {
 }
 
 func TestEc3HighPassFilterReference(t *testing.T) {
-	// Direct form 1 recursion in float32, written out independently.
+	// The direct form 1 recursion in float32, written out.
 	f := NewHighPassFilter(16000, 1)
 	c := ec3HighPassFilterCoefficients16kHz[0]
 	rng := rand.New(rand.NewSource(4))
@@ -502,8 +501,8 @@ func TestEc3HighPassFilterReference(t *testing.T) {
 	}
 }
 
-// TestEc3PassthroughAllocationFree locks the framing/queue/render-buffering
-// path (external delay mode without a buffer delay) to zero allocations.
+// TestEc3PassthroughAllocationFree checks that framing, queueing and render
+// buffering do not allocate.
 func TestEc3PassthroughAllocationFree(t *testing.T) {
 	cfg := DefaultEchoCanceller3Config()
 	cfg.Delay.UseExternalDelayEstimator = true
@@ -528,8 +527,8 @@ func TestEc3PassthroughAllocationFree(t *testing.T) {
 	}
 }
 
-// TestEc3AllocationFree locks the full steady-state path to zero
-// allocations.
+// TestEc3AllocationFree checks that steady-state processing does not
+// allocate.
 func TestEc3AllocationFree(t *testing.T) {
 	for _, rate := range []int{16000, 48000} {
 		cfg := DefaultEchoCanceller3Config()
@@ -564,9 +563,9 @@ func TestEc3AllocationFree(t *testing.T) {
 	}
 }
 
-// TestAecStateObjects checks that an AecState of up to inlineChannels capture
-// channels is its view, its state and the buffers that depend on the filter
-// length.
+// TestAecStateObjects checks that an AecState of up to inlineChannels
+// capture channels is three objects: its view, its state and the buffers
+// that depend on the filter length.
 func TestAecStateObjects(t *testing.T) {
 	cfg := DefaultEchoCanceller3Config()
 	for ch := 1; ch <= inlineChannels; ch++ {
@@ -578,9 +577,9 @@ func TestAecStateObjects(t *testing.T) {
 	}
 }
 
-// TestChannelState checks that channelState hands out the array of the
-// component for up to inlineChannels elements, and what moreChannels
-// allocated beyond.
+// TestChannelState checks that channelState returns the array of the
+// component for up to inlineChannels elements and the allocation of
+// moreChannels beyond.
 func TestChannelState(t *testing.T) {
 	var inline [inlineChannels]int
 	for n := 0; n <= inlineChannels+2; n++ {
@@ -604,10 +603,9 @@ func TestChannelState(t *testing.T) {
 }
 
 // TestEc3ChannelStateStorage runs cancellers of one and two capture channels
-// with their per-channel state in the components and with it allocated, as
-// with more than inlineChannels channels: the output, the linear output and
-// the metrics must be the same bit for bit. It covers both nearend
-// detectors and a nearend smoothing longer than the default.
+// with their per-channel state inline and allocated. The output, the linear
+// output and the metrics agree bit for bit. It covers both nearend detectors
+// and a nearend smoothing longer than the default.
 func TestEc3ChannelStateStorage(t *testing.T) {
 	frames := 500
 	if testing.Short() {

@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// suppressorPointerPath returns the path of the first field of t the garbage
-// collector reads (a pointer, slice, map, interface, string, func or chan),
-// or "" when t has none.
+// suppressorPointerPath returns the path of the first field of t that the
+// garbage collector reads, or "" if t has none.
 func suppressorPointerPath(t reflect.Type, path string) string {
 	switch t.Kind() {
 	case reflect.Pointer, reflect.Slice, reflect.Map, reflect.Interface, reflect.String, reflect.Func,
@@ -27,7 +26,7 @@ func suppressorPointerPath(t reflect.Type, path string) string {
 }
 
 // TestSuppressorStatesPointerFree checks that the states of the suppressor
-// components hold no pointer, so the garbage collector does not read them.
+// components hold nothing the garbage collector reads.
 func TestSuppressorStatesPointerFree(t *testing.T) {
 	for _, typ := range []reflect.Type{
 		reflect.TypeOf(suppressionGainState{}),
@@ -42,7 +41,7 @@ func TestSuppressorStatesPointerFree(t *testing.T) {
 }
 
 // TestSuppressorViewsOfCore checks that the views a core binds reach what
-// init has set up: the state of more than inlineChannels channels and the
+// init set up: the state of more than inlineChannels channels and the
 // optional subband nearend detector.
 func TestSuppressorViewsOfCore(t *testing.T) {
 	for _, subband := range []bool{false, true} {

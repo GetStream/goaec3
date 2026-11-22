@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// dlyQuietScene feeds a MatchedFilter pair (quiet-render skip on and off)
-// with the same low-rate render buffer and capture, block by block. The
-// render level follows a per-block mode; the capture is the render delayed
-// by a fixed lag plus noise, so the filters converge, report lags and run
-// the pre-echo logic whenever the render is loud.
+// dlyQuietScene feeds two MatchedFilters, with and without the quiet-render
+// skip, the same render buffer and capture block by block. The render level
+// follows a mode per block. The capture is the render delayed by a fixed lag
+// plus noise, so the filters converge, report lags and run the pre-echo
+// logic while the render is loud.
 type dlyQuietScene struct {
 	rng     *rand.Rand
 	sub     int
@@ -41,8 +41,9 @@ const (
 	dlyQuietModes
 )
 
-// block writes the next render sub-block into the buffer like
-// RenderDelayBufferImpl (backwards, reversed) and returns the capture.
+// block writes the next render sub-block to the buffer as
+// RenderDelayBufferImpl does, backwards and reversed, and returns the
+// capture.
 func (s *dlyQuietScene) block(mode int, excitationLimit float32) []float32 {
 	x := make([]float32, s.sub)
 	sign := func() float32 {
@@ -101,10 +102,10 @@ func (s *dlyQuietScene) block(mode int, excitationLimit float32) []float32 {
 	return y
 }
 
-// dlyQuietStateDiff compares every field of the two filters that carries
-// state from one Update to the next or that Update reports, bit for bit.
-// instantaneousAccumulatedError and scratchMemory are scratch (see the
-// quiet-render skip) and are not compared.
+// dlyQuietStateDiff compares, bit for bit, every field of the two filters
+// that carries state from one Update to the next or that Update reports. It
+// leaves out instantaneousAccumulatedError and scratchMemory, which are
+// scratch.
 func dlyQuietStateDiff(a, b *MatchedFilter) string {
 	for n := 0; n < a.numFilters; n++ {
 		fa, fb := a.filter(n), b.filter(n)
@@ -154,9 +155,9 @@ type dlyQuietStats struct {
 	filterSkips                            int // cores of single quiet filters not run
 }
 
-// dlyQuietRun drives a skipping and a non-skipping MatchedFilter side by
-// side for numBlocks blocks and returns the first state difference, if any.
-// tamper, when set, adjusts the skipping filter after construction.
+// dlyQuietRun drives a MatchedFilter with the skip and one without for
+// numBlocks blocks and returns the first difference in their state, if any.
+// tamper, if not nil, adjusts the filter with the skip first.
 func dlyQuietRun(c dlyQuietCase, seed int64, numBlocks int, modes []int, tamper func(m *MatchedFilter)) (string, dlyQuietStats) {
 	const numFilters = 5
 	sub := BlockSize / c.factor
@@ -176,7 +177,7 @@ func dlyQuietRun(c dlyQuietCase, seed int64, numBlocks int, modes []int, tamper 
 		if left == 0 {
 			mode = modes[s.rng.Intn(len(modes))]
 			// Segments shorter and longer than the render buffer: a quiet
-			// stretch reaches the skip only once it fills the buffer.
+			// stretch reaches the skip once it fills the buffer.
 			left = 1 + s.rng.Intn(4*len(s.buf.Buffer)/sub)
 			if s.rng.Intn(3) == 0 {
 				left = 1 + s.rng.Intn(20)
@@ -193,8 +194,8 @@ func dlyQuietRun(c dlyQuietCase, seed int64, numBlocks int, modes []int, tamper 
 		ref.Update(s.buf, y, slow)
 		if wouldSkip {
 			st.skipped++
-			// The scratch buffers of a skipped block are stale; poison them
-			// so that any later read would spread into the compared state.
+			// A skipped block leaves the scratch stale. Poison it, so that a
+			// later read spreads into the compared state.
 			for _, scratch := range [][]float32{skip.instantaneousAccumulatedError(), skip.scratchMemory()} {
 				for k := range scratch {
 					scratch[k] = float32(math.NaN())
@@ -221,7 +222,7 @@ func dlyQuietRun(c dlyQuietCase, seed int64, numBlocks int, modes []int, tamper 
 			skip.Reset(true)
 			ref.Reset(true)
 		case 2:
-			// A render buffer realignment: the read position jumps.
+			// A realignment of the render buffer: the read position jumps.
 			s.buf.Read = s.rng.Intn(len(s.buf.Buffer))
 		}
 	}
@@ -244,8 +245,8 @@ func dlyQuietCases() []dlyQuietCase {
 				cases = append(cases, dlyQuietCase{opt, factor, preEcho, limit})
 			}
 		}
-		// Non-default excitation limits, including ones whose threshold is
-		// zero, tiny, huge, infinite or NaN.
+		// Other excitation limits, with thresholds that are zero, tiny,
+		// huge, infinite or NaN.
 		for i, limit := range []float32{0, 1e-25, 1e-12, 0.37, 1, 37.5, 1024, 30000, 1e17, 3e19,
 			float32(math.Inf(1)), float32(math.NaN()), -150} {
 			cases = append(cases, dlyQuietCase{opt, 4 + 4*(i%2), i%3 != 0, limit})
@@ -254,11 +255,11 @@ func dlyQuietCases() []dlyQuietCase {
 	return cases
 }
 
-// TestDlyQuietSkipStateMatchesNoSkip runs the matched filter with and
-// without the quiet-render skip over loud, silent, quiet, at-the-limit,
-// just-above-the-limit and non-finite render, with transitions between
-// them, resets and render buffer realignments, in every lane, and requires
-// identical state after every block.
+// TestDlyQuietSkipStateMatchesNoSkip checks that a MatchedFilter with the
+// quiet-render skip and one without have the same state after every block,
+// in every lane. The render is loud, silent, quiet, at the limit, just above
+// it and not finite, with transitions, resets and realignments of the render
+// buffer.
 func TestDlyQuietSkipStateMatchesNoSkip(t *testing.T) {
 	numBlocks := 6000
 	if testing.Short() {
@@ -281,7 +282,7 @@ func TestDlyQuietSkipStateMatchesNoSkip(t *testing.T) {
 		total.ran += st.ran
 		total.reported += st.reported
 		total.preEchoUpdates += st.preEchoUpdates
-		// The short run is too brief for every scenario to visit both sides.
+		// The short run does not visit both sides in every scenario.
 		if !testing.Short() && (c.excitationLimit == 150 || c.excitationLimit == 20) {
 			if st.skipped < numBlocks/30 || st.ran < numBlocks/30 || st.reported < numBlocks/60 {
 				t.Errorf("%v: scenario too one-sided: skipped %d, ran %d, lag reports %d", c, st.skipped, st.ran,
@@ -298,9 +299,9 @@ func TestDlyQuietSkipStateMatchesNoSkip(t *testing.T) {
 	t.Logf("total: skipped %d, ran %d, lag reports %d", total.skipped, total.ran, total.reported)
 }
 
-// TestDlyMatchedFilterPairedUpdateMatchesUnpaired runs Update with the
-// NEON-lane filter cores two at a time and one at a time, on the same loud
-// and quiet render, and requires identical state after every block.
+// TestDlyMatchedFilterPairedUpdateMatchesUnpaired checks that Update with
+// the NEON-lane cores two at a time and one at a time leaves the same state
+// after every block of a loud and quiet render.
 func TestDlyMatchedFilterPairedUpdateMatchesUnpaired(t *testing.T) {
 	savedPair := dlyPairNeon
 	defer func() { dlyPairNeon = savedPair }()
@@ -356,10 +357,9 @@ func TestDlyMatchedFilterPairedUpdateMatchesUnpaired(t *testing.T) {
 	}
 }
 
-// TestDlyQuietLimitIsTight checks that the limit is not needlessly low: a
-// render buffer of constant magnitude 1.001 times the excitation limit
-// updates the filters, so it must not count as quiet, and the limit is
-// within 0.1% of the excitation limit.
+// TestDlyQuietLimitIsTight checks that the quiet limit is within 0.1% of the
+// excitation limit: a render buffer of the constant magnitude 1.001 times
+// the excitation limit updates the filters and does not count as quiet.
 func TestDlyQuietLimitIsTight(t *testing.T) {
 	for _, c := range []struct {
 		n     int
@@ -384,11 +384,10 @@ func TestDlyQuietLimitIsTight(t *testing.T) {
 	}
 }
 
-// TestDlyQuietSkipUnsafeMarginIsDetected is the mutation check of the
-// side-by-side test: with the margin of the quiet limit lowered so that the
-// limit lands above sqrt(threshold/N), render at that limit updates the
-// filters of the non-skipping filter while the skipping one stands still,
-// and the state comparison must report it, in every lane.
+// TestDlyQuietSkipUnsafeMarginIsDetected checks the test above: with a
+// margin that puts the quiet limit above sqrt(threshold/N), render at that
+// limit updates the filters without the skip while those with it stand
+// still, and the comparison of the states reports it in every lane.
 func TestDlyQuietSkipUnsafeMarginIsDetected(t *testing.T) {
 	for _, c := range dlyQuietCases() {
 		if c.excitationLimit != 150 && c.excitationLimit != 20 {
@@ -409,7 +408,7 @@ func TestDlyQuietSkipUnsafeMarginIsDetected(t *testing.T) {
 				t.Errorf("%v: an unsafe quiet margin of %g went undetected", c, margin)
 			}
 		}
-		// The same scenario with the real margin is clean.
+		// With the real margin the states agree.
 		if diff, st := dlyQuietRun(c, 7, 1500, []int{dlyQuietLoud, dlyQuietAtLimit, dlyQuietAtLimit}, nil); diff != "" ||
 			st.skipped == 0 {
 			t.Errorf("%v: real margin: diff %q, skipped %d", c, diff, st.skipped)
@@ -417,8 +416,8 @@ func TestDlyQuietSkipUnsafeMarginIsDetected(t *testing.T) {
 	}
 }
 
-// TestDlyQuietRenderScan checks renderIsQuiet against a direct scan on
-// buffers with a single loud or non-finite sample at every position.
+// TestDlyQuietRenderScan checks renderIsQuiet against a plain scan on
+// buffers with one sample that is loud or not finite, at every position.
 func TestDlyQuietRenderScan(t *testing.T) {
 	rng := rand.New(rand.NewSource(9))
 	m := NewMatchedFilter(OptNone, 16, 32, 5, 24, 150, 0.7, 0.3, 0.2, true)
@@ -471,13 +470,12 @@ func BenchmarkMatchedFilterUpdateQuiet(b *testing.B) {
 	}
 }
 
-// TestDlyQuietFilterSkipRunsAccumulatedErrorFilter covers the reason the
-// quiet-filter skip never applies to the filter that computes the
-// accumulated error: with the echo path delay in the overlap of two filters,
-// the older filter's win goes to the newer one, whose windows turn quiet
+// TestDlyQuietFilterSkipRunsAccumulatedErrorFilter checks that the
+// quiet-filter skip leaves the filter that computes the accumulated error
+// alone. With the delay of the echo path in the overlap of two filters, the
+// win of the older filter goes to the newer one, whose windows turn quiet
 // first when the render falls silent. Its accumulated error of such a block
-// still enters the pre-echo state, which must match the filter without the
-// skip.
+// still enters the pre-echo state.
 func TestDlyQuietFilterSkipRunsAccumulatedErrorFilter(t *testing.T) {
 	const numFilters = 5
 	sub := BlockSize / 4
@@ -493,7 +491,7 @@ func TestDlyQuietFilterSkipRunsAccumulatedErrorFilter(t *testing.T) {
 		skip, ref := newFilter(), newFilter()
 		ref.quietSkip = false
 		s := newDlyQuietScene(41, 4, numFilters, math.Float32frombits(skip.quietLimitBits))
-		// Lags 384 to 511 are in the windows of both filter 0 and filter 1.
+		// Lags 384 to 511 are in the windows of filter 0 and of filter 1.
 		s.lag = MatchedFilterAlignmentShiftSizeSubBlocks*sub + 50
 		quietWins := 0
 		for blk := 0; blk < numBlocks; blk++ {
@@ -521,13 +519,12 @@ func TestDlyQuietFilterSkipRunsAccumulatedErrorFilter(t *testing.T) {
 	}
 }
 
-// TestDlyZeroFilterSkipStateMatchesNoSkip runs the matched filter with and
-// without the skips on a capture that is zero (+0 and -0) for stretches,
-// from the start and after resets, over loud, quiet and non-finite render,
-// with stretches of real capture in between, and requires identical state
-// after every block. Some zero stretches start with -0 planted in a filter,
-// which the skip must not take for a zero filter, and some blocks of a zero
-// stretch have one sample that is not zero.
+// TestDlyZeroFilterSkipStateMatchesNoSkip checks that a MatchedFilter with
+// the skips and one without have the same state after every block of a
+// capture that is ±0 for stretches, from the start and after resets, over
+// loud, quiet and non-finite render. Some zero stretches start with a -0
+// planted in a filter, which is not a zero filter, and some of their blocks
+// have one sample that is not zero.
 func TestDlyZeroFilterSkipStateMatchesNoSkip(t *testing.T) {
 	const numFilters = 5
 	numBlocks := 4000
@@ -573,8 +570,8 @@ func TestDlyZeroFilterSkipStateMatchesNoSkip(t *testing.T) {
 						}
 					}
 					if s.rng.Intn(40) == 0 {
-						// One sample that is not zero before the last one:
-						// the block is not a zero block.
+						// One sample before the last that is not zero: not a
+						// zero block.
 						y[s.rng.Intn(len(y)-1)] = []float32{0x1p-20, -0.5, 3}[s.rng.Intn(3)]
 					}
 				}

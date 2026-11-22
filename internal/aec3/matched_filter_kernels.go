@@ -1,23 +1,22 @@
 package aec3
 
-// Pure-Go lane references for the MatchedFilterCore inner loops. Each one
-// reproduces the arithmetic of one libwebrtc SIMD variant lane by lane; they
-// are the specification the archsimd kernels are tested against and the
-// fallback when no kernel exists for a lane on the build architecture.
+// Pure-Go lane references of the inner loops of MatchedFilterCore. A
+// reference performs the arithmetic of one libwebrtc SIMD variant lane by
+// lane. It is the spec of the archsimd kernel and runs where the build has
+// no kernel for the lane.
 //
-// The C++ loops accumulate h*x and x*x side by side. The two sums never mix
-// before the final reduction, so the kernels here compute them separately:
-// the Dot kernels accumulate h*x, the Sq kernels x*x, each into the lane
-// accumulators of its sum:
-//   - NEON  (*[4]float32):  s_128 (or x2_sum_128).
-//   - SSE2  (*[8]float32):  [0:4] s_128, [4:8] s_128_4.
-//   - AVX2  (*[16]float32): [0:8] s_256, [8:16] s_256_8.
+// The C++ loops accumulate h*x and x*x side by side. The sums do not mix
+// before the reduction, so the Dot kernels accumulate h*x and the Sq kernels
+// x*x, each into the lane accumulators of its sum:
 //
-// Sample j of a group feeds lane j of its accumulators, and every lane is an
-// independent chain over the groups in order.
+//	NEON  *[4]float32   s_128 (or x2_sum_128)
+//	SSE2  *[8]float32   [0:4] s_128, [4:8] s_128_4
+//	AVX2  *[16]float32  [0:8] s_256, [8:16] s_256_8
+//
+// Sample j of a group feeds lane j, and a lane is a chain over the groups in
+// order.
 
-// dlyDotSNeonRef accumulates h*x over len(h)/4 groups of 4 with unfused
-// multiply-add (vmlaq_f32).
+// dlyDotSNeonRef accumulates h*x over groups of 4, unfused (vmlaq_f32).
 func dlyDotSNeonRef(h, x []float32, acc *[4]float32) {
 	n := len(h) &^ 3
 	h = h[:n:n]
@@ -34,10 +33,8 @@ func dlyDotSNeonRef(h, x []float32, acc *[4]float32) {
 	acc[0], acc[1], acc[2], acc[3] = s0, s1, s2, s3
 }
 
-// dlyAxpyDotSNeonRef applies h += alpha*xa (the product rounded before the
-// add) and accumulates the updated h against xb, element by element; it
-// equals dlyAxpyRef(h, xa, alpha) followed by dlyDotSNeonRef(h, xb, acc).
-// len(h) is a multiple of 4.
+// dlyAxpyDotSNeonRef is dlyAxpyRef(h, xa, alpha) followed by
+// dlyDotSNeonRef(h, xb, acc), element by element. len(h) is a multiple of 4.
 func dlyAxpyDotSNeonRef(h, xa, xb []float32, alpha float32, acc *[4]float32) {
 	n := len(h) &^ 3
 	h = h[:n:n]
@@ -61,7 +58,7 @@ func dlyAxpyDotSNeonRef(h, xa, xb []float32, alpha float32, acc *[4]float32) {
 	acc[0], acc[1], acc[2], acc[3] = s0, s1, s2, s3
 }
 
-// dlySqNeonRef accumulates x*x over len(x)/4 groups of 4 (vmlaq_f32).
+// dlySqNeonRef accumulates x*x over groups of 4, unfused.
 func dlySqNeonRef(x []float32, acc *[4]float32) {
 	n := len(x) &^ 3
 	x = x[:n:n]
@@ -76,17 +73,14 @@ func dlySqNeonRef(x []float32, acc *[4]float32) {
 	acc[0], acc[1], acc[2], acc[3] = q0, q1, q2, q3
 }
 
-// The SSE2 references keep the eight lanes of the two accumulators in
-// registers and advance by half groups: the low four lanes take the first
-// half of a group, the high four the second. The halves are separate basic
-// blocks, which bounds the values live at once (the eight chains and the
-// four products of a half) below the fifteen float registers of amd64; in
-// one block the compiler computes the eight products first and spills a
-// chain. The length is a multiple of 8, so the test between the halves
-// never fails.
+// The SSE2 references advance by half groups: the low four lanes take the
+// first half of a group, the high four the second. The halves are separate
+// basic blocks, which keeps the eight chains and the four products of a half
+// within the fifteen float registers of amd64. len(h) is a multiple of 8, so
+// the test between the halves never fails.
 
-// dlyDotSSse2Ref accumulates h*x over len(h)/8 groups of 8 into the two SSE2
-// accumulators (_mm_mul_ps + _mm_add_ps).
+// dlyDotSSse2Ref accumulates h*x over groups of 8 into the two SSE2
+// accumulators, unfused.
 func dlyDotSSse2Ref(h, x []float32, acc *[8]float32) {
 	n := len(h) &^ 7
 	h = h[:n:n]
@@ -113,7 +107,7 @@ func dlyDotSSse2Ref(h, x []float32, acc *[8]float32) {
 	acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7] = s0, s1, s2, s3, s4, s5, s6, s7
 }
 
-// dlyAxpyDotSSse2Ref equals dlyAxpyRef(h, xa, alpha) followed by
+// dlyAxpyDotSSse2Ref is dlyAxpyRef(h, xa, alpha) followed by
 // dlyDotSSse2Ref(h, xb, acc). len(h) is a multiple of 8.
 func dlyAxpyDotSSse2Ref(h, xa, xb []float32, alpha float32, acc *[8]float32) {
 	n := len(h) &^ 7
@@ -154,7 +148,7 @@ func dlyAxpyDotSSse2Ref(h, xa, xb []float32, alpha float32, acc *[8]float32) {
 	acc[0], acc[1], acc[2], acc[3], acc[4], acc[5], acc[6], acc[7] = s0, s1, s2, s3, s4, s5, s6, s7
 }
 
-// dlySqSse2Ref accumulates x*x over len(x)/8 groups of 8.
+// dlySqSse2Ref accumulates x*x over groups of 8, unfused.
 func dlySqSse2Ref(x []float32, acc *[8]float32) {
 	n := len(x) &^ 7
 	x = x[:n:n]
@@ -180,26 +174,21 @@ func dlySqSse2Ref(x []float32, acc *[8]float32) {
 
 // Software fused multiply-add of the AVX2 lane references.
 //
-// A fused a*b + c is s = fl64(a*b + c) rounded to float32, unless s is a
-// float32 rounding boundary (fmaf.go). The loops below work on float64
-// values: a lane accumulator is the float64 widening of its float32 value,
-// so one step of its chain is a multiply and an add, the narrowing that
-// rounds it and the widening that the next step and the boundary test
-// (fmafTie) both use. The float64 products are exact, so the sums are the
-// same whether or not the compiler contracts them.
+// A fused a*b + c is s = fl64(a*b + c) rounded to float32 unless s is a
+// float32 rounding boundary (see fmaf). A lane accumulator is kept as the
+// float64 widening of its float32 value: a step of its chain is a multiply,
+// an add, the narrowing that rounds and the widening that the next step and
+// fmafTie use. The float64 products are exact, so fusing them changes
+// nothing.
 //
-// The loops make no call: a call inside a loop makes the compiler spill
-// every live accumulator in every iteration. They test every sum and, on the
-// rare flagged one, leave the loop and hand the work to a function that
-// calls fmaf for every element (the From functions). The accumulators of a
-// pass are stored when it ends, and a pass stores nothing else but the
-// elements of h whose sums passed the test; a From function therefore
-// restarts the accumulation of the pass from the stored accumulators, and
-// the loop keeps no value alive for it.
+// The loops make no call. They test every sum and, on a tie, leave for a
+// From function that calls fmaf per element. A pass stores its accumulators
+// when it ends and otherwise only the elements of h whose sums passed the
+// test, so a From function restarts the pass from the stored accumulators.
 
-// dlyDotSAvx2Ref accumulates h*x over len(h)/16 groups of 16 into the two
-// AVX2 accumulators with fused multiply-add (_mm256_fmadd_ps). The sixteen
-// lanes run in two passes of eight, so the accumulators stay in registers.
+// dlyDotSAvx2Ref accumulates h*x over groups of 16 into the two AVX2
+// accumulators, fused (_mm256_fmadd_ps). The sixteen lanes run in two passes
+// of eight, which keeps the accumulators in registers.
 func dlyDotSAvx2Ref(h, x []float32, acc *[16]float32) {
 	n := len(h) &^ 15
 	h = h[:n:n]
@@ -264,7 +253,7 @@ pass:
 }
 
 // dlyDotSAvx2RefFrom finishes dlyDotSAvx2Ref from the pass that starts at
-// lane q, whose accumulators acc holds as they were before the pass.
+// lane q. acc holds the accumulators as they were before the pass.
 //
 //go:noinline
 func dlyDotSAvx2RefFrom(h, x []float32, acc *[16]float32, q int) {
@@ -277,10 +266,9 @@ func dlyDotSAvx2RefFrom(h, x []float32, acc *[16]float32, q int) {
 	}
 }
 
-// dlyAxpyFmaDotSAvx2Ref applies h = fma(xa, alpha, h) and accumulates the
-// updated h against xb, element by element; it equals
-// dlyAxpyFmaRef(h, xa, alpha) followed by dlyDotSAvx2Ref(h, xb, acc).
-// len(h) is a multiple of 16.
+// dlyAxpyFmaDotSAvx2Ref is dlyAxpyFmaRef(h, xa, alpha) followed by
+// dlyDotSAvx2Ref(h, xb, acc), element by element. len(h) is a multiple of
+// 16.
 func dlyAxpyFmaDotSAvx2Ref(h, xa, xb []float32, alpha float32, acc *[16]float32) {
 	n := len(h) &^ 15
 	h = h[:n:n]
@@ -290,8 +278,8 @@ func dlyAxpyFmaDotSAvx2Ref(h, xa, xb []float32, alpha float32, acc *[16]float32)
 		return
 	}
 	al := float64(alpha)
-	// On a flagged sum, the pass has updated its elements of h before
-	// element e and none after.
+	// On a tie the pass has updated its elements of h before element e and
+	// none after.
 	q, e := 0, 0
 pass:
 	for ; q < 16; q += 8 {
@@ -422,9 +410,8 @@ pass:
 }
 
 // dlyAxpyFmaDotSAvx2RefFrom finishes dlyAxpyFmaDotSAvx2Ref from the pass
-// that starts at lane q: acc holds the accumulators as they were before the
-// pass, and the pass has updated its elements of h before element e (k+j
-// for lane j of the group at k) and none after.
+// that starts at lane q. acc holds the accumulators as they were before the
+// pass, which has updated its elements of h before element e and none after.
 //
 //go:noinline
 func dlyAxpyFmaDotSAvx2RefFrom(h, xa, xb []float32, alpha float32, acc *[16]float32, q, e int) {
@@ -441,18 +428,15 @@ func dlyAxpyFmaDotSAvx2RefFrom(h, xa, xb []float32, alpha float32, acc *[16]floa
 	}
 }
 
-// dlySqAvx2Ref accumulates x*x over len(x)/16 groups of 16 with fused
-// multiply-add.
+// dlySqAvx2Ref accumulates x*x over groups of 16, fused.
 func dlySqAvx2Ref(x []float32, acc *[16]float32) {
 	x = x[:len(x)&^15]
 	dlyDotSAvx2Ref(x, x, acc)
 }
 
-// The Wide references are the AVX2 lane references on a float64 copy of the
-// render samples (x[k] widened, an exact conversion): the loops load a
-// float64 where the others load and widen a float32. A caller that reads
-// every render sample many times, as the matched filters of one block do,
-// widens each once.
+// The Wide references are the AVX2 lane references on the render samples
+// widened to float64, which is exact. A caller that reads a render sample
+// many times, as the filters of a block do, widens it once.
 
 // dlyDotSAvx2Wide is dlyDotSAvx2Ref with x widened.
 func dlyDotSAvx2Wide(h []float32, x []float64, acc *[16]float32) {
@@ -519,7 +503,7 @@ pass:
 }
 
 // dlyDotSAvx2WideFrom finishes dlyDotSAvx2Wide from the pass that starts at
-// lane q, whose accumulators acc holds as they were before the pass.
+// lane q. acc holds the accumulators as they were before the pass.
 //
 //go:noinline
 func dlyDotSAvx2WideFrom(h []float32, x []float64, acc *[16]float32, q int) {
@@ -594,8 +578,8 @@ pass:
 	}
 }
 
-// dlySqAvx2WideFrom finishes dlySqAvx2Wide from the pass that starts at
-// lane q, whose accumulators acc holds as they were before the pass.
+// dlySqAvx2WideFrom finishes dlySqAvx2Wide from the pass that starts at lane
+// q. acc holds the accumulators as they were before the pass.
 //
 //go:noinline
 func dlySqAvx2WideFrom(x []float64, acc *[16]float32, q int) {
@@ -618,8 +602,8 @@ func dlyAxpyFmaDotSAvx2Wide(h []float32, xa, xb []float64, alpha float32, acc *[
 		return
 	}
 	al := float64(alpha)
-	// On a flagged sum, the pass has updated its elements of h before
-	// element e and none after.
+	// On a tie the pass has updated its elements of h before element e and
+	// none after.
 	q, e := 0, 0
 pass:
 	for ; q < 16; q += 8 {
@@ -750,9 +734,8 @@ pass:
 }
 
 // dlyAxpyFmaDotSAvx2WideFrom finishes dlyAxpyFmaDotSAvx2Wide from the pass
-// that starts at lane q: acc holds the accumulators as they were before the
-// pass, and the pass has updated its elements of h before element e and
-// none after.
+// that starts at lane q. acc holds the accumulators as they were before the
+// pass, which has updated its elements of h before element e and none after.
 //
 //go:noinline
 func dlyAxpyFmaDotSAvx2WideFrom(h []float32, xa, xb []float64, alpha float32, acc *[16]float32, q, e int) {
@@ -770,10 +753,9 @@ func dlyAxpyFmaDotSAvx2WideFrom(h []float32, xa, xb []float64, alpha float32, ac
 }
 
 // dlyAccErrNeonRef runs the filter loop of
-// MatchedFilterCoreWithAccumulatedError_NEON for one capture sample over
-// len(h)/4 groups, without its x*x accumulation (see dlySqNeonRef): it adds
-// the squared running error after every group into accErr and returns the
-// filter output.
+// MatchedFilterCoreWithAccumulatedError_NEON for one capture sample, without
+// its x*x accumulation. It adds the square of the running error to accErr
+// after every group of 4 and returns the filter output.
 func dlyAccErrNeonRef(h, x []float32, y float32, accErr []float32) float32 {
 	n := len(h) &^ 3
 	h = h[:n:n]
@@ -819,9 +801,8 @@ func dlyAxpyAccErrNeonRef(h, xa, xb []float32, alpha, y float32, accErr []float3
 	return s
 }
 
-// dlyAccErrSse2Ref is the filter loop of
-// MatchedFilterCore_AccumulatedError_SSE2 for one capture sample over
-// len(h)/8 groups, without its x*x accumulation (see dlySqSse2Ref).
+// dlyAccErrSse2Ref is dlyAccErrNeonRef for
+// MatchedFilterCore_AccumulatedError_SSE2, over groups of 8.
 func dlyAccErrSse2Ref(h, x []float32, y float32, accErr []float32) float32 {
 	n := len(h) &^ 7
 	h = h[:n:n]
@@ -884,11 +865,10 @@ func dlyAxpyAccErrSse2Ref(h, xa, xb []float32, alpha, y float32, accErr []float3
 	return s
 }
 
-// dlyAccErrAvx2Ref is the filter loop of
-// MatchedFilterCore_AccumulatedError_AVX2 for one capture sample over
-// len(h)/16 groups, without its x*x accumulation (see dlySqAvx2Ref). The
-// hadd lane order [0],[4],[1],[5] visits the four 4-sample sub-groups in
-// sequence; the products are unfused and the accumulated error is fused.
+// dlyAccErrAvx2Ref is dlyAccErrNeonRef for
+// MatchedFilterCore_AccumulatedError_AVX2, over groups of 16. The hadd lane
+// order [0], [4], [1], [5] visits the four sub-groups of 4 in sequence. The
+// products are unfused; the accumulated error is fused.
 func dlyAccErrAvx2Ref(h, x []float32, y float32, accErr []float32) float32 {
 	n := len(h) &^ 15
 	h = h[:n:n]
@@ -988,9 +968,8 @@ func dlyAxpyFmaAccErrAvx2RefFrom(h, xa, xb []float32, alpha, y float32, accErr [
 	return s
 }
 
-// dlyAxpyRef computes h += alpha*x with the product rounded before the add.
-// The scalar, NEON (vmlaq_f32) and SSE2 update loops all compute this per
-// element, so it serves every unfused lane.
+// dlyAxpyRef sets h += alpha*x, unfused: the update of the scalar, NEON and
+// SSE2 lanes.
 func dlyAxpyRef(h, x []float32, alpha float32) {
 	n := len(h)
 	x = x[:n:n]
@@ -1008,7 +987,7 @@ func dlyAxpyRef(h, x []float32, alpha float32) {
 	}
 }
 
-// dlyAxpyFmaRef computes h = fma(x, alpha, h) (_mm256_fmadd_ps).
+// dlyAxpyFmaRef sets h = fma(x, alpha, h): the update of the AVX2 lane.
 func dlyAxpyFmaRef(h, x []float32, alpha float32) {
 	n := len(h)
 	x = x[:n:n]
@@ -1042,8 +1021,8 @@ func dlyAxpyFmaRefFrom(h, x []float32, alpha float32, k int) {
 	}
 }
 
-// The Sum references run a dot product (or update and dot product) over
-// all of h from zero accumulators and reduce them.
+// The Sum references run a dot product, with or without the update, over all
+// of h from zero accumulators and reduce them.
 
 func dlyDotSSumSse2Ref(h, x []float32) float32 {
 	var acc [16]float32

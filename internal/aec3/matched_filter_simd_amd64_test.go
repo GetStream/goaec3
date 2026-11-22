@@ -18,9 +18,9 @@ func TestDlyAmd64KernelSelection(t *testing.T) {
 	}
 }
 
-// TestDlyAvx2KernelsForced runs the AVX2-lane archsimd kernels against their
-// references even when CPUID does not report FMA (set DLY_FORCE_FMA=1; some
-// emulators execute FMA instructions without advertising them).
+// TestDlyAvx2KernelsForced checks the archsimd kernels of the AVX2 lane
+// against their references. DLY_FORCE_FMA=1 runs it on a CPU that executes
+// FMA without reporting it.
 func TestDlyAvx2KernelsForced(t *testing.T) {
 	if os.Getenv("DLY_FORCE_FMA") == "" {
 		t.Skip("set DLY_FORCE_FMA=1 to force the AVX2-lane kernels")
@@ -35,7 +35,7 @@ func TestDlyAvx2KernelsForced(t *testing.T) {
 	TestDlyWrapSamplesMatchLiteral(t)
 }
 
-// TestDlyAxpyFma128MatchesReference runs the small fused update against its
+// TestDlyAxpyFma128MatchesReference checks dlyAxpyFma128 against its
 // reference for every length around its vector sizes.
 func TestDlyAxpyFma128MatchesReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(21))
@@ -58,11 +58,10 @@ func TestDlyAxpyFma128MatchesReference(t *testing.T) {
 	}
 }
 
-// TestDlyWrapSamplesMatchLiteral runs the SSE2 and AVX2 lane cores against
-// the literal cores from every start index of the render buffer, so that the
-// first chunk of a sample takes every length and the pending update every
-// position against it, with every sample updating and with a threshold that
-// some samples pass.
+// TestDlyWrapSamplesMatchLiteral checks the SSE2 and AVX2 lane cores against
+// the literal cores from every start index of the render buffer: the first
+// chunk of a sample takes every length and the pending update every position
+// against it. Every sample updates in one run, some in the other.
 func TestDlyWrapSamplesMatchLiteral(t *testing.T) {
 	rng := rand.New(rand.NewSource(22))
 	for _, hSize := range []int{512, 64, 48, 40, 32, 24, 16, 8, 21} {

@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// refRenderSignalAnalyzer is the branching formulation of the analysis, with
-// std::max as stdMax.
+// refRenderSignalAnalyzer is the analysis with branches, and stdMax for
+// std::max.
 type refRenderSignalAnalyzer struct {
 	strongPeakFreezeDuration int
 	narrowBandCounters       [FftLengthBy2 - 1]int
@@ -244,7 +244,7 @@ func BenchmarkRsaCountNarrowBands(b *testing.B) {
 
 // TestKernPeakBinAndNarrowBands checks the two analyzer kernels against
 // their references on spectra with peaks, ties, signed zeros, infinities and
-// NaNs, and on spectra whose first bins are NaN.
+// NaNs, also in the first bins.
 func TestKernPeakBinAndNarrowBands(t *testing.T) {
 	rng := rand.New(rand.NewSource(19))
 	late := 0
@@ -293,8 +293,8 @@ func TestKernPeakBinAndNarrowBands(t *testing.T) {
 	}
 }
 
-// PoorSignalExcitation and MaskRegionsAroundNarrowBands answer from facts
-// cached by Update; the reference scans the counters as the C++ does.
+// PoorSignalExcitation and MaskRegionsAroundNarrowBands scan the counters,
+// as the C++ does.
 func (r *refRenderSignalAnalyzer) PoorSignalExcitation() bool {
 	for _, a := range r.narrowBandCounters {
 		if a > 10 {
@@ -331,7 +331,7 @@ func TestRenderSignalAnalyzerCachedCounterFacts(t *testing.T) {
 		want := &refRenderSignalAnalyzer{strongPeakFreezeDuration: 5}
 		delay := 0
 		for step := 0; step < 300; step++ {
-			// The spectra stay for runs of steps so that counters grow past
+			// The spectra stay for runs of steps, so that counters grow past
 			// both thresholds.
 			if rng.Intn(15) == 0 {
 				delay = rng.Intn(size)
