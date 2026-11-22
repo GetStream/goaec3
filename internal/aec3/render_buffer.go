@@ -121,7 +121,6 @@ func (r *RenderBuffer) SpectralSums(numShorter, numLonger int, X2Shorter, X2Long
 }
 
 func (r *RenderBuffer) GetRenderActivity() bool            { return r.renderActivity }
-func (r *RenderBuffer) SetRenderActivity(a bool)           { r.renderActivity = a }
 func (r *RenderBuffer) GetSpectrumBuffer() *SpectrumBuffer { return r.spectrumBuffer }
 func (r *RenderBuffer) GetBlockBuffer() *BlockBuffer       { return r.blockBuffer }
 

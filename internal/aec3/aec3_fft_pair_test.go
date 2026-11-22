@@ -158,3 +158,18 @@ func TestAfirConstrainPair(t *testing.T) {
 		}
 	}
 }
+
+// subPredictionError computes the prediction error e = y - s and the scaled
+// filter output s from the frequency-domain filter output S.
+func subPredictionError(fft *Aec3Fft, S *FftData, y []float32, tmp *[FftLength]float32, e, s *[BlockSize]float32) {
+	fft.Ifft(S, tmp)
+	const scale float32 = 1.0 / FftLengthBy2
+	// e = y - float32(tmp*scale) and s = scale*tmp: the scaled output is
+	// rounded once and shared.
+	var scaled [BlockSize]float32
+	if s == nil {
+		s = &scaled
+	}
+	kernScale(tmp[FftLengthBy2:], scale, s[:])
+	kernSub(y[:BlockSize], s[:], e[:])
+}

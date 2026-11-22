@@ -59,13 +59,6 @@ func (f *CascadedBiQuadFilter) ProcessInPlace(y []float32) {
 	}
 }
 
-// Reset resets the filter to its initial state.
-func (f *CascadedBiQuadFilter) Reset() {
-	for k := range f.biquads {
-		f.biquads[k].Reset()
-	}
-}
-
 func dlyApplyBiQuad(x, y []float32, biquad *BiQuad) {
 	y = y[:len(x)]
 	cA0 := biquad.Coefficients.A[0]

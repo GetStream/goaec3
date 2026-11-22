@@ -224,3 +224,9 @@ func BenchmarkHighestPeakAggregator(b *testing.B) {
 		})
 	}
 }
+
+func newDlyPreEchoLagAggregator(maxFilterLag, downSamplingFactor int) *dlyPreEchoLagAggregator {
+	a := &dlyPreEchoLagAggregator{}
+	a.init(downSamplingFactor, make([]int32, dlyPreEchoHistogramSize(maxFilterLag, downSamplingFactor)))
+	return a
+}

@@ -27,14 +27,12 @@ func TestSupAllocs(t *testing.T) {
 	snd := NewSubbandNearendDetector(&sn, numCh)
 	mccd := NewMultiChannelContentDetector(true, 2, 0, 300, 2)
 	frame := NewFrame(1, 2)
-	var dets []NearendDetector = []NearendDetector{dn, snd}
 
 	if a := testing.AllocsPerRun(200, func() {
 		cng.Compute(false, Y2, low, high)
 		sf.ApplyGain(low, high, &gain, 0.3, low, &e)
-		for _, d := range dets {
-			d.Update(Y2, Y2, cng.NoiseSpectrum(), false)
-		}
+		dn.Update(Y2, Y2, cng.NoiseSpectrum(), false)
+		snd.Update(Y2, Y2, cng.NoiseSpectrum(), false)
 		mccd.UpdateDetection(frame)
 	}); a != 0 {
 		t.Fatalf("%v allocs per block", a)

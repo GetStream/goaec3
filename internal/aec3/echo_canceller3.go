@@ -141,8 +141,6 @@ func (q *ec3RenderTransferQueue) buf(initial []float32) []float32 {
 	return initial
 }
 
-func (q *ec3RenderTransferQueue) capacity() int { return len(q.buffer) / q.frameSize }
-
 func ec3QueueSlot(buffer []float32, n, index int) []float32 {
 	return buffer[index*n : (index+1)*n : (index+1)*n]
 }

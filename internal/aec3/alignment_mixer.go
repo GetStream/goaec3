@@ -43,12 +43,6 @@ type alignmentMixerState struct {
 	blockCounter              int
 }
 
-// NewAlignmentMixer mirrors AlignmentMixer(num_channels, config).
-func NewAlignmentMixer(numChannels int, config AlignmentMixing) *AlignmentMixer {
-	return NewAlignmentMixerWithParams(numChannels, config.Downmix, config.AdaptiveSelection,
-		config.ActivityPowerThreshold, config.PreferFirstTwoChannels)
-}
-
 // NewAlignmentMixerWithParams mirrors the five-argument C++ constructor.
 func NewAlignmentMixerWithParams(numChannels int, downmix, adaptiveSelection bool, activityPowerThreshold float32,
 	preferFirstTwoChannels bool) *AlignmentMixer {

@@ -52,8 +52,6 @@ func (d *DominantNearendDetector) bind(st *dominantNearendState, b *binder) {
 	}
 }
 
-var _ NearendDetector = (*DominantNearendDetector)(nil)
-
 func NewDominantNearendDetector(config *DominantNearendDetectionConfig, numCaptureChannels int) *DominantNearendDetector {
 	d := &DominantNearendDetector{}
 	d.bind(&dominantNearendState{}, bindAlone)

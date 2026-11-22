@@ -40,7 +40,6 @@ const (
 	SubFrameLength                           = FrameSize / 2
 	BlockSize                                = FftLengthBy2
 	BlockSizeLog2                            = FftLengthBy2Log2
-	ExtendedBlockSize                        = 2 * FftLengthBy2
 	MatchedFilterWindowSizeSubBlocks         = 32
 	MatchedFilterAlignmentShiftSizeSubBlocks = MatchedFilterWindowSizeSubBlocks * 3 / 4
 )

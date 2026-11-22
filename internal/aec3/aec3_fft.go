@@ -72,8 +72,6 @@ type Aec3Fft struct {
 	x       [FftLength]float32
 }
 
-func NewAec3Fft() *Aec3Fft { return &Aec3Fft{} }
-
 // Fft transforms x into X (the transform followed by
 // FftData::CopyFromPackedArray). It uses x as work space.
 func (f *Aec3Fft) Fft(x *[FftLength]float32, X *FftData) {
