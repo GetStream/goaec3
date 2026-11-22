@@ -1,11 +1,9 @@
 package ooura
 
-// Pure-Go transcription of ooura_fft_sse2.cc, intrinsic by intrinsic. It is
-// the specification the archsimd kernel and the pure-Go lane code
-// (fft_fast.go) are tested against. Per lane it
-// computes the same operations as the NEON lane (multiplying by the
-// {-1,1,-1,1} sign table is exact, so vmlaq(x, y, s) == x + s*y), which
-// TestSSE2RefMatchesNeonRef checks.
+// The transcription of ooura_fft_sse2.cc, intrinsic by intrinsic: the spec
+// of the SSE2 lane. Per lane it computes the operations of the NEON lane
+// (TestSSE2RefMatchesNeonRef): multiplying by the {-1, 1, -1, 1} sign table
+// is exact, so vmlaq(x, y, s) is x + s*y.
 
 // shufpsZYXW(a, b) is _mm_shuffle_ps(a, b, _MM_SHUFFLE(Z, Y, X, W)) and
 // pshufdZYXW(a) is _mm_shuffle_epi32(a, _MM_SHUFFLE(Z, Y, X, W)), one

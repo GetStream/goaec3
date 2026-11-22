@@ -1,22 +1,16 @@
 package ooura
 
-// Pure-Go FFT of the builds without archsimd kernels.
+// The split transforms of the builds and CPUs without archsimd kernels:
+// the Lane functions in the NEON and SSE2 order, which is one order, and
+// the Scalar functions in the order of the scalar C code.
 //
-// fftFastLane computes the NEON/SSE2-order transform (the element-wise
-// arithmetic of fftNeonRef and fftSSE2Ref, which are identical), and
-// fftFastScalar the scalar C order of fftScalar. Both are written for the Go
-// compiler rather than as transcriptions:
+// Every float operation is the one of the transcription, in the same order
+// per output element; loads, stores and loop structure differ. bitrv2 is
+// not a pass: cft1st reads its inputs from their bit-reversed positions.
+// Values live in float32 locals and every index is a constant offset into
+// a window whose bounds the compiler proves (TestNoBoundsChecks).
 //
-//   - Every float operation is the one of the reference, in the same order
-//     per output element; only loads, stores and loop structure differ.
-//   - bitrv2 is not a pass. cft1st reads its inputs from their bit-reversed
-//     positions and writes a scratch frame; cftmdl reads the scratch frame
-//     and writes the caller's frame.
-//   - Values live in float32 locals, and every index is a constant offset
-//     into a window whose bounds the compiler proves, so the loops carry no
-//     bounds checks.
-//
-// TestFastMatchesRef checks them bit-exactly against the references.
+// TestSplitFastMatchesRef checks them against the transcriptions.
 
 // rev3 reverses three bits.
 var rev3 = [8]uint8{0, 4, 2, 6, 1, 5, 3, 7}
@@ -403,7 +397,7 @@ func cftmdlFastScalar(s, a *[128]float32) {
 	}
 }
 
-// cftbsubTailFast is cftbsubTail without bounds checks.
+// cftbsubTailFast is cftbsubTail.
 func cftbsubTailFast(a *[128]float32) {
 	p0, p1, p2, p3 := (*[32]float32)(a[0:32]), (*[32]float32)(a[32:64]), (*[32]float32)(a[64:96]), (*[32]float32)(a[96:128])
 	for j := 0; j < 32; j += 2 {
@@ -426,7 +420,9 @@ func cftbsubTailFast(a *[128]float32) {
 	}
 }
 
-// rftbsubFast is rftbsub_128, laid out like rftfsubFast.
+// rftbsubFast is rftbsub_128: the scalar code, and element for element the
+// NEON and SSE2 code. Iteration j1 = 1+m works on a[2+2m], a[3+2m] and the
+// mirrored a[126-2m], a[127-2m].
 func rftbsubFast(a *[128]float32) {
 	a[1] = -a[1]
 	lo := (*[62]float32)(a[2:64])
@@ -450,14 +446,10 @@ func rftbsubFast(a *[128]float32) {
 	a[65] = -a[65]
 }
 
-// Split transforms.
-//
 // FftSplit ends with cftfsubTail, rftfsub and the copy to bins, and
-// InverseFftSplit starts with the copy from bins, rftbsub and (after
-// bitrv2) cft1st. Run as passes, each loads and stores the whole frame. The
-// functions below run each group of three as one pass that loads every
-// input once and stores every output once, with the float operations of the
-// passes per element.
+// InverseFftSplit starts with the copy from bins, rftbsub and, after
+// bitrv2, cft1st. tailSplitFast and splitCft1stFastLane run each group of
+// three as one pass that loads every input and stores every output once.
 //
 // rftfsub and rftbsub work on the bin pairs (k, 64-k), k = 1..31. The last
 // radix-4 butterfly of the forward transform at index c produces the bins c,
@@ -535,10 +527,9 @@ func inverseFftSplitFastScalar(re, im *[65]float32, a *[128]float32) {
 // re and im.
 //
 // A step computes its eight bins in two halves, each from the frame: the
-// first half takes the sums of butterfly c and the differences of butterfly
-// 16-c (bins c, 32+c, 32-c, 64-c), the second half the rest. A half holds
-// eight values at a time, which fits the float registers of amd64, where
-// the second operand of every sum and difference is read from memory.
+// sums of butterfly c with the differences of butterfly 16-c (bins c, 32+c,
+// 32-c, 64-c), then the rest. A half holds eight values at a time, which
+// fits the float registers of amd64.
 func tailSplitFast(a *[128]float32, re, im *[65]float32) {
 	// Butterfly 0: bins 0, 16, 32, 48.
 	{

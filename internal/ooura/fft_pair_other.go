@@ -2,8 +2,8 @@
 
 package ooura
 
-// PairScratch is the work area of FftSplitPair and InverseFftSplitPair; this
-// build runs the two transforms one after the other.
+// PairScratch is the work area of FftSplitPair and InverseFftSplitPair.
+// This build runs the two transforms one after the other.
 type PairScratch struct {
 	s Scratch
 }

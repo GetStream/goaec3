@@ -4,24 +4,19 @@ package ooura
 
 import "simd/archsimd"
 
-// The split transforms of the NEON and SSE2 lanes with the real and the
+// The split transforms of the NEON and SSE2 lanes, with the real and the
 // imaginary parts in separate vectors.
 //
 // ooura_fft_neon.cc and ooura_fft_sse2.cc keep a complex value in two
-// adjacent lanes, so a rotation w*x is wr*x + wi*rev64(x) and x1 +- i*x3
-// goes through rev64 and the {-1, 1} sign table as well; with the lanes
-// regrouped between the passes, close to half of the vector operations of
-// the passes of fft_simd.go are shuffles. A core with two vector pipes
-// executes the transform at the pace of its vector operations, shuffles
-// included.
-//
-// Here a vector holds the real (or the imaginary) parts of four complex
-// values. Every float operation is the one of the C code for that element:
-//
-//   - a rotation is (wrr*xr + wri*xi, wir*xi + wii*xr) with the four table
-//     values the two lanes of the C vectors hold;
-//   - x + s*y for s in {1, -1} is x + y and x - y: s*y is y or its negation,
-//     exactly, and adding a negation is subtracting.
+// adjacent lanes, so a rotation w*x is wr*x + wi*rev64(x), and x1 ± i*x3
+// goes through rev64 and the {-1, 1} sign table: close to half of their
+// vector operations are shuffles. Here a vector holds the real or the
+// imaginary parts of four complex values, and every float operation is the
+// one of the C code for that element. A rotation is
+// (wrr*xr + wri*xi, wir*xi + wii*xr) with the four table values the two
+// lanes of the C vectors hold. x + s*y for s in {1, -1} is x + y or x - y:
+// s*y is y or its negation, exactly, and adding a negation is subtracting.
+// Products are Mul followed by Add or Sub, never MulAdd.
 //
 // The frame is 64 complex values. After the bit reversal the value of
 // position p = 16*B + 4*c1 + c0 comes from index 16*rev2(c0) + 4*rev2(c1) +
@@ -32,19 +27,19 @@ import "simd/archsimd"
 // over c0, and the other two passes and rftfsub/rftbsub work on lanes over
 // c0, the order of the bins.
 //
-// A call of a helper that the compiler inlines leaves an instruction behind,
-// a NOP that marks the place of the call, unless the line of the call has
-// an instruction of its own. The transforms have a call of a helper per
-// vector operation, so a pass written as calls of helpers alone is a
-// quarter NOPs, each of which takes a place in the pipeline. Every line of
-// the passes that calls a helper therefore has an archsimd operation of its
-// own (a load written as archsimd.LoadFloat32x4Array instead of ld, a
-// shuffle next to the addition or the store that takes it), and a value
-// that two lines need is written out in both: the compiler computes it
-// once. What remains is the mark of each call of a pass's closure.
+// A pass with a fixed trip count is a closure called once per iteration
+// with constant arguments, so that every load and store is base plus
+// displacement and carries no bounds check (TestNoBoundsChecks).
 //
-// TestSoaMatchesRef checks the transforms bit-exactly against the lane
-// reference.
+// An inlined call leaves a NOP that marks its place unless its line has an
+// instruction of its own, and a NOP takes a place in the pipeline. Every
+// line of the passes that calls a helper therefore has an archsimd
+// operation of its own (a load written as archsimd.LoadFloat32x4Array
+// instead of ld, a shuffle next to the addition or the store that takes
+// it), and a value that two lines need is written out in both: the
+// compiler computes it once.
+//
+// TestSoaMatchesRef checks the transforms against the lane reference.
 
 // soaS1[m] holds the twiddle factors of the cft1st butterflies of the load
 // group m, one lane per butterfly, as twelve vectors: for wk1, wk2 and wk3
@@ -69,8 +64,8 @@ func zipLo(x, y vec) vec { return x.ToBits().InterleaveLo(y.ToBits()).BitsToFloa
 func zipHi(x, y vec) vec { return x.ToBits().InterleaveHi(y.ToBits()).BitsToFloat32() }
 
 // Scratch is the work area of FftSplit and InverseFftSplit. It needs no
-// initialization and carries nothing from one call to the next; keeping it
-// with the caller saves clearing a frame on the stack per transform.
+// initialization and carries nothing from one call to the next. It lives
+// with the caller so that no transform clears a frame on its stack.
 type Scratch struct {
 	t [128]float32
 }
@@ -87,8 +82,8 @@ func init() {
 
 func rev2(x int) int { return (x&1)<<1 | x>>1 }
 
-// initSoaTables runs once the negative zeros of the 128-bit tables are in
-// place.
+// initSoaTables fills the tables. It runs after the init of tables.go,
+// which sets the negative zeros of the tables it reads.
 func initSoaTables() {
 	tabs := [3][2]*[32]float32{{&rdftWk1r, &rdftWk1i}, {&rdftWk2r, &rdftWk2i}, {&rdftWk3r, &rdftWk3i}}
 	fill := func(dst *[12][4]float32, lane, idx int) {
