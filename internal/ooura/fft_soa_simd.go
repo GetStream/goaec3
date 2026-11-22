@@ -59,6 +59,23 @@ var soaS2 [2][12][4]float32
 // soaWk1[i] is cftmdlWk1r[i] in every lane (block 1 of cftmdl).
 var soaWk1 [4][4]float32
 
+// Scratch is the work area of FftSplit and InverseFftSplit. It needs no
+// initialization and carries nothing from one call to the next; keeping it
+// with the caller saves clearing a frame on the stack per transform.
+type Scratch struct {
+	t [128]float32
+}
+
+// rftSplitWkr[j1] = 0.5f - c[32-j1] for j1 = 1..31 (c = rdft_w + 32); the
+// matching wki is c[j1] = rdftW[32+j1].
+var rftSplitWkr [32]float32
+
+func init() {
+	for j1 := 1; j1 < 32; j1++ {
+		rftSplitWkr[j1] = 0.5 - rdftW[64-j1]
+	}
+}
+
 func rev2(x int) int { return (x&1)<<1 | x>>1 }
 
 // initSoaTables runs once the negative zeros of the 128-bit tables are in
@@ -92,8 +109,8 @@ func initSoaTables() {
 	}
 }
 
-// fftSplitSoa is fftSplitSimd: the transform of a into the bins re and im.
-// It leaves a in an intermediate state; t is work space.
+// fftSplitSoa is Fft followed by FftData::CopyFromPackedArray into re and
+// im. It leaves a in an intermediate state; t is work space.
 func fftSplitSoa(a *[128]float32, re, im *[65]float32, t *[128]float32) {
 	soaCft1stPacked(a, t)
 	soaCftmdl(t, a)
@@ -101,8 +118,8 @@ func fftSplitSoa(a *[128]float32, re, im *[65]float32, t *[128]float32) {
 	soaRftfsub(t, re, im)
 }
 
-// inverseFftSplitSoa is inverseFftSplitSimd: the inverse transform of the
-// bins re and im into a; t is work space.
+// inverseFftSplitSoa is FftData::CopyToPackedArray of re and im followed by
+// InverseFft, into a; t is work space.
 func inverseFftSplitSoa(re, im *[65]float32, a *[128]float32, t *[128]float32) {
 	soaRftbsub(re, im, t)
 	soaCft1stSplit(t, a)
@@ -328,10 +345,17 @@ func soaStorePacked(p *[8]float32, r, i vec) {
 	zipHi(r, i).StoreArray((*[4]float32)(p[4:8]))
 }
 
-// soaRftfsub is rftfsubSplit on a frame in split form: rftfsub_128 and the
-// final butterfly of Fft, with the result written as bins. Position k of
-// the frame is bin k, and the real part of bin 64 is the imaginary part of
-// position 0.
+// soaRftfsub is rftfsub_128 and the final butterfly of Fft on a frame in
+// split form, with the result written as bins. Position k of the frame is
+// bin k, and the real part of bin 64 is the imaginary part of position 0.
+//
+// rftfsub and rftbsub combine bin j1 with bin 64-j1 for j1 = 1..31, by the
+// same float operations in the vectorized and in the scalar iterations of
+// the C sources, so the passes run all of them in vectors: iteration m
+// takes bins 4m..4m+3 (lane 0 of iteration 0 is bin 0, which the passes
+// compute apart) with their partners 64-4m, 63-4m, 62-4m, 61-4m, the last
+// three from the reversed bins 60-4m..63-4m and the first from the
+// iteration before.
 func soaRftfsub(t *[128]float32, re, im *[65]float32) {
 	tr, ti := (*[64]float32)(t[:64]), (*[64]float32)(t[64:])
 	trh, tih := (*[32]float32)(tr[32:64]), (*[32]float32)(ti[32:64])
@@ -384,9 +408,8 @@ func soaRftfsub(t *[128]float32, re, im *[65]float32) {
 	im[64] = 0
 }
 
-// soaRftbsub is rftbsubSplit into a frame in split form: the first
-// butterfly of InverseFft and rftbsub_128 on the frame that packs the bins
-// re and im.
+// soaRftbsub is the first butterfly of InverseFft and rftbsub_128 on the
+// frame that packs the bins re and im, into a frame in split form.
 func soaRftbsub(re, im *[65]float32, t *[128]float32) {
 	tr, ti := (*[64]float32)(t[:64]), (*[64]float32)(t[64:])
 	trh, tih := (*[32]float32)(tr[32:64]), (*[32]float32)(ti[32:64])

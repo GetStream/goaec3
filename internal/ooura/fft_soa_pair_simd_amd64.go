@@ -16,24 +16,99 @@ import "simd/archsimd"
 // time: positions 4v..4v+3 of frame a are r[8v:8v+4], those of frame b
 // r[8v+4:8v+8]. The first pass of each direction gathers its two inputs
 // into that layout and the last one separates the results into one 256-bit
-// store per frame (VPERM2F128), as the passes of fft_pair_simd_amd64.go do.
+// store per frame (VPERM2F128): it pairs the vectors of two consecutive
+// iterations, so the 256-bit loads of whatever reads the results next find
+// each of them in one store.
+//
+// Go's scalar float code is legacy-SSE encoded and must not run between the
+// first 256-bit operation and ClearAVXUpperBits. The passes take the few
+// scalar values they need from vectors, or compute them before the first
+// 256-bit operation or after the last.
 //
 // As in fft_soa_simd.go, every line that calls a helper has an archsimd
 // operation of its own; two 128-bit loads are gathered into a vector with
-// SetLo and SetHi on the line (ldPair written out).
+// SetLo and SetHi on the line.
 //
 // TestSoaPairMatchesSingle checks the pair bit-exactly against two single
 // transforms.
+
+type vec8 = archsimd.Float32x8
+
+// PairScratch is the work area of FftSplitPair and InverseFftSplitPair. It
+// needs no initialization and carries nothing from one call to the next.
+type PairScratch struct {
+	t, u [256]float32
+	s    Scratch
+}
+
+var usePair = archsimd.X86.AVX2()
+
+func fftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairScratch) {
+	if usePair {
+		fftSplitPairSoa(a, b, re0, im0, re1, im1, s)
+		return
+	}
+	fftSplit(a, re0, im0, s.single())
+	fftSplit(b, re1, im1, s.single())
+}
+
+func inverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
+	if usePair {
+		inverseFftSplitPairSoa(re0, im0, re1, im1, a, b, s)
+		return
+	}
+	inverseFftSplit(re0, im0, a, s.single())
+	inverseFftSplit(re1, im1, b, s.single())
+}
+
+func ld8(p *[8]float32) vec8 { return archsimd.LoadFloat32x8Array(p) }
+
+// The shuffles of fft_simd_amd64.go on each 128-bit half.
+
+func rev4g(x vec8) vec8     { return x.ConcatPermuteScalarsGrouped(3, 2, 5, 4, x) }
+func eveng(x, y vec8) vec8  { return x.ConcatPermuteScalarsGrouped(0, 2, 4, 6, y) }
+func oddg(x, y vec8) vec8   { return x.ConcatPermuteScalarsGrouped(1, 3, 5, 7, y) }
+func zipLog(x, y vec8) vec8 { return x.ToBits().InterleaveLoGrouped(y.ToBits()).BitsToFloat32() }
+func zipHig(x, y vec8) vec8 { return x.ToBits().InterleaveHiGrouped(y.ToBits()).BitsToFloat32() }
+
+func ext3g(x, y vec8) vec8 {
+	xb, yb := x.ToBits().ReshapeToUint8s(), y.ToBits().ReshapeToUint8s()
+	return yb.ConcatShiftBytesRightGrouped(xb, 12).ReshapeToUint32s().BitsToFloat32()
+}
+
+// frameA is {x.lo, y.lo}: eight consecutive floats of frame a from the
+// interleaved vectors x and y. frameB is {x.hi, y.hi}, the same of frame b.
+func frameA(x, y vec8) vec8 { return x.ConcatPermute128Scalars(0, 2, y) }
+func frameB(x, y vec8) vec8 { return x.ConcatPermute128Scalars(1, 3, y) }
+
+// lo4 is bins 4m..4m+3 of a 65-bin array, hi4 bins 32+4n..35+4n.
+func lo4(x *[65]float32, m int) *[4]float32 { return (*[4]float32)(x[4*m : 4*m+4]) }
+
+func hi4(x *[65]float32, n int) *[4]float32 {
+	return (*[4]float32)((*[32]float32)(x[32:64])[4*n : 4*n+4])
+}
+
+// b8 is bins 8q..8q+7 of a 65-bin array (q in 0..3), h8 bins 32+8u..39+8u.
+func b8(x *[65]float32, q int) *[8]float32 { return (*[8]float32)(x[8*q : 8*q+8]) }
+
+func h8(x *[65]float32, u int) *[8]float32 {
+	return (*[8]float32)((*[32]float32)(x[32:64])[8*u : 8*u+8])
+}
 
 // The tables of fft_soa_simd.go with every vector repeated.
 var (
 	soaS1x8  [4][12][8]float32
 	soaS2x8  [2][12][8]float32
 	soaWk1x8 [4][8]float32
-	signAll8 = [8]uint32{0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000}
+	// rftSplitWkr and its wki, rdftW[32:64].
+	rftWkr8, rftWki8 [64]float32
+	signAll8         = [8]uint32{0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000}
 )
 
-func initSoaPairTables() {
+// initPairTables runs once the negative zeros of the 128-bit tables are in
+// place (tables.go).
+func initPairTables() {
+	initSoaTables()
 	dup := func(v [4]float32) [8]float32 {
 		return [8]float32{v[0], v[1], v[2], v[3], v[0], v[1], v[2], v[3]}
 	}
@@ -50,6 +125,13 @@ func initSoaPairTables() {
 	for i, v := range soaWk1 {
 		soaWk1x8[i] = dup(v)
 	}
+	for j1 := 1; j1 < 32; j1++ {
+		wkr, wki := 0.5-rdftW[64-j1], rdftW[32+j1]
+		v, l := j1/4, j1%4
+		rftWkr8[8*v+l], rftWkr8[8*v+4+l] = wkr, wkr
+		rftWki8[8*v+l], rftWki8[8*v+4+l] = wki, wki
+	}
+	rftWki8[0], rftWki8[4] = rdftW[32], rdftW[32]
 }
 
 // fftSplitPairSoa is fftSplitSoa for the frames a and b.

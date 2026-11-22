@@ -90,7 +90,7 @@ write changelog narrative.
 - Scalar float code inside a 256-bit section pays the same transition
   penalty as after it: a kernel takes the scalars it needs from vector
   lanes, or computes them before its first 256-bit operation or after
-  `ClearAVXUpperBits` (`internal/ooura/fft_pair_simd_amd64.go`). Moves of
+  `ClearAVXUpperBits` (`internal/ooura/fft_soa_pair_simd_amd64.go`). Moves of
   single floats count: the AVX2 three-band synthesis filters into a stack
   array and interleaves it after `ClearAVXUpperBits`, which made it four
   times faster on Zen 3.
