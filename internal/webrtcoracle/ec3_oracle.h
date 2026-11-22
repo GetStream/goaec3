@@ -30,7 +30,7 @@ typedef struct {
 // ec3_config_fields.inc), each as a double.
 int ec3_config_num_fields(void);
 
-// Prebuilt libwebrtc.
+// ec3_*: the prebuilt libwebrtc, or the source build (webrtc_src_oracle).
 void* ec3_bp_new(const double* cfg, int rate, int num_render, int num_capture);
 void ec3_bp_free(void* p);
 void ec3_bp_buffer_render(void* p, const float* block);
@@ -51,7 +51,9 @@ void ec3_canceller_metrics(void* p, double* erl, double* erle, int* delay_ms);
 void ec3_canceller_set_audio_buffer_delay(void* p, int delay_ms);
 void ec3_canceller_set_capture_output_usage(void* p, int used);
 
-// Scalar (Aec3Optimization::kNone, scalar Ooura) source build, same API.
+// ec3s_*: the scalar (Aec3Optimization::kNone, scalar Ooura) source build,
+// same API. Under webrtc_src_oracle both prefixes drive the one source build,
+// whose lane follows the purego tag.
 void* ec3s_bp_new(const double* cfg, int rate, int num_render, int num_capture);
 void ec3s_bp_free(void* p);
 void ec3s_bp_buffer_render(void* p, const float* block);

@@ -13,7 +13,7 @@ import (
 	"github.com/GetStream/goaec3/internal/aec3"
 )
 
-// AFIR lanes for the oracle entry points.
+// Lanes of the afir_* entry points.
 const (
 	AfirLaneScalar = 0
 	AfirLaneNeon   = 1
@@ -21,7 +21,8 @@ const (
 
 func afirF(p *float32) *C.float { return (*C.float)(unsafe.Pointer(p)) }
 
-// afirFlatFft packs FftData as re[65] then im[65] (the Go layout).
+// afirFftPtr passes d as 130 floats, re[65] then im[65], which is the Go
+// layout of FftData.
 func afirFftPtr(d *aec3.FftData) *C.float { return afirF(&d.Re[0]) }
 
 // AfirRenderBuffer wraps a C++ RenderBuffer over its own Block/Spectrum/Fft buffers.

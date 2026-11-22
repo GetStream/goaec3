@@ -1,7 +1,8 @@
 //go:build webrtc_oracle && !webrtc_oracle_stock
 
-// Interpose the libm entry points that libwebrtc AEC3 objects import so the
-// oracle uses exactly the Go implementations in internal/aec3/cmath.go. The
+// Interposes the libm entry points that the AEC3 objects of libwebrtc import,
+// so that the oracle uses exactly the Go implementations in
+// internal/aec3/cmath.go (src_libm_interpose.c gives the reason). The
 // webrtc_oracle_stock tag leaves them out, to measure goaec3 against
 // libwebrtc on the host libm (TestEc3StockLibmDivergence).
 float goaec3Exp2f(float);

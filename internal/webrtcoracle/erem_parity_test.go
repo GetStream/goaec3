@@ -378,7 +378,7 @@ func TestEremEchoRemoverParity(t *testing.T) {
 }
 
 // TestEremLog10f checks that C++ log10f calls in the oracle binary resolve
-// to the interposer (erem_libm.c) and therefore agree with the Go log10f
+// to the interposer (libm_interpose.c) and therefore agree with the Go log10f
 // over a dense sweep of positive floats. The host log10f alone differs
 // (e.g. at 1.1627032).
 func TestEremLog10f(t *testing.T) {

@@ -13,8 +13,10 @@ import (
 	"github.com/GetStream/goaec3/internal/bands"
 )
 
-// The C++ reference: the prebuilt NEON libwebrtc in the default lane, the
-// scalar (kNone, scalar Ooura) source build of all of aec3 under purego.
+// ec3Scalar selects the C++ reference. With the prebuilt library it is the
+// NEON libwebrtc in the default lane and the scalar (kNone, scalar Ooura)
+// source build of all of aec3 under purego; the webrtc_src_oracle build has
+// one reference, whose lane follows the purego tag.
 const ec3Scalar = purego
 
 func TestEc3ConfigFlatten(t *testing.T) {
@@ -25,7 +27,6 @@ func TestEc3ConfigFlatten(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // Signals.
 
 // ec3Talker is a speech-like source: a voiced harmonic signal with a
@@ -266,7 +267,6 @@ func ec3Schedule(numCaptures int, uneven, bursts bool) []byte {
 	return s
 }
 
-// ---------------------------------------------------------------------------
 // BlockProcessor with a recording echo remover.
 
 type ec3GoRecorder struct {
@@ -552,7 +552,6 @@ func ec3RecSummary(r Ec3BpRecord) string {
 	return fmt.Sprintf("%+v blocksum=%v", r, sum)
 }
 
-// ---------------------------------------------------------------------------
 // EchoCanceller3 end to end, through AudioBuffer like AudioProcessingImpl.
 
 type ec3Case struct {
@@ -808,7 +807,6 @@ func TestEc3CancellerParity(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // Public API: [-1, 1] frames through AudioBuffer::CopyFrom / CopyTo.
 
 func ec3RunPublic(t *testing.T, rate, nr, nc int, passthrough, linear bool) {

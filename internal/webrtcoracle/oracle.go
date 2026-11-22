@@ -1,7 +1,10 @@
 //go:build webrtc_oracle
 
-// Package webrtcoracle links the pinned prebuilt libwebrtc (m141) and exposes
-// AEC3 entry points to parity tests. It builds only with the webrtc_oracle tag.
+// Package webrtcoracle is the cgo test oracle of goaec3: it exposes the C++
+// AEC3 of libwebrtc m141 to the parity tests. The webrtc_oracle tag links the
+// prebuilt libwebrtc.a (oracle.go); the webrtc_src_oracle tag compiles the
+// reference from the WebRTC sources (src_oracle.go). No shipped package
+// imports it.
 package webrtcoracle
 
 /*

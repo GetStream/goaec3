@@ -2,7 +2,8 @@
 
 package webrtcoracle
 
-// The C definitions live in libm_interpose.c.
+// The libm symbols that call these exports are defined in libm_interpose.c
+// (prebuilt library) and src_libm_interpose.c (source build).
 
 import "C"
 import "github.com/GetStream/goaec3/internal/aec3"
