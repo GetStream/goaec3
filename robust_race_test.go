@@ -4,6 +4,8 @@ import (
 	"math"
 	"sync"
 	"testing"
+
+	"github.com/GetStream/goaec3/internal/aec3"
 )
 
 // TestConcurrentRenderAndCapture exercises the documented threading
@@ -161,4 +163,12 @@ func TestConcurrentEchoCancellers(t *testing.T) {
 			}
 		}
 	}
+}
+
+// stereoActive reports whether e processes its render signal in stereo. It
+// belongs to the capture side.
+func stereoActive(e *EchoCanceller) bool {
+	var ec aec3.EchoCanceller3
+	e.core.Bind(&ec)
+	return ec.StereoRenderProcessingActiveForTesting()
 }
