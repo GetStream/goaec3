@@ -6,8 +6,7 @@ package ooura
 // (fft_fast.go); it is bit-identical to the lane reference and to the
 // archsimd kernel.
 
-func fft(a *[128]float32)        { fftFast(a) }
-func inverseFft(a *[128]float32) { inverseFftFast(a) }
+func initSimdTables() {}
 
 // Scratch is the work area of FftSplit and InverseFftSplit; this build
 // transforms in place and needs none.

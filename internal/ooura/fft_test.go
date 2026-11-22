@@ -129,25 +129,6 @@ func TestSimdRefDiffersFromScalar(t *testing.T) {
 	}
 }
 
-// The pure-Go implementations of the builds without archsimd kernels are
-// bit-identical to the transcriptions of the C sources they replace, in
-// every build.
-func TestFastMatchesRef(t *testing.T) {
-	compareFfts(t, "lane/fwd/neon", fftFastLane, fftNeonRef)
-	compareFfts(t, "lane/inv/neon", inverseFftFastLane, inverseFftNeonRef)
-	compareFfts(t, "lane/fwd/sse2", fftFastLane, fftSSE2Ref)
-	compareFfts(t, "lane/inv/sse2", inverseFftFastLane, inverseFftSSE2Ref)
-	compareFfts(t, "scalar/fwd", fftFastScalar, fftScalar)
-	compareFfts(t, "scalar/inv", inverseFftFastScalar, inverseFftScalar)
-	compareFfts(t, "build/fwd", fftFast, fftRef)
-	compareFfts(t, "build/inv", inverseFftFast, inverseFftRef)
-}
-
-func TestFftMatchesLaneRef(t *testing.T) {
-	compareFfts(t, "fwd", Fft, fftRef)
-	compareFfts(t, "inv", InverseFft, inverseFftRef)
-}
-
 type (
 	fftSplitFunc        func(a *[128]float32, re, im *[65]float32)
 	inverseFftSplitFunc func(re, im *[65]float32, a *[128]float32)
@@ -201,8 +182,8 @@ func buildInverseFftSplit(re, im *[65]float32, a *[128]float32) {
 	InverseFftSplit(re, im, a, &splitScratch)
 }
 
-func TestFftSplitMatchesPacked(t *testing.T) {
-	compareSplit(t, "build", buildFftSplit, buildInverseFftSplit, Fft, InverseFft)
+func TestFftSplitMatchesRef(t *testing.T) {
+	compareSplit(t, "build", buildFftSplit, buildInverseFftSplit, fftRef, inverseFftRef)
 	compareSplit(t, "fast", fftSplitFast, inverseFftSplitFast, fftRef, inverseFftRef)
 }
 
@@ -261,43 +242,4 @@ func TestFftRoundTrip(t *testing.T) {
 			t.Fatalf("idx %d: %v vs %v", i, a[i]*(2.0/128), orig[i])
 		}
 	}
-}
-
-func TestFftNoAllocs(t *testing.T) {
-	var a [128]float32
-	if n := testing.AllocsPerRun(100, func() { Fft(&a); InverseFft(&a) }); n != 0 {
-		t.Fatalf("Fft allocates %v times", n)
-	}
-}
-
-func benchFft(b *testing.B, f fftFunc) {
-	var a [128]float32
-	rng := rand.New(rand.NewSource(1))
-	for i := range a {
-		a[i] = float32(rng.NormFloat64())
-	}
-	var x [128]float32
-	b.ReportAllocs()
-	for b.Loop() {
-		x = a
-		f(&x)
-	}
-}
-
-func BenchmarkFft(b *testing.B) {
-	b.Run("lane", func(b *testing.B) { benchFft(b, Fft) })
-	b.Run("fastLane", func(b *testing.B) { benchFft(b, fftFastLane) })
-	b.Run("fastScalar", func(b *testing.B) { benchFft(b, fftFastScalar) })
-	b.Run("scalar", func(b *testing.B) { benchFft(b, fftScalar) })
-	b.Run("neonRef", func(b *testing.B) { benchFft(b, fftNeonRef) })
-	b.Run("sse2Ref", func(b *testing.B) { benchFft(b, fftSSE2Ref) })
-}
-
-func BenchmarkInverseFft(b *testing.B) {
-	b.Run("lane", func(b *testing.B) { benchFft(b, InverseFft) })
-	b.Run("fastLane", func(b *testing.B) { benchFft(b, inverseFftFastLane) })
-	b.Run("fastScalar", func(b *testing.B) { benchFft(b, inverseFftFastScalar) })
-	b.Run("scalar", func(b *testing.B) { benchFft(b, inverseFftScalar) })
-	b.Run("neonRef", func(b *testing.B) { benchFft(b, inverseFftNeonRef) })
-	b.Run("sse2Ref", func(b *testing.B) { benchFft(b, inverseFftSSE2Ref) })
 }

@@ -100,7 +100,7 @@ write changelog narrative.
   vector and is called once per iteration with constant arguments: the
   compiler inlines closures that capture SIMD values (sixteen times the
   usual budget), and every access becomes base plus displacement
-  (`cftfsubTailSimd`, `afirAdaptTerms`). Such closures nest (a closure that
+  (`soaCftmdl`, `afirAdaptTerms`). Such closures nest (a closure that
   calls another four times still inlines); a function that takes the closure
   as an argument does not inline it. Check with `-gcflags=-S` that no
   `funcN` call remains.
@@ -146,12 +146,10 @@ write changelog narrative.
   and vector operations, shuffles, scalar float operations and (in part)
   vector stores included; loads and integer work ride along. Count them in
   `-gcflags=-S` output: a kernel with fewer of them is faster in proportion.
-  - The split transforms of arm64 (`fft_soa_simd_arm64.go`) keep the real
-    and the imaginary parts in separate vectors: a rotation needs no lane
-    swap, the bit reversal is the 4x4 transposition between the first two
-    passes, and the transform has a quarter fewer vector operations than the
-    passes of `fft_simd.go`, which remain the packed transforms and the
-    amd64 SSE2 lane.
+  - The split transforms (`fft_soa_simd.go`) keep the real and the
+    imaginary parts in separate vectors: a rotation needs no lane swap and
+    the bit reversal is the 4x4 transposition between the first two passes.
+    `ooura.Fft`/`InverseFft` are the transcription of the lane, for tests.
   - Scalar float code costs per operation what a vector of four costs. The
     decimation by 4 (`decimator_simd.go`, arm64 and amd64) runs its four cascaded
     biquad sections as the lanes of one vector, section i two samples behind

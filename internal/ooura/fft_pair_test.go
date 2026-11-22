@@ -121,16 +121,10 @@ func twoInverseSplits(f inverseFftSplitFunc) inverseFftSplitPairFunc {
 }
 
 // BenchmarkFftSplit times two transforms between frames and bins: the pair
-// entry points, two single split transforms, and two packed transforms with
-// the FftData copy.
+// entry points and two single split transforms.
 func BenchmarkFftSplit(b *testing.B) {
 	b.Run("pair", func(b *testing.B) { benchSplitPair(b, FftSplitPair, InverseFftSplitPair) })
 	b.Run("two", func(b *testing.B) {
 		benchSplitPair(b, twoSplits(buildFftSplit), twoInverseSplits(buildInverseFftSplit))
-	})
-	b.Run("packed", func(b *testing.B) {
-		benchSplitPair(b,
-			twoSplits(func(a *[128]float32, re, im *[65]float32) { Fft(a); unpack(a, re, im) }),
-			twoInverseSplits(func(re, im *[65]float32, a *[128]float32) { pack(re, im, a); InverseFft(a) }))
 	})
 }

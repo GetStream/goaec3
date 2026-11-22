@@ -158,7 +158,7 @@ jobs:
       - name: Kernel benchmarks
         run: |
           kb='BenchmarkMatchedFilterCore$|BenchmarkMatchedFilterCoreUpdating$|BenchmarkAfir|BenchmarkKern$|BenchmarkFmaf$|BenchmarkAec3Fft'
-          ob='BenchmarkFft$/lane|BenchmarkInverseFft$/lane|BenchmarkFftSplit$'
+          ob='BenchmarkFftSplit$'
           : >kern.txt
           : >basekern.txt
           for _ in $(seq 3); do
