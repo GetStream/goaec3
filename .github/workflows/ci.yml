@@ -43,25 +43,8 @@ jobs:
         run: |
           command -v clang >/dev/null || { sudo apt-get update && sudo apt-get install -y clang; }
           clang --version
-      - name: gofmt
-        run: |
-          out=$(gofmt -l .)
-          if [ -n "$out" ]; then
-            echo "gofmt needed:"
-            echo "$out"
-            exit 1
-          fi
-      - name: go vet
-        run: |
-          go vet ./...
-          GOEXPERIMENT=simd go vet ./...
-          go vet -tags purego ./...
-          GOEXPERIMENT=simd GOARCH=arm64 go vet ./...
-          CC=clang CXX=clang++ go vet -tags webrtc_src_oracle ./...
-          CC=clang CXX=clang++ GOEXPERIMENT=simd go vet -tags 'webrtc_src_oracle purego' ./...
-          CC=clang CXX=clang++ GOEXPERIMENT=simd go vet -tags 'webrtc_src_oracle webrtc_oracle_stock' ./...
-      - name: Generated source-oracle files are current
-        run: bash scripts/gen-src-oracle.sh -check
+      - name: make lint (gofmt, go vet per build, generated files current)
+        run: make lint CLANG_CC=clang CLANG_CXX=clang++
       - name: actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 
@@ -189,7 +172,3 @@ jobs:
         if: matrix.stock
         run: go test -count=1 -timeout 40m -v -tags "webrtc_src_oracle webrtc_oracle_stock" -run '^TestEc3StockLibmDivergence$' ./internal/webrtcoracle/ 2>&1 | grep -v '^=== RUN'
         shell: bash -o pipefail {0}
-
-  # darwin/arm64 in one job: macOS runners are scarce (with five macOS jobs
-  # per run, they queued for over an hour), so the tests, the NEON and scalar
-  # source-oracle lanes and the Apple libm gate share one runner.
