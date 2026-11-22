@@ -1,6 +1,6 @@
 .PHONY: test test-purego test-simd test-amd64 test-all test-race oracle oracle-src oracle-src-scalar
 .PHONY: oracle-stock oracle-src-stock oracle-src-rosetta oracle-src-rosetta-avx2 oracle-x86-kernels
-.PHONY: fetch-webrtc gen-src-oracle lint bench
+.PHONY: fetch-webrtc gen-src-oracle lint bench vuln fuzz
 
 GO ?= go
 # The C++ reference builds need clang: libwebrtc is built by clang with
@@ -35,6 +35,19 @@ test-all: test test-purego test-simd test-amd64
 test-race:
 	$(GO) test -race -short ./...
 	$(SIMD) $(GO) test -race -short ./...
+
+# Known vulnerabilities in the code the packages and their tests reach,
+# without and with archsimd.
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.10.0
+vuln:
+	$(GO) run $(GOVULNCHECK) -test ./...
+	$(SIMD) $(GO) run $(GOVULNCHECK) -test ./...
+
+# The fuzz targets of the public API and the band splitting, FUZZTIME each.
+FUZZTIME ?= 10m
+fuzz:
+	$(SIMD) $(GO) test -run '^$$' -fuzz FuzzEchoCanceller -fuzztime $(FUZZTIME) .
+	$(SIMD) $(GO) test -run '^$$' -fuzz FuzzBandSplitter -fuzztime $(FUZZTIME) ./internal/bands
 
 # Sparse checkout of the pinned WebRTC m141 sources and abseil-cpp into
 # tmp_check/webrtc-m141.

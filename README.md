@@ -43,6 +43,8 @@ for {
 - Feed one render frame per capture frame. Send zeros when nothing plays.
 - `AnalyzeRender` and `ProcessCapture` may run on different goroutines.
 - Don't pass NaN: like libwebrtc, one NaN sample breaks the canceller for good.
+- Untrusted audio never panics and untrusted configs are bounded: see
+  [SECURITY.md](SECURITY.md).
 - Echo delays up to ~0.5 s are found by default. For longer ones, raise
   `Config.Delay.NumFilters` (each adds ~96 ms).
 
