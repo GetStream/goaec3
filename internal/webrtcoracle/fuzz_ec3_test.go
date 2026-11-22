@@ -355,6 +355,10 @@ func fzRenderDelayBufferSize(cfg *aec3.EchoCanceller3Config) int {
 //     reports the headroom in blocks as the filter delay, and
 //     ReverbFrequencyResponse::Update reads frequency_response[delay] of a
 //     vector that has one element per filter block.
+//   - Filter.Coarse.LengthBlocks > the render buffer size, which follows
+//     the refined filter: the partition loops of ApplyFilter and
+//     AdaptPartitions in the NEON, SSE2 and AVX2 lanes wrap around the
+//     buffer once and read past its end (adaptive_fir_filter.cc).
 //   - Delay.DefaultDelay >= the render buffer size: RenderDelayBuffer::Reset
 //     applies OffsetIndex(write, -default_delay), a negative ring index.
 //
@@ -391,7 +395,8 @@ func fzDefined(cfg *aec3.EchoCanceller3Config) bool {
 		(sn.Subband1.High >= aec3.FftLengthBy2Plus1 || sn.Subband2.High >= aec3.FftLengthBy2Plus1) {
 		return false
 	}
-	return cfg.Delay.DefaultDelay < fzRenderDelayBufferSize(cfg)
+	return cfg.Filter.Coarse.LengthBlocks <= fzRenderDelayBufferSize(cfg) &&
+		cfg.Delay.DefaultDelay < fzRenderDelayBufferSize(cfg)
 }
 
 // fzExternalDelay tracks the RenderDelayBuffer block counters in external

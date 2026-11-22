@@ -10,7 +10,8 @@ import (
 // libwebrtc cannot run them (the EchoCanceller3 constructor segfaults with
 // zero matched filters and aborts on a negative vector size with a refined
 // filter shorter than 9 blocks; a subband nearend region ending at bin 65
-// reads past the 65-bin spectrum; a delay headroom of the initial refined
+// reads past the 65-bin spectrum; a coarse filter with more blocks than the
+// render buffer makes the filter loops of the SIMD lanes read past it; a delay headroom of the initial refined
 // filter length or more indexes past the frequency responses of the filter; a refined filter ErrorFloor or NoiseGate
 // of 0 turns the output into NaN for good once the capture signal is digital
 // silence). New rejects them with ErrConfig, also
@@ -36,6 +37,14 @@ func TestConfigsTheCppCannotRunAreRejected(t *testing.T) {
 		"DelayHeadroomSamples=64, RefinedInitial.LengthBlocks=1": func(c *Config) {
 			c.Delay.DelayHeadroomSamples = 64
 			c.Filter.RefinedInitial.LengthBlocks = 1
+		},
+		"Coarse.LengthBlocks=168": func(c *Config) { c.Filter.Coarse.LengthBlocks = 168 },
+		"Coarse.LengthBlocks=250": func(c *Config) { c.Filter.Coarse.LengthBlocks = 250 },
+		"Coarse.LengthBlocks=68, NumFilters=1, Refined.LengthBlocks=9": func(c *Config) {
+			c.Filter.Coarse.LengthBlocks = 68
+			c.Filter.Refined.LengthBlocks = 9
+			c.Filter.RefinedInitial.LengthBlocks = 9
+			c.Delay.NumFilters = 1
 		},
 		"Subband1High=65": func(c *Config) {
 			c.Suppressor.UseSubbandNearendDetection = true
@@ -159,6 +168,7 @@ func robustRejected(cfg *Config) bool {
 		(cfg.Suppressor.UseSubbandNearendDetection && (sn.Subband1.High > 64 || sn.Subband2.High > 64)) ||
 		cfg.Buffering.ExcessRenderDetectionIntervalBlocks < 0 ||
 		cfg.Buffering.MaxAllowedExcessRenderBlocks < 0 ||
+		cfg.Filter.Coarse.LengthBlocks > ec3RenderBufferBlocks(cfg) ||
 		cfg.Delay.DelayHeadroomSamples/64 >= cfg.Filter.RefinedInitial.LengthBlocks ||
 		ec3RefinedStepUndefined(&cfg.Filter.Refined) || ec3RefinedStepUndefined(&cfg.Filter.RefinedInitial) ||
 		cfg.Filter.Refined.LengthBlocks > MaxFilterLengthBlocks ||

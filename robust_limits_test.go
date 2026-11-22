@@ -20,8 +20,13 @@ func TestResourceLimits(t *testing.T) {
 		set   func(c *Config, v int)
 	}{
 		"Filter.Refined.LengthBlocks": {MaxFilterLengthBlocks, func(c *Config, v int) { c.Filter.Refined.LengthBlocks = v }},
-		"Filter.Coarse.LengthBlocks":  {MaxFilterLengthBlocks, func(c *Config, v int) { c.Filter.Coarse.LengthBlocks = v }},
-		"Delay.NumFilters":            {MaxDelayFilters, func(c *Config, v int) { c.Delay.NumFilters = v }},
+		// The coarse filter is also at most as long as the render buffer,
+		// which grows with the refined filter.
+		"Filter.Coarse.LengthBlocks": {MaxFilterLengthBlocks, func(c *Config, v int) {
+			c.Filter.Coarse.LengthBlocks = v
+			c.Filter.Refined.LengthBlocks = MaxFilterLengthBlocks
+		}},
+		"Delay.NumFilters": {MaxDelayFilters, func(c *Config, v int) { c.Delay.NumFilters = v }},
 	}
 	for name, f := range fields {
 		cfg := DefaultConfig()
