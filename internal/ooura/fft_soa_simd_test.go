@@ -75,8 +75,7 @@ func TestSoaShuffles(t *testing.T) {
 	}
 }
 
-// BenchmarkFftSoa times one split-form transform against the transform of
-// fft_simd.go.
+// BenchmarkFftSoa times one split-form transform.
 func BenchmarkFftSoa(b *testing.B) {
 	if !useSimd {
 		b.Skip("no AVX")
@@ -94,17 +93,6 @@ func BenchmarkFftSoa(b *testing.B) {
 	b.Run("inv", func(b *testing.B) {
 		for b.Loop() {
 			inverseFftSplitSoa(&re, &im, &x, &s.t)
-		}
-	})
-	b.Run("packed/fwd", func(b *testing.B) {
-		for b.Loop() {
-			x = in[0]
-			fftSplitSimd(&x, &re, &im, &s.t)
-		}
-	})
-	b.Run("packed/inv", func(b *testing.B) {
-		for b.Loop() {
-			inverseFftSplitSimd(&re, &im, &x, &s.t)
 		}
 	})
 }

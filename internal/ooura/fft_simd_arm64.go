@@ -69,23 +69,11 @@ func rev4(x vec) vec {
 	return b.ConcatShiftBytesRight(b, 8).ReshapeToUint32s().BitsToFloat32()
 }
 
-// revEven is {hi2, hi0, lo2, lo0}; revOdd is {hi3, hi1, lo3, lo1}: the even
-// (odd) lanes of lo followed by hi, reversed.
-func revEven(hi, lo vec) vec { return even(swap64(hi), swap64(lo)) }
-
-func revOdd(hi, lo vec) vec { return odd(swap64(hi), swap64(lo)) }
-
 // ext3 is {x3, y0, y1, y2} (EXT #12; ConcatShiftBytesRight shifts its
 // argument down and its receiver in).
 func ext3(x, y vec) vec {
 	xb, yb := x.ToBits().ReshapeToUint8s(), y.ToBits().ReshapeToUint8s()
 	return yb.ConcatShiftBytesRight(xb, 12).ReshapeToUint32s().BitsToFloat32()
-}
-
-// loHi is {x0, x1, y2, y3}: EXT #8 gives {y2, y3, x0, x1}.
-func loHi(x, y vec) vec {
-	xb, yb := x.ToBits().ReshapeToUint8s(), y.ToBits().ReshapeToUint8s()
-	return swap64(xb.ConcatShiftBytesRight(yb, 8).ReshapeToUint32s().BitsToFloat32())
 }
 
 // neg is the negation of every lane.
