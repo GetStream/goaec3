@@ -350,6 +350,11 @@ func fzRenderDelayBufferSize(cfg *aec3.EchoCanceller3Config) int {
 //   - SubbandNearendDetection.Subband{1,2}.High == 65 with
 //     UseSubbandNearendDetection: SubbandNearendDetector::Update
 //     accumulates up to begin() + high + 1 of a 65-element array.
+//   - Delay.DelayHeadroomSamples / 64 >= Filter.RefinedInitial.LengthBlocks:
+//     while the delay estimator may not have converged, AecState::FilterDelay
+//     reports the headroom in blocks as the filter delay, and
+//     ReverbFrequencyResponse::Update reads frequency_response[delay] of a
+//     vector that has one element per filter block.
 //   - Delay.DefaultDelay >= the render buffer size: RenderDelayBuffer::Reset
 //     applies OffsetIndex(write, -default_delay), a negative ring index.
 //
@@ -371,6 +376,9 @@ func fzDefined(cfg *aec3.EchoCanceller3Config) bool {
 		return false
 	}
 	if cfg.Delay.NumFilters == 0 || cfg.Filter.Refined.LengthBlocks < 9 {
+		return false
+	}
+	if cfg.Delay.DelayHeadroomSamples/aec3.BlockSize >= cfg.Filter.RefinedInitial.LengthBlocks {
 		return false
 	}
 	for _, r := range []*aec3.RefinedConfiguration{&cfg.Filter.Refined, &cfg.Filter.RefinedInitial} {

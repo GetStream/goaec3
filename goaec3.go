@@ -368,6 +368,9 @@ func (e *EchoCanceller) ProcessCaptureWithLinearOutput(capture, linearOutput [][
 // estimator sizes a vector with length-9 < 0) and a subband nearend region
 // reaching bin 65 (read past the end of the 65-bin spectrum). Negative
 // Buffering fields have no C++ equivalent (size_t there) and are rejected.
+// With an external delay the filter delay is the delay headroom in blocks,
+// which indexes the frequency responses of the refined filter: a headroom of
+// the initial filter length or more is read past their end.
 // The step size of the refined filter is h / (0.5*h*X2 + n*E2) for a render
 // power X2 at or above NoiseGate and an error estimate h at or above
 // ErrorFloor. Under digital silence in the capture signal E2 is 0, and with
@@ -392,6 +395,9 @@ func ec3CheckConfig(cfg *Config) error {
 		(cfg.Suppressor.SubbandNearendDetection.Subband1.High >= aec3.FftLengthBy2Plus1 ||
 			cfg.Suppressor.SubbandNearendDetection.Subband2.High >= aec3.FftLengthBy2Plus1):
 		return fmt.Errorf("%w: SubbandNearendDetection regions must end below bin %d", ErrConfig, aec3.FftLengthBy2Plus1)
+	case cfg.Delay.DelayHeadroomSamples/aec3.BlockSize >= cfg.Filter.RefinedInitial.LengthBlocks:
+		return fmt.Errorf("%w: Delay.DelayHeadroomSamples must be below %d samples, the initial refined filter length",
+			ErrConfig, cfg.Filter.RefinedInitial.LengthBlocks*aec3.BlockSize)
 	case cfg.Buffering.ExcessRenderDetectionIntervalBlocks < 0 || cfg.Buffering.MaxAllowedExcessRenderBlocks < 0:
 		return fmt.Errorf("%w: Buffering fields must not be negative", ErrConfig)
 	case ec3RefinedStepUndefined(&cfg.Filter.Refined) || ec3RefinedStepUndefined(&cfg.Filter.RefinedInitial):
