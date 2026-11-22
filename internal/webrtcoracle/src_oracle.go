@@ -16,8 +16,9 @@
 // (Aec3Optimization::kNone, scalar Ooura). TestMain (src_main_test.go) checks
 // that both sides run the same lane.
 //
-// The ec3 parity tests, the C++ shim and their Go wrappers are generated
-// copies of the webrtc_oracle files (scripts/gen-src-oracle.sh).
+// The ec3 parity tests and their Go wrappers are the files of the
+// webrtc_oracle build; the translation units and the instances of the C++
+// shim are generated (src_gen_*, scripts/gen-src-oracle.sh).
 //
 // Every translation unit starts with src_prelude.h, which requires clang and
 // turns floating-point contraction off for the whole unit, as libwebrtc's

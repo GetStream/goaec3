@@ -1,4 +1,4 @@
-//go:build webrtc_oracle && webrtc_oracle_stock
+//go:build (webrtc_oracle || webrtc_src_oracle) && webrtc_oracle_stock
 
 package webrtcoracle
 
