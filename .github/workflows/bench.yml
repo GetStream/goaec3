@@ -69,14 +69,15 @@ jobs:
       COUNT: ${{ inputs.count || '6' }}
       BENCHTIME: ${{ inputs.benchtime || '2000x' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Cache WebRTC sources
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: tmp_check/webrtc-m141
           key: webrtc-m141-${{ hashFiles('scripts/fetch-webrtc.sh') }}
@@ -308,7 +309,7 @@ jobs:
           { grep 'Event count' perf_cpp.txt; grep -E '^ +[0-9.]+%' perf_cpp.txt; } | sed -E 's/ +/ /g' | cut -c1-110 | head -24 >pc.txt || true
           note perf-cpp pc.txt
           note annotate ann.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bench-${{ matrix.os }}-${{ matrix.name }}
           path: |
@@ -353,12 +354,14 @@ jobs:
       COUNT: ${{ inputs.count || '6' }}
       BENCHTIME: ${{ inputs.benchtime || '2000x' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Cache WebRTC sources
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: tmp_check/webrtc-m141
           key: webrtc-m141-${{ hashFiles('scripts/fetch-webrtc.sh') }}
@@ -412,7 +415,7 @@ jobs:
             awk -F, '{ printf "| %s | %s | %s | %s |\n", $3, $4, $5, $6 }' rows.csv
           } >>"$GITHUB_STEP_SUMMARY"
           cat rows.csv
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: preempt-${{ matrix.copy }}
           path: |
@@ -426,7 +429,7 @@ jobs:
     if: ${{ always() && !inputs.preempt }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: bench-*
           path: results

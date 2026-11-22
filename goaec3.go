@@ -27,9 +27,9 @@
 // per frame of the ones it accepts: at most [MaxChannels] channels a side,
 // filters of at most [MaxFilterLengthBlocks] blocks and at most
 // [MaxDelayFilters] delay estimation filters, next to the ranges of
-// Config.Validate. The largest canceller New creates takes about 50 MB and,
-// in pure Go, tens of milliseconds per frame: a service that takes configs
-// from its users sets its own, lower limits.
+// Config.Validate. The largest canceller New creates takes less than 64 MB
+// and on the order of a hundred times the work per frame of the default one:
+// a service that takes configs from its users sets its own, lower limits.
 //
 // Breaking the concurrency contract of [EchoCanceller] is a data race. It is
 // not detected: the output is undefined and a method may panic.
