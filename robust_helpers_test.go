@@ -446,7 +446,7 @@ func robustDecode(data []byte) robustProgram {
 				op.n = int(int32(r.u32()))
 			case 1:
 				op.n = []int{0, -1, -4, 1, 3, 4, 1000, 10000, math.MaxInt32, math.MinInt32,
-					math.MaxInt64, math.MinInt64}[int(s>>2)%12]
+					math.MaxInt, math.MinInt}[int(s>>2)%12]
 			default:
 				op.n = int(r.u16() % 600)
 			}

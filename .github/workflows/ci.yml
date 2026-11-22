@@ -110,6 +110,29 @@ jobs:
             purego) go test -count=1 -tags purego ./... ;;
           esac
 
+  # 32-bit targets, where int has 32 bits: they run the scalar lane.
+  test-32bit:
+    name: test-32bit (${{ matrix.goarch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, goarch: "386" }
+          - { os: ubuntu-24.04-arm, goarch: arm }
+    runs-on: ${{ matrix.os }}
+    env:
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go test
+        run: go test -count=1 ./...
+
   # The race detector over the short test suite, with the pure-Go lane
   # references and with the archsimd kernels.
   race:
