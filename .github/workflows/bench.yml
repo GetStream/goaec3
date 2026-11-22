@@ -309,7 +309,7 @@ jobs:
           { grep 'Event count' perf_cpp.txt; grep -E '^ +[0-9.]+%' perf_cpp.txt; } | sed -E 's/ +/ /g' | cut -c1-110 | head -24 >pc.txt || true
           note perf-cpp pc.txt
           note annotate ann.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-${{ matrix.os }}-${{ matrix.name }}
           path: |
@@ -415,7 +415,7 @@ jobs:
             awk -F, '{ printf "| %s | %s | %s | %s |\n", $3, $4, $5, $6 }' rows.csv
           } >>"$GITHUB_STEP_SUMMARY"
           cat rows.csv
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: preempt-${{ matrix.copy }}
           path: |
