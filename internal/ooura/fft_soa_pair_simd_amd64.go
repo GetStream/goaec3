@@ -34,8 +34,8 @@ import "simd/archsimd"
 
 type vec8 = archsimd.Float32x8
 
-// PairScratch is the work area of FftSplitPair and InverseFftSplitPair. It
-// needs no initialization and carries nothing from one call to the next.
+// PairScratch is the work area of FftSplitPair and InverseFftSplitPair,
+// like Scratch.
 type PairScratch struct {
 	t, u [256]float32
 	s    Scratch

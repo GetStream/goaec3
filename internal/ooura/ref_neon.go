@@ -1,10 +1,9 @@
 package ooura
 
-// Pure-Go transcription of ooura_fft_neon.cc. Each helper models one NEON
-// intrinsic on a 4-lane float32 vector; vmlaq/vmlsq round the product before
-// the add/sub (they are unfused), so every product is wrapped in float32().
-// This is the specification the archsimd kernel and the pure-Go lane code
-// (fft_fast.go) are tested against.
+// The transcription of ooura_fft_neon.cc, the spec of the NEON lane. Each
+// helper is one NEON intrinsic on a vector of four float32. vmlaq and vmlsq
+// are unfused: they round the product before the addition, so every product
+// is wrapped in float32().
 
 // f32x4 is a struct rather than an array so the compiler keeps the lanes
 // in registers.

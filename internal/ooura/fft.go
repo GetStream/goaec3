@@ -1,53 +1,53 @@
-// Package ooura implements the fixed-size 128-point real FFT that WebRTC AEC3
-// uses (common_audio/third_party/ooura/fft_size_128/ooura_fft.cc).
+// Package ooura implements the 128-point real FFT of WebRTC's AEC3
+// (common_audio/third_party/ooura/fft_size_128), bit-exact with libwebrtc in
+// the lane of the build: the NEON code on arm64, the SSE2 code on amd64, and
+// the scalar C code under the purego tag and on other architectures.
 //
-// Every product is wrapped in an explicit float32 conversion so the Go
-// compiler never contracts a multiply-add into an FMA: the reference C and
-// NEON paths round each product separately (vmlaq_f32 is unfused).
+// Each lane has a transcription of its C source (fft.go, ref_neon.go,
+// ref_sse2.go), which is the spec. The transforms aec3 runs, FftSplit and
+// InverseFftSplit, are archsimd kernels under GOEXPERIMENT=simd and pure Go
+// otherwise (fft_fast.go), tested bit for bit against the transcription.
+//
+// No product is fused with an addition: the C code rounds every product
+// (vmlaq_f32 is unfused), so each one is wrapped in a float32 conversion.
 package ooura
 
-// Fft computes the forward real FFT of a in place. The output packs
-// a[0]=Re(X0), a[1]=Re(X64), then interleaved Re/Im for bins 1..63.
-//
-// The lane follows the build like libwebrtc's OouraFft: arm64 runs the NEON
-// butterflies (ooura_fft_neon.cc), amd64 the SSE2 butterflies
-// (ooura_fft_sse2.cc), and purego or any other architecture the scalar C
-// path. Each lane is bit-exact with the matching C++ build.
+// Fft computes the forward real FFT of a in place: a[0] is the real part of
+// bin 0, a[1] that of bin 64, and a[2k], a[2k+1] are the real and imaginary
+// parts of bin k. It runs the transcription of the lane.
 func Fft(a *[128]float32) { fftRef(a) }
 
-// InverseFft computes the unscaled inverse real FFT of a in place, in the
-// same lane as Fft.
+// InverseFft computes the unscaled inverse real FFT of a in place. It runs
+// the transcription of the lane.
 func InverseFft(a *[128]float32) { inverseFftRef(a) }
 
-// FftSplit computes Fft(a) and stores it as aec3's
-// FftData::CopyFromPackedArray does: re[k] and im[k] are the real and
-// imaginary part of bin k, and im[0] and im[64] are zero. It leaves a in an
-// unspecified state.
+// FftSplit computes Fft(a) into re and im as FftData::CopyFromPackedArray
+// stores it: re[k] and im[k] are the real and imaginary parts of bin k, and
+// im[0] and im[64] are zero. It leaves a in an unspecified state.
 func FftSplit(a *[128]float32, re, im *[65]float32, s *Scratch) { fftSplit(a, re, im, s) }
 
-// InverseFftSplit computes InverseFft of the frame that aec3's
-// FftData::CopyToPackedArray makes of re and im (im[0] and im[64] are not
-// read) into a.
+// InverseFftSplit computes InverseFft of the frame that
+// FftData::CopyToPackedArray makes of re and im into a. It does not read
+// im[0] and im[64].
 func InverseFftSplit(re, im *[65]float32, a *[128]float32, s *Scratch) {
 	inverseFftSplit(re, im, a, s)
 }
 
-// FftSplitPair computes FftSplit(a, re0, im0) and FftSplit(b, re1, im1).
-// Each result is bit-identical to the single transform; where the CPU has
-// 256-bit vectors the two run in one pass. The frames must not overlap, nor
-// the outputs.
+// FftSplitPair computes FftSplit(a, re0, im0) and FftSplit(b, re1, im1),
+// in one pass where the CPU has 256-bit vectors. The frames must not
+// overlap, nor the outputs.
 func FftSplitPair(a, b *[128]float32, re0, im0, re1, im1 *[65]float32, s *PairScratch) {
 	fftSplitPair(a, b, re0, im0, re1, im1, s)
 }
 
 // InverseFftSplitPair computes InverseFftSplit(re0, im0, a) and
-// InverseFftSplit(re1, im1, b) like FftSplitPair.
+// InverseFftSplit(re1, im1, b).
 func InverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s *PairScratch) {
 	inverseFftSplitPair(re0, im0, re1, im1, a, b, s)
 }
 
-// single is the work area of the single transforms that a pair runs where
-// it has no kernel of its own.
+// single returns the work area of the single transforms that a pair runs
+// where it has no kernel of its own.
 func (s *PairScratch) single() *Scratch { return &s.s }
 
 // unpack is FftData::CopyFromPackedArray.

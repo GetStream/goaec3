@@ -33,9 +33,9 @@ var rdftWk3riSecond = [16]float32{
 	-0.995184720, -0.098017156, -0.290284693, -0.956940353,
 }
 
-// SIMD tables from ooura_fft_tables_neon_sse2.h, shared by the NEON and SSE2
-// lanes. Entries written as -0.000000000f in C are negative zero; Go constant
-// arithmetic has no negative zero, so init sets those sign bits explicitly.
+// The tables of ooura_fft_tables_neon_sse2.h, which the NEON and SSE2 lanes
+// share. An entry written as -0.000000000f in C is negative zero, which a Go
+// constant cannot be: init sets those.
 var swapSign = [4]float32{-1, 1, -1, 1}
 
 var rdftWk1r = [32]float32{

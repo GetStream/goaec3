@@ -2,8 +2,8 @@
 
 package ooura
 
-// useSimd reports whether the archsimd kernels can run: NEON is always
-// present on arm64.
+// useSimd reports whether the archsimd kernels can run. arm64 always has
+// NEON.
 const useSimd = true
 
 func initSimdTables() { initSoaTables() }
@@ -34,7 +34,7 @@ func ext3(x, y vec) vec {
 	return yb.ConcatShiftBytesRight(xb, 12).ReshapeToUint32s().BitsToFloat32()
 }
 
-// neg is the negation of every lane.
+// neg negates every lane.
 func neg(x vec) vec { return x.Neg() }
 
 // soaLane0..3 are the transposition of r0..r3: soaLanek is {r0[k], r1[k],

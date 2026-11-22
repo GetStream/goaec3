@@ -4,9 +4,9 @@ package ooura
 
 import "simd/archsimd"
 
-// archsimd's 128-bit float ops on amd64 are VEX-encoded (AVX). They compute
-// the same IEEE results as the SSE2 instructions libwebrtc uses; CPUs
-// without AVX run the pure-Go lane code (fft_fast.go).
+// useSimd reports whether the archsimd kernels can run. Their 128-bit
+// operations are VEX-encoded and need AVX; they compute what the SSE2
+// instructions of libwebrtc compute. A CPU without AVX runs fft_fast.go.
 var useSimd = archsimd.X86.AVX()
 
 func fftSplit(a *[128]float32, re, im *[65]float32, s *Scratch) {
@@ -25,9 +25,9 @@ func inverseFftSplit(re, im *[65]float32, a *[128]float32, s *Scratch) {
 	}
 }
 
-// The shuffles below are SHUFPS, which stays in the floating-point domain
-// (an integer shuffle such as PSHUFD or PUNPCKLQDQ between float operations
-// costs a bypass delay on some cores).
+// The shuffles are SHUFPS, which stays in the floating-point domain: an
+// integer shuffle between float operations costs a bypass delay on some
+// cores.
 
 // even is {x0, x2, y0, y2}; odd is {x1, x3, y1, y3} (SHUFPS).
 func even(x, y vec) vec { return x.ConcatPermuteScalars(0, 2, 4, 6, y) }
@@ -44,8 +44,8 @@ func ext3(x, y vec) vec {
 	return yb.ConcatShiftBytesRight(xb, 12).ReshapeToUint32s().BitsToFloat32()
 }
 
-// neg is the negation of every lane. Float32x4.Neg broadcasts its mask with
-// an AVX2 instruction; this one loads it.
+// neg negates every lane. Float32x4.Neg broadcasts its mask with an AVX2
+// instruction, so the mask is loaded.
 func neg(x vec) vec {
 	return x.ToBits().Xor(archsimd.LoadUint32x4Array(&signAll)).BitsToFloat32()
 }
