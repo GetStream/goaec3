@@ -22,14 +22,14 @@ func dlyChooseMixingVariant(downmix, adaptiveSelection bool, numChannels int) Al
 	return MixingVariantFixed
 }
 
-// AlignmentMixer converts the channels to mono to provide a decent input for
-// the delay estimation (alignment_mixer.h).
+// AlignmentMixer mixes the channels to mono for the delay estimation
+// (alignment_mixer.h).
 type AlignmentMixer struct {
 	*alignmentMixerState
 	moreEnergies []float32 // cumulativeEnergies of more than inlineChannels channels
 }
 
-// alignmentMixerState is the state of an AlignmentMixer but its slice.
+// alignmentMixerState is the state of an AlignmentMixer except its slice.
 type alignmentMixerState struct {
 	moreEnergiesSpan          span
 	numChannels               int
@@ -43,7 +43,7 @@ type alignmentMixerState struct {
 	blockCounter              int
 }
 
-// NewAlignmentMixerWithParams mirrors the five-argument C++ constructor.
+// NewAlignmentMixerWithParams mirrors the constructor with five arguments.
 func NewAlignmentMixerWithParams(numChannels int, downmix, adaptiveSelection bool, activityPowerThreshold float32,
 	preferFirstTwoChannels bool) *AlignmentMixer {
 	m := &AlignmentMixer{}
@@ -52,13 +52,11 @@ func NewAlignmentMixerWithParams(numChannels int, downmix, adaptiveSelection boo
 	return m
 }
 
-// bind makes m the view of st.
 func (m *AlignmentMixer) bind(st *alignmentMixerState, b *binder) {
 	m.alignmentMixerState = st
 	b.f32(&m.moreEnergies, &st.moreEnergiesSpan)
 }
 
-// init sets up m in place.
 func (m *AlignmentMixer) init(numChannels int, downmix, adaptiveSelection bool, activityPowerThreshold float32,
 	preferFirstTwoChannels bool) {
 	st := m.alignmentMixerState
@@ -76,8 +74,7 @@ func (m *AlignmentMixer) init(numChannels int, downmix, adaptiveSelection bool, 
 	}
 }
 
-// ProduceOutput writes the mixed band-0 signal of x into y (BlockSize
-// samples).
+// ProduceOutput writes the mix of band 0 of x to the BlockSize samples of y.
 func (m AlignmentMixer) ProduceOutput(x *Block, y []float32) {
 	y = y[:BlockSize]
 	if m.selectionVariant == MixingVariantDownmix {
@@ -137,8 +134,7 @@ func (m AlignmentMixer) selectChannel(x *Block) int {
 		}
 	}
 
-	// Normalize the energies to allow the energy computations to from now be
-	// based on smoothing.
+	// Normalize the energies: from here on they are smoothed.
 	if m.blockCounter == numBlocksBeforeEnergySmoothing {
 		const oneByNumBlocksBeforeEnergySmoothing = float32(1.0 / numBlocksBeforeEnergySmoothing)
 		for ch := 0; ch < numChToAnalyze; ch++ {

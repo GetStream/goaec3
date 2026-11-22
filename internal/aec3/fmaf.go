@@ -2,65 +2,27 @@ package aec3
 
 import "math"
 
-// fmaf returns a*b+c rounded once to float32 (round to nearest, ties to
-// even), the result of C fmaf, vfmaq_f32 and _mm256_fmadd_ps per lane. It is
-// the software fused multiply-add of the AVX2 lane references.
+// fmaf returns a*b + c rounded once to float32: C fmaf, and a lane of
+// vfmaq_f32 and _mm256_fmadd_ps.
 //
-// Fast path. The product p = a*b of two float32 values is exact in float64:
-// it has at most 48 significant bits and |p| lies in [2^-298, 2^256), inside
-// the float64 normal range. Let x = p + c be the exact sum and s = fl64(x) its
-// float64 rounding (one float64 addition; it cannot overflow, and since p and
-// c are multiples of 2^-298 it cannot underflow either). The wanted result is
-// r32(x), where r32 rounds to float32 and handles overflow to ±Inf. Then
-// float32(s) = r32(s), and r32(s) = r32(x) whenever s is not a float32
-// rounding boundary:
+// The product p = a*b is exact in float64: it has at most 48 significant
+// bits and a magnitude in [2^-298, 2^256). So s = fl64(p + c) is one
+// rounding of the exact sum x, and it neither overflows nor underflows.
+// float32(s) is the result unless s is a float32 rounding boundary: a
+// midpoint of two adjacent float32 values or ±(2^128 - 2^103). The
+// boundaries are float64 values, and rounding to float64 is monotone, so x
+// and s lie between the same two boundaries unless s is one, and round to
+// the same float32.
 //
-//   - Let M be the set of float32 rounding boundaries: the midpoints between
-//     adjacent float32 values (including the subnormal ones) and ±(2^128 -
-//     2^103), above which r32 overflows. Each m in M has at most 25
-//     significant bits and exponent >= -150, so m is a float64 value.
-//   - r32 is constant on each open interval between adjacent boundaries.
-//   - fl64 is monotone and fixes float64 values, so for boundaries m1 < m2
-//     with m1 < x < m2, m1 <= s <= m2. If s is not itself a boundary, s and
-//     x lie in the same open interval and r32(s) = r32(x). If x is a
-//     boundary then x = s exactly and float32(s) is correct as well, but
-//     s being a boundary does not tell the two cases apart, so the slow path
-//     handles every s in M.
+// A sum that is a boundary takes fmafSlow (fmafHard, fmafTie). So does every
+// sum with 0 < |s| < 2^-126, where the test of the low bits does not find
+// the boundaries. A zero s is an exact zero with the sign of the fused
+// result; Inf and NaN convert as they are.
 //
-// Detecting s in M. For |s| >= 2^-126 (biased float64 exponent >= 897), the
-// float32 boundaries at that exponent are exactly the float64 values whose
-// 29 low significand bits (those below the float32 significand) are
-// 1000...0, i.e. bits&0x1FFFFFFF == 0x10000000; this includes 2^128 - 2^103
-// (exponent 127, 24 one bits below the leading bit). For larger exponents the
-// test only sends values to the slow path that need not go there. For
-// 0 < |s| < 2^-126 the boundaries have fewer significand bits, and the fast
-// path is not taken at all. s = ±0 means x = 0 exactly; IEEE addition then
-// gives the same signed zero as the fused operation. Inf and NaN operands
-// give an Inf or NaN s (exponent 2047, low bits of Inf are zero) and float32
-// conversion propagates them like the hardware; a NaN whose low bits match
-// the pattern goes to the slow path, which also propagates it.
-//
-// The product is wrapped in float64(...) so the compiler does not contract
-// it into the add; contraction would compute the same s (the product is
-// exact), but the explicit rounding keeps the fused-op guard meaningful.
-//
-// fmaf does not inline (the slow-path call exceeds the inlining budget). Hot
-// loops expand it with the inlinable fmafSum and fmafHard instead:
-//
-//	s := fmafSum(a, b, c)
-//	r := float32(s)
-//	if fmafHard(s) {
-//		r = fmafSlow(a, b, c)
-//	}
-//
-// A call inside a loop makes the compiler keep everything that lives across
-// it (the counter, pointers, accumulators) in stack slots that the loop
-// writes on every iteration, taken or not. The form that avoids it keeps the
-// loop free of calls: compute fmafSum for a group of elements, test them with
-// one `if fmafHard(s0) || fmafHard(s1) || ...`, and on a hit hand the rest of
-// the work to a //go:noinline function that uses fmaf, then return
-// (kernSpectrumAvx2Ref in kern_ref.go). Nothing is live after that call, so
-// the loop spills nothing.
+// fmaf does not inline. A loop that calls it spills what it keeps in
+// registers on every iteration; loops compute fmafSum for a group of
+// elements, test the sums in one condition and, on a hit, leave for a
+// //go:noinline function that calls fmaf per element.
 func fmaf(a, b, c float32) float32 {
 	s := fmafSum(a, b, c)
 	if fmafHard(s) {
@@ -69,65 +31,44 @@ func fmaf(a, b, c float32) float32 {
 	return float32(s)
 }
 
-// fmafSum returns s = fl64(a*b + c), the float64 sum of fmaf's fast path.
+// fmafSum returns fl64(a*b + c). The conversion of the product keeps the
+// compiler from fusing it into the sum, which would give the same value.
 func fmafSum(a, b, c float32) float64 {
 	return float64(float64(a)*float64(b)) + float64(c)
 }
 
-// fmafHard reports whether float32(s) may differ from fmaf(a, b, c) for
-// s = fmafSum(a, b, c): s is a float32 rounding boundary at a float32 normal
-// exponent or above (low 29 bits 1000...0), or 0 < |s| < 2^-126. bits<<1
-// drops the sign, and the subtraction wraps for ±0, which stays on the fast
-// path.
+// fmafHard reports whether float32(s) may differ from fmaf(a, b, c) for s =
+// fmafSum(a, b, c): the low 29 bits of s are 1000...0, as in a boundary at a
+// float32 normal exponent or above, or 0 < |s| < 2^-126. The subtraction
+// wraps for ±0, which is not hard.
 func fmafHard(s float64) bool {
 	bits := math.Float64bits(s)
 	return bits&0x1FFFFFFF == 0x10000000 || bits<<1-1 < 897<<53-1
 }
 
-// fmafTie is the hard-case test of the loops that keep r = float32(s) and its
-// widening t = float64(r) anyway (the accumulator of a fused chain, the
-// operand of the next product). For s = fmafSum(a, b, c) it reports whether
-// r may differ from fmaf(a, b, c); it holds for every float32 rounding
-// boundary:
+// fmafTie is fmafHard for a loop that has r = float32(s) and t = float64(r)
+// anyway. It holds for every float32 rounding boundary:
 //
-//   - A boundary has at most 25 significant bits (the midpoint of two
-//     adjacent float32 values has one bit more than they have, at most 25
-//     for normal and at most 24 for subnormal neighbours; 2^128 - 2^103 has
-//     25) and a magnitude of at least 2^-150, so it is a normal float64 whose
-//     28 low significand bits are zero.
-//   - A boundary is not a float32 value: a midpoint lies strictly between
-//     two adjacent ones, and 2^128 - 2^103 lies between MaxFloat32 and the
-//     overflow to Inf. So t != s, also when r overflowed to Inf.
+// A boundary has at most 25 significant bits and a magnitude of at least
+// 2^-150, so it is a normal float64 whose 28 low significand bits are zero.
+// And it is not a float32 value, so t != s, also when r is Inf.
 //
-// Sums that are float32 values (zeros, short sums, Inf) have t == s and
-// stay on the fast path, and so does a NaN (s != s); about one random sum in
-// 2^28 has the 28 zero bits. One integer test decides almost every sum, and
-// the float comparison reuses t.
+// A sum that is a float32 value has t == s, and a NaN has s != s: neither is
+// a tie.
 //
-// Used directly as an `if` condition (alone or joined by ||), the test
-// compiles to branches; no flag is materialized. A loop computes the sums of
-// a group, then tests them, and on a hit hands the rest of the work to a
-// //go:noinline function that calls fmaf per element.
-//
-// math.FMA does not help here. float32(math.FMA(float64(a), float64(b),
-// float64(c))) is float32(fl64(a*b + c)): the float64 product is exact, so
-// the hardware fused operation returns the very s of fmafSum, with the same
-// double rounding at the same boundaries, and the test is still needed. Where
-// the CPU lacks FMA, math.FMA is a software routine. A float64 sum that
-// rounds straight to float32 (round to odd) needs the TwoSum error term of
-// fmafSlow for every element.
+// math.FMA on the widened operands returns the same s, since the float64
+// product is exact, and needs the same test.
 func fmafTie(s, t float64) bool {
 	return math.Float64bits(s)&fmafLowBits == 0 && t != s && s == s
 }
 
-// fmafLowBits are the float64 significand bits that are zero in every
+// fmafLowBits holds the float64 significand bits that are zero in every
 // float32 rounding boundary.
 const fmafLowBits = 0x0FFFFFFF
 
-// fmafSlow is fmaf without the fast path. It computes the float64 sum with
-// an exact error term (TwoSum) and rounds it to odd, which makes the final
-// rounding to float32 correct (53 >= 24+2 significand bits, also for float32
-// subnormal results, which have fewer bits).
+// fmafSlow is fmaf without the fast path. It rounds the float64 sum to odd,
+// using the exact error term of TwoSum, which makes the rounding to float32
+// correct: 53 >= 24+2 significand bits.
 //
 //go:noinline
 func fmafSlow(a, b, c float32) float32 {
@@ -135,8 +76,8 @@ func fmafSlow(a, b, c float32) float32 {
 	q := float64(c)
 	s := p + q
 	if math.IsInf(s, 0) || math.IsNaN(s) || s == 0 {
-		// Overflow cannot happen for float32 operands; Inf/NaN propagate, and
-		// an exact zero needs no rounding (its sign follows IEEE addition).
+		// float32 operands cannot overflow. Inf and NaN convert as they are,
+		// and an exact zero has the sign of IEEE addition.
 		return float32(s)
 	}
 	// TwoSum: s + e == p + q exactly.

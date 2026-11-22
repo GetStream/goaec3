@@ -2,11 +2,10 @@
 
 package aec3
 
-// Kernel entry points without archsimd: the pure-Go lane references.
+// The kernel entry points without archsimd: the pure-Go lane references.
 
 // fftDataSpectrum is FftData::Spectrum. Only x86 builds of libwebrtc have
-// the kAvx2 case (fused); everywhere else every optimization runs the
-// scalar expression.
+// the fused kAvx2 case.
 func fftDataSpectrum(opt Aec3Optimization, re, im, out *[FftLengthBy2Plus1]float32) {
 	if isAMD64 && opt == OptAvx2 {
 		kernSpectrumAvx2Ref(re, im, out)

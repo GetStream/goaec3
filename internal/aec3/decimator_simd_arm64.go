@@ -2,5 +2,5 @@
 
 package aec3
 
-// dlyDs4HasSimd is true: every arm64 CPU has NEON.
+// dlyDs4HasSimd reports whether the CPU runs dlyDecimateDs4.
 const dlyDs4HasSimd = true

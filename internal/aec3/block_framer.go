@@ -1,10 +1,8 @@
 package aec3
 
-// BlockFramer produces frames consisting of 2 subframes of 80 samples each
-// from 64 sample blocks; it is the reverse of FrameBlocker (block_framer.h).
-// The internal buffers overrun if any other rate of insertion is used. The
-// samples left over between calls are kept in one pointer-free buffer; every
-// band and channel holds the same number of them.
+// BlockFramer produces frames of two subframes of 80 samples from blocks of
+// 64 samples, the reverse of FrameBlocker (block_framer.h). Any other rate
+// of insertion overruns its buffers.
 type BlockFramer struct {
 	numBands    int
 	numChannels int
@@ -12,22 +10,22 @@ type BlockFramer struct {
 	buffer      []float32 // [band][channel][BlockSize]
 }
 
-// NewBlockFramer returns a framer whose buffers start with BlockSize zeros.
+// NewBlockFramer returns a framer whose buffers hold BlockSize zeros.
 func NewBlockFramer(numBands, numChannels int) *BlockFramer {
 	f := &BlockFramer{}
 	f.init(numBands, numChannels, make([]float32, numBands*numChannels*BlockSize))
 	return f
 }
 
-// init sets up a framer that keeps its samples in storage, which holds at
-// least numBands*numChannels*BlockSize zeros.
+// init sets up f in place. storage holds at least
+// numBands*numChannels*BlockSize zeros.
 func (f *BlockFramer) init(numBands, numChannels int, storage []float32) {
 	*f = BlockFramer{numBands: numBands, numChannels: numChannels, fill: BlockSize,
 		buffer: storage[:numBands*numChannels*BlockSize]}
 }
 
-// InsertBlock adds a 64 sample block into the data that will form the next
-// output frame. The buffers must be empty.
+// InsertBlock adds a block to the samples of the next frame. The buffers
+// must be empty.
 func (f *BlockFramer) InsertBlock(block *Block) {
 	if f.fill != 0 {
 		panic("aec3: BlockFramer.InsertBlock called with a non-empty buffer")
@@ -41,8 +39,8 @@ func (f *BlockFramer) InsertBlock(block *Block) {
 	f.fill = BlockSize
 }
 
-// InsertBlockAndExtractSubFrame adds a 64 sample block and extracts an 80
-// sample subframe into subframe subFrameIndex of frame.
+// InsertBlockAndExtractSubFrame adds a block and extracts subframe
+// subFrameIndex of frame.
 func (f *BlockFramer) InsertBlockAndExtractSubFrame(block *Block, frame Frame, subFrameIndex int) {
 	fill := f.fill
 	if fill+BlockSize < SubFrameLength || fill > BlockSize {

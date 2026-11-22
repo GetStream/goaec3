@@ -1,10 +1,10 @@
 package aec3
 
 // Port of adaptive_fir_filter_erl.{h,cc}. Every lane adds the partition
-// responses bin by bin in partition order, so all lanes are bit-identical;
-// the SIMD lanes route bins 0..63 through afirErlBlock.
+// responses bin by bin in partition order, so the lanes agree bit for bit.
 
-// ErlComputer is aec3::ErlComputer (scalar): erl = sum over partitions of H2.
+// ErlComputer mirrors aec3::ErlComputer: erl is the sum of H2 over the
+// partitions.
 func ErlComputer(H2 [][FftLengthBy2Plus1]float32, erl []float32) {
 	erl = erl[:FftLengthBy2Plus1]
 	clear(erl)
@@ -15,12 +15,12 @@ func ErlComputer(H2 [][FftLengthBy2Plus1]float32, erl []float32) {
 	}
 }
 
-// ErlComputerNEON is aec3::ErlComputer_NEON.
+// ErlComputerNEON mirrors aec3::ErlComputer_NEON.
 func ErlComputerNEON(H2 [][FftLengthBy2Plus1]float32, erl []float32) {
 	afirErlComputerSimd(OptNeon, H2, erl)
 }
 
-// ErlComputerSSE2 is aec3::ErlComputer_SSE2.
+// ErlComputerSSE2 mirrors aec3::ErlComputer_SSE2.
 func ErlComputerSSE2(H2 [][FftLengthBy2Plus1]float32, erl []float32) {
 	afirErlComputerSimd(OptSse2, H2, erl)
 }

@@ -2,6 +2,6 @@
 
 package aec3
 
-// dlyDs4HasSimd reports that the CPU runs dlyDecimateDs4, whose 128-bit
-// operations are VEX encoded.
+// dlyDs4HasSimd reports whether the CPU runs dlyDecimateDs4, which is VEX
+// encoded.
 var dlyDs4HasSimd = kernHasAVX

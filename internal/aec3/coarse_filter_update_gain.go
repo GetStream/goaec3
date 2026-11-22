@@ -2,7 +2,7 @@ package aec3
 
 // Port of coarse_filter_update_gain.{h,cc}.
 
-// CoarseFilterUpdateGain computes the fixed-step gain for the coarse filter.
+// CoarseFilterUpdateGain computes the fixed-step gain of the coarse filter.
 type CoarseFilterUpdateGain struct {
 	currentConfig                   CoarseConfiguration
 	targetConfig                    CoarseConfiguration
@@ -20,7 +20,6 @@ func NewCoarseFilterUpdateGain(config CoarseConfiguration, configChangeDurationB
 	return g
 }
 
-// init sets up g in place.
 func (g *CoarseFilterUpdateGain) init(config CoarseConfiguration, configChangeDurationBlocks int) {
 	*g = CoarseFilterUpdateGain{configChangeDurationBlocks: configChangeDurationBlocks}
 	g.SetConfig(config, true)
@@ -33,7 +32,7 @@ func (g *CoarseFilterUpdateGain) HandleEchoPathChange() {
 	g.callCounter = 0
 }
 
-// SetConfig sets a new config, immediately or gradually.
+// SetConfig sets the config, immediately or gradually.
 func (g *CoarseFilterUpdateGain) SetConfig(config CoarseConfiguration, immediateEffect bool) {
 	if immediateEffect {
 		g.oldTargetConfig, g.currentConfig, g.targetConfig = config, config, config
@@ -54,7 +53,7 @@ func (g *CoarseFilterUpdateGain) Compute(renderPower *[FftLengthBy2Plus1]float32
 		g.poorSignalExcitationCounter = 0
 	}
 
-	// Do not update the filter if the render is not sufficiently excited.
+	// No update while the render lacks excitation.
 	g.poorSignalExcitationCounter++
 	if g.poorSignalExcitationCounter < sizePartitions || saturatedCaptureSignal || g.callCounter <= sizePartitions {
 		G.Re = [FftLengthBy2Plus1]float32{}
@@ -62,12 +61,11 @@ func (g *CoarseFilterUpdateGain) Compute(renderPower *[FftLengthBy2Plus1]float32
 		return
 	}
 
-	// Compute mu.
 	var mu [FftLengthBy2Plus1]float32
 	X2 := renderPower
 	kernCoarseMu(X2, g.currentConfig.NoiseGate, g.currentConfig.Rate, &mu)
 
-	// Avoid updating the filter close to narrow bands in the render signals.
+	// No update close to narrow bands of the render signal.
 	renderSignalAnalyzer.MaskRegionsAroundNarrowBands(&mu)
 
 	// G = mu * E.

@@ -1,7 +1,7 @@
 package aec3
 
-// ReverbFrequencyResponse mirrors reverb_frequency_response.h: the frequency
-// response estimate of the reverb tail.
+// ReverbFrequencyResponse estimates the frequency response of the reverb
+// tail (reverb_frequency_response.h).
 type ReverbFrequencyResponse struct {
 	useConservativeTailFrequencyResponse bool
 	averageDecay                         float32
@@ -12,15 +12,14 @@ func NewReverbFrequencyResponse(useConservativeTailFrequencyResponse bool) *Reve
 	return &ReverbFrequencyResponse{useConservativeTailFrequencyResponse: useConservativeTailFrequencyResponse}
 }
 
-// FrequencyResponse returns the estimated frequency response of the reverb.
+// FrequencyResponse returns the estimate.
 func (r *ReverbFrequencyResponse) FrequencyResponse() *[FftLengthBy2Plus1]float32 {
 	return &r.tailResponse
 }
 
-// stAverageDecayWithinFilter is the tail/direct-path energy ratio, skipping
-// the DC bin. Both energies accumulate in bin order; the tail energy is only
-// used with a nonzero direct path, and running the two chains side by side
-// halves the wait for them.
+// stAverageDecayWithinFilter returns the ratio of the tail energy to the
+// direct path energy, without the first bin. Both energies accumulate in bin
+// order; they are independent, so the chains run side by side.
 func stAverageDecayWithinFilter(directPath, tail *[FftLengthBy2Plus1]float32) float32 {
 	var directPathEnergy, tailEnergy float32
 	for k := 1; k < FftLengthBy2Plus1; k++ {
@@ -33,7 +32,7 @@ func stAverageDecayWithinFilter(directPath, tail *[FftLengthBy2Plus1]float32) fl
 	return tailEnergy / directPathEnergy
 }
 
-// Update updates the frequency response estimate of the reverb.
+// Update takes the frequency response of the filter of one block.
 func (r *ReverbFrequencyResponse) Update(frequencyResponse [][FftLengthBy2Plus1]float32, filterDelayBlocks int,
 	linearFilterQuality LinearFilterQuality, stationaryBlock bool) {
 	if stationaryBlock || !linearFilterQuality.Ok {
@@ -53,8 +52,7 @@ func (r *ReverbFrequencyResponse) update(frequencyResponse [][FftLengthBy2Plus1]
 	if r.useConservativeTailFrequencyResponse {
 		kernStdMax(tail[:], r.tailResponse[:], r.tailResponse[:])
 	}
-	// Each bin depends on the updated bin before it, which stays in a
-	// register instead of being read back from the array.
+	// A bin depends on the updated bin before it, which stays in a register.
 	t := &r.tailResponse
 	prev := t[0]
 	for k := 1; k < FftLengthBy2; k++ {

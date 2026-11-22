@@ -4,16 +4,11 @@ package aec3
 
 import "simd/archsimd"
 
-// 64-element forms of the slice helpers in kern_bins_simd128.go and
-// kern_bins_simd_{arm64,amd64}.go. Nearly every call of those helpers covers
-// a block (64 samples) or a spectrum (65 bins), and a loop over slices pays
-// a bounds check and an address computation per slice and step, several
-// times the cost of the vector operation itself. Here the sixteen steps are
-// written out through closures called with constant offsets, so every load
-// and store is base plus displacement and the code is straight-line. The
-// helpers run these for 64 and 65 elements (kernIs64) and finish the 65th
-// with their scalar tail. Each element sees the operations of the helper's
-// loop, so the results are the same bits.
+// 64-element forms of the slice helpers. A helper runs them for 64 and 65
+// elements (kernIs64) and finishes the 65th with its scalar tail. The
+// sixteen steps are closures called with constant offsets, so every access
+// is base plus displacement and the loop over slices pays no bounds check.
+// An element sees the operations of the loop of the helper.
 
 // kernIs64 reports whether a helper over n elements runs its 64-element
 // form.

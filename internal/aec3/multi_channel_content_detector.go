@@ -21,8 +21,8 @@ func supHasStereoContent(frame Frame, detectionThreshold float32) bool {
 	return false
 }
 
-// MultiChannelContentDetector analyzes the render signal to decide whether it
-// carries proper multichannel content.
+// MultiChannelContentDetector decides whether the render signal carries
+// proper multichannel content (multi_channel_content_detector.h).
 type MultiChannelContentDetector struct {
 	detectStereoContent                   bool
 	detectionThreshold                    float32
@@ -35,10 +35,8 @@ type MultiChannelContentDetector struct {
 	consecutiveFramesWithStereo           int64
 }
 
-// NewMultiChannelContentDetector creates a detector. If
-// stereoDetectionTimeoutThresholdSeconds <= 0, no timeout is applied: once
-// multichannel is detected, the detector remains in that state for its
-// lifetime.
+// NewMultiChannelContentDetector mirrors the C++ constructor. With
+// stereoDetectionTimeoutThresholdSeconds <= 0 a detection never times out.
 func NewMultiChannelContentDetector(detectStereoContent bool, numRenderInputChannels int,
 	detectionThreshold float32, stereoDetectionTimeoutThresholdSeconds int,
 	stereoDetectionHysteresisSeconds float32) *MultiChannelContentDetector {
@@ -63,10 +61,8 @@ func (d *MultiChannelContentDetector) init(detectStereoContent bool, numRenderIn
 	}
 }
 
-// UpdateDetection compares the left and right channels in the render frame
-// ([band][channel][sample]) to determine whether the signal is a proper
-// multichannel signal. It returns whether the persistent multichannel state
-// changed.
+// UpdateDetection compares the first two channels of the render frame. It
+// reports whether the persistent multichannel state changed.
 func (d *MultiChannelContentDetector) UpdateDetection(frame Frame) bool {
 	if !d.detectStereoContent {
 		return false
@@ -83,7 +79,6 @@ func (d *MultiChannelContentDetector) UpdateDetection(frame Frame) bool {
 		d.framesSinceStereoDetectedLast++
 	}
 
-	// Detect persistent multichannel content.
 	if d.consecutiveFramesWithStereo > int64(d.stereoDetectionHysteresisFrames) {
 		d.persistentMultichannelContentDetected = true
 	}
@@ -92,7 +87,6 @@ func (d *MultiChannelContentDetector) UpdateDetection(frame Frame) bool {
 		d.persistentMultichannelContentDetected = false
 	}
 
-	// Detect temporary multichannel content.
 	d.temporaryMultichannelContentDetected = !d.persistentMultichannelContentDetected && stereoDetectedInFrame
 
 	return previous != d.persistentMultichannelContentDetected

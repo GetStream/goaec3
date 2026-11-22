@@ -10,9 +10,8 @@ const (
 	BufferingEventApiCallSkew
 )
 
-// RenderDelayBuffer buffers the incoming render blocks such that they may be
-// extracted with a specified delay (render_delay_buffer.h; this is the
-// RenderDelayBufferImpl of render_delay_buffer.cc).
+// RenderDelayBuffer buffers the render blocks and returns them with a given
+// delay (RenderDelayBufferImpl in render_delay_buffer.cc).
 type RenderDelayBuffer struct {
 	*renderDelayBufferState
 	blocks      BlockBuffer
@@ -22,8 +21,8 @@ type RenderDelayBuffer struct {
 	renderMixer AlignmentMixer
 }
 
-// renderDelayBufferState is the state of a RenderDelayBuffer but the slices
-// of its rings and its mixer.
+// renderDelayBufferState is the state of a RenderDelayBuffer except the
+// slices of its rings and its mixer.
 type renderDelayBufferState struct {
 	blocks      blockBufferState
 	spectra     spectrumBufferState
@@ -65,7 +64,6 @@ func NewRenderDelayBuffer(config *EchoCanceller3Config, sampleRateHz, numRenderC
 	return r
 }
 
-// bind makes r the view of st.
 func (r *RenderDelayBuffer) bind(st *renderDelayBufferState, b *binder) {
 	r.renderDelayBufferState = st
 	r.blocks.bind(&st.blocks, b)
@@ -75,7 +73,6 @@ func (r *RenderDelayBuffer) bind(st *renderDelayBufferState, b *binder) {
 	r.renderMixer.bind(&st.renderMixer, b)
 }
 
-// init sets up r in place.
 func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, numRenderChannels int) {
 	st := r.renderDelayBufferState
 	*st = renderDelayBufferState{
@@ -92,8 +89,7 @@ func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, num
 		r.subBlockSize = BlockSize / r.downSamplingFactor
 	}
 	size := GetRenderDelayBufferSize(r.downSamplingFactor, config.Delay.NumFilters, config.Filter.Refined.LengthBlocks)
-	// The block ring and the decimated render ring are allocated together
-	// and hold disjoint parts of the array.
+	// The block ring and the ring of decimated samples share one array.
 	numBands := NumBandsForRate(sampleRateHz)
 	blockSamples := size * numBands * numRenderChannels * BlockSize
 	lowRateSize := GetDownSampledBufferSize(r.downSamplingFactor, config.Delay.NumFilters)
@@ -111,21 +107,21 @@ func (r *RenderDelayBuffer) init(config *EchoCanceller3Config, sampleRateHz, num
 	r.Reset()
 }
 
-// Reset resets the buffer alignment and clears the reported delays.
+// Reset resets the alignment of the buffers and clears the reported delays.
 func (r *RenderDelayBuffer) Reset() {
 	r.lastCallWasRender = false
 	r.numApiCallsInARow = 1
 	r.minLatencyBlocks = 0
 	r.excessRenderDetectionCounter = 0
 
-	// Initialize the read index to one sub-block before the write index.
+	// The read index starts one sub-block before the write index.
 	r.lowRate.Read = r.lowRate.OffsetIndex(r.lowRate.Write, r.subBlockSize)
 
-	// Check for any external audio buffer delay and whether it is feasible.
+	// An external audio buffer delay applies if the headroom allows it.
 	if r.hasExternalAudioBufferDelay {
 		const headroom = 2
 		var audioBufferDelayToSet int
-		// Minimum delay is 1 (like the low-rate render buffer).
+		// The delay is at least 1, as in the low-rate render buffer.
 		if r.externalAudioBufferDelay <= headroom {
 			audioBufferDelayToSet = 1
 		} else {
@@ -133,23 +129,20 @@ func (r *RenderDelayBuffer) Reset() {
 		}
 		audioBufferDelayToSet = min(audioBufferDelayToSet, r.MaxDelay())
 
-		// When an external delay estimate is available, use that delay as the
-		// initial render buffer delay.
 		r.applyTotalDelay(audioBufferDelayToSet)
 		r.delay, r.hasDelay = r.computeDelay(), true
 
 		r.externalAudioBufferDelayVerifiedAfterReset = false
 	} else {
-		// If an external delay estimate is not available, use that delay as
-		// the initial delay. Set the render buffer delays to the default delay.
+		// Without an external estimate the initial delay is the default.
 		r.applyTotalDelay(r.config.Delay.DefaultDelay)
 
-		// Unset the delays which are set by AlignFromDelay.
+		// Unset the delays AlignFromDelay sets.
 		r.hasDelay = false
 	}
 }
 
-// Insert inserts a block into the buffer.
+// Insert adds a block to the buffer.
 func (r *RenderDelayBuffer) Insert(block *Block) BufferingEvent {
 	r.renderCallCounter++
 	if r.hasDelay {
@@ -164,18 +157,15 @@ func (r *RenderDelayBuffer) Insert(block *Block) BufferingEvent {
 		}
 	}
 
-	// Increase the write indices to where the new blocks should be written.
 	previousWrite := r.blocks.Write
 	r.incrementWriteIndices()
 
-	// Allow overrun and do a reset when render overrun occurrs due to more
-	// render data being inserted than capture data is received.
+	// More render than capture data overruns the buffer, which resets it.
 	event := BufferingEventNone
 	if r.renderOverrun() {
 		event = BufferingEventRenderOverrun
 	}
 
-	// Detect and update render activity.
 	if !r.renderActivity {
 		if r.detectActiveRender(block.View(0, 0)) {
 			r.renderActivityCounter++
@@ -183,7 +173,6 @@ func (r *RenderDelayBuffer) Insert(block *Block) BufferingEvent {
 		r.renderActivity = r.renderActivityCounter >= 20
 	}
 
-	// Insert the new render block into the specified position.
 	r.insertBlock(block, previousWrite)
 
 	if event != BufferingEventNone {
@@ -192,14 +181,13 @@ func (r *RenderDelayBuffer) Insert(block *Block) BufferingEvent {
 	return event
 }
 
-// HandleSkippedCaptureProcessing is called on capture blocks where
-// PrepareCaptureProcessing is not called.
+// HandleSkippedCaptureProcessing is called for a capture block that
+// PrepareCaptureProcessing is not called for.
 func (r *RenderDelayBuffer) HandleSkippedCaptureProcessing() {
 	r.captureCallCounter++
 }
 
-// PrepareCaptureProcessing updates the buffers one step for processing
-// another capture block.
+// PrepareCaptureProcessing advances the buffers by one capture block.
 func (r *RenderDelayBuffer) PrepareCaptureProcessing() BufferingEvent {
 	event := BufferingEventNone
 	r.captureCallCounter++
@@ -217,23 +205,20 @@ func (r *RenderDelayBuffer) PrepareCaptureProcessing() BufferingEvent {
 	}
 
 	if r.detectExcessRenderBlocks() {
-		// Too many render blocks compared to capture blocks. Risk of delay
-		// ending up before the filter used by the delay estimator.
+		// Too many render blocks for the capture blocks: the delay may end
+		// up before the filter of the delay estimator.
 		r.Reset()
 		event = BufferingEventRenderOverrun
 	} else if r.renderUnderrun() {
-		// Don't increment the read indices of the low rate buffer if there is
-		// a render underrun.
+		// An underrun does not advance the read indices of the low rate
+		// buffer.
 		r.incrementReadIndices()
-		// Incrementing the buffer index without increasing the low rate buffer
-		// index means that the delay is reduced by one.
+		// Advancing the buffer index alone reduces the delay by one.
 		if r.hasDelay && r.delay > 0 {
 			r.delay--
 		}
 		event = BufferingEventRenderUnderrun
 	} else {
-		// Increment the read indices in the render buffers to point to the
-		// most recent block to use in the capture processing.
 		r.incrementLowRateReadIndices()
 		r.incrementReadIndices()
 	}
@@ -246,7 +231,8 @@ func (r *RenderDelayBuffer) PrepareCaptureProcessing() BufferingEvent {
 	return event
 }
 
-// AlignFromDelay sets the buffer delay and returns whether it changed.
+// AlignFromDelay sets the delay of the buffer and reports whether it
+// changed.
 func (r *RenderDelayBuffer) AlignFromDelay(delay int) bool {
 	if !r.externalAudioBufferDelayVerifiedAfterReset && r.hasExternalAudioBufferDelay && r.hasDelay {
 		r.externalAudioBufferDelayVerifiedAfterReset = true
@@ -256,28 +242,25 @@ func (r *RenderDelayBuffer) AlignFromDelay(delay int) bool {
 	}
 	r.delay, r.hasDelay = delay, true
 
-	// Compute the total delay and limit the delay to the allowed range.
 	totalDelay := r.mapDelayToTotalDelay(r.delay)
 	totalDelay = min(r.MaxDelay(), max(totalDelay, 0))
 
-	// Apply the delay to the buffers.
 	r.applyTotalDelay(totalDelay)
 	return true
 }
 
-// SetAudioBufferDelay provides an external estimate of the audio buffer
-// delay in milliseconds.
+// SetAudioBufferDelay sets an external estimate of the audio buffer delay.
 func (r *RenderDelayBuffer) SetAudioBufferDelay(delayMs int) {
-	// Convert delay from milliseconds to blocks (rounded down).
+	// Milliseconds to blocks, rounded down.
 	r.externalAudioBufferDelay = int(int32(delayMs) / 4)
 	r.hasExternalAudioBufferDelay = true
 }
 
-// HasReceivedBufferDelay reports whether SetAudioBufferDelay has been called.
+// HasReceivedBufferDelay reports whether SetAudioBufferDelay was called.
 func (r *RenderDelayBuffer) HasReceivedBufferDelay() bool { return r.hasExternalAudioBufferDelay }
 
-// AlignFromExternalDelay sets the buffer delay from the most recently
-// reported external delay.
+// AlignFromExternalDelay sets the delay of the buffer from the external
+// estimate.
 func (r *RenderDelayBuffer) AlignFromExternalDelay() {
 	if r.hasExternalAudioBufferDelay {
 		delay := r.renderCallCounter - r.captureCallCounter + int64(r.externalAudioBufferDelay)
@@ -286,23 +269,23 @@ func (r *RenderDelayBuffer) AlignFromExternalDelay() {
 	}
 }
 
-// Delay returns the buffer delay. The C++ returns it as size_t; a negative
-// value here corresponds to the wrapped C++ value.
+// Delay returns the delay of the buffer. A negative value is the wrapped
+// size_t of the C++.
 func (r *RenderDelayBuffer) Delay() int { return r.computeDelay() }
 
-// MaxDelay returns the maximum buffer delay.
+// MaxDelay returns the largest delay of the buffer.
 func (r *RenderDelayBuffer) MaxDelay() int { return r.blocks.Size - 1 - r.bufferHeadroom }
 
 // GetRenderBuffer returns the render buffer for the echo remover: a view of
-// the rings of r as they are now, to be fetched again after r changes.
+// the rings as they are, to fetch again after r changes.
 func (r *RenderDelayBuffer) GetRenderBuffer() *RenderBuffer {
 	b := r.renderBuffer()
 	return &b
 }
 
-// renderBuffer returns the render buffer for the echo remover over the
-// rings of r. insertBlock writes the FFT and its spectrum to the same slot,
-// and the indices of the two rings move together.
+// renderBuffer returns a RenderBuffer over the rings of r. insertBlock
+// writes an FFT and its spectrum to the same slot, and the indices of the
+// two rings move together (SpectraMatchFfts).
 func (r *RenderDelayBuffer) renderBuffer() RenderBuffer {
 	return RenderBuffer{blockBuffer: &r.blocks, spectrumBuffer: &r.spectra, fftBuffer: &r.ffts,
 		renderActivity: r.echoRemoverRenderActivity, spectraMatchFfts: true}
@@ -311,20 +294,19 @@ func (r *RenderDelayBuffer) renderBuffer() RenderBuffer {
 // GetDownsampledRenderBuffer returns the downsampled render buffer.
 func (r *RenderDelayBuffer) GetDownsampledRenderBuffer() *DownsampledRenderBuffer { return &r.lowRate }
 
-// BufferLatency returns the number of unread sub-blocks in the buffer.
+// BufferLatency returns the number of unread sub-blocks.
 func (r *RenderDelayBuffer) BufferLatency() int {
 	l := &r.lowRate
 	latencySamples := (len(l.Buffer) + l.Read - l.Write) % len(l.Buffer)
 	return latencySamples / r.subBlockSize
 }
 
-// mapDelayToTotalDelay maps the externally computed delay to the delay used
-// internally.
+// mapDelayToTotalDelay maps an external delay to the delay of the buffers.
 func (r *RenderDelayBuffer) mapDelayToTotalDelay(externalDelayBlocks int) int {
 	return r.BufferLatency() + externalDelayBlocks
 }
 
-// computeDelay returns the delay (not including call jitter).
+// computeDelay returns the delay without the call jitter.
 func (r *RenderDelayBuffer) computeDelay() int {
 	latencyBlocks := r.BufferLatency()
 	var internalDelay int
@@ -336,14 +318,14 @@ func (r *RenderDelayBuffer) computeDelay() int {
 	return internalDelay - latencyBlocks
 }
 
-// applyTotalDelay sets the read indices according to the delay.
+// applyTotalDelay sets the read indices for delay.
 func (r *RenderDelayBuffer) applyTotalDelay(delay int) {
 	r.blocks.Read = r.blocks.OffsetIndex(r.blocks.Write, -delay)
 	r.spectra.Read = r.spectra.OffsetIndex(r.spectra.Write, delay)
 	r.ffts.Read = r.ffts.OffsetIndex(r.ffts.Write, delay)
 }
 
-// insertBlock inserts a block into the render buffers.
+// insertBlock writes block and what derives from it to the rings.
 func (r *RenderDelayBuffer) insertBlock(block *Block, previousWrite int) {
 	b := &r.blocks
 	lr := &r.lowRate
@@ -378,7 +360,7 @@ func (r *RenderDelayBuffer) insertBlock(block *Block, previousWrite int) {
 	for i := range ds {
 		out[i] = ds[len(ds)-1-i]
 	}
-	// The channels are transformed two at a time, then a last one alone.
+	// Two channels per transform pair, then a last one alone.
 	prev := b.At(previousWrite)
 	X := f.At(f.Write)
 	channel := 0
@@ -406,23 +388,19 @@ func (r *RenderDelayBuffer) detectActiveRender(x []float32) bool {
 func (r *RenderDelayBuffer) detectExcessRenderBlocks() bool {
 	excessRenderDetected := false
 	latencyBlocks := r.BufferLatency()
-	// The recently seen minimum latency in blocks. Should be close to 0.
+	// The smallest latency seen lately, in blocks. It stays close to 0.
 	r.minLatencyBlocks = min(r.minLatencyBlocks, latencyBlocks)
-	// After processing a configurable number of blocks the minimum latency is
-	// checked.
 	r.excessRenderDetectionCounter++
 	if r.excessRenderDetectionCounter >= r.config.Buffering.ExcessRenderDetectionIntervalBlocks {
-		// If the minimum latency is not lower than the threshold there have
-		// been more render than capture frames.
+		// A minimum latency above the threshold means more render than
+		// capture frames.
 		excessRenderDetected = r.minLatencyBlocks > r.config.Buffering.MaxAllowedExcessRenderBlocks
-		// Reset the counter and let the minimum latency be the current latency.
 		r.minLatencyBlocks = latencyBlocks
 		r.excessRenderDetectionCounter = 0
 	}
 	return excessRenderDetected
 }
 
-// incrementWriteIndices increments the write indices for the render buffers.
 func (r *RenderDelayBuffer) incrementWriteIndices() {
 	r.lowRate.UpdateWriteIndex(-r.subBlockSize)
 	r.blocks.IncWriteIndex()
@@ -430,13 +408,10 @@ func (r *RenderDelayBuffer) incrementWriteIndices() {
 	r.ffts.DecWriteIndex()
 }
 
-// incrementLowRateReadIndices increments the read indices of the low rate
-// render buffers.
 func (r *RenderDelayBuffer) incrementLowRateReadIndices() {
 	r.lowRate.UpdateReadIndex(-r.subBlockSize)
 }
 
-// incrementReadIndices increments the read indices for the render buffers.
 func (r *RenderDelayBuffer) incrementReadIndices() {
 	if r.blocks.Read != r.blocks.Write {
 		r.blocks.IncReadIndex()
@@ -445,12 +420,10 @@ func (r *RenderDelayBuffer) incrementReadIndices() {
 	}
 }
 
-// renderOverrun checks for a render buffer overrun.
 func (r *RenderDelayBuffer) renderOverrun() bool {
 	return r.lowRate.Read == r.lowRate.Write || r.blocks.Read == r.blocks.Write
 }
 
-// renderUnderrun checks for a render buffer underrun.
 func (r *RenderDelayBuffer) renderUnderrun() bool {
 	return r.lowRate.Read == r.lowRate.Write
 }

@@ -4,15 +4,14 @@ package aec3
 
 import "simd/archsimd"
 
-// SSE2 and AVX2 kernels for adaptive_fir_filter{,_avx2}.cc and
-// adaptive_fir_filter_erl{,_avx2}.cc. Each kernel processes bins 0..63 of one
-// FftData with the operation order of the libwebrtc intrinsics. Only the
-// AVX2 frequency response is fused (_mm256_fmadd_ps -> MulAdd).
+// SSE2 and AVX2 kernels of adaptive_fir_filter{,_avx2}.cc and
+// adaptive_fir_filter_erl{,_avx2}.cc. A kernel processes bins 0..63 of one
+// FftData in the operation order of the libwebrtc intrinsics. Only the AVX2
+// frequency response is fused.
 //
-// archsimd's 128-bit float ops are VEX encoded (CPU feature AVX); they round
-// exactly like the SSE2 instructions, so the SSE2 lane uses them when AVX is
-// present and its pure-Go reference otherwise. The NEON lane runs its pure-Go
-// reference.
+// The 128-bit archsimd operations are VEX encoded and round like the SSE2
+// instructions: the SSE2 lane runs them on CPUs with AVX and its pure-Go
+// reference otherwise. The NEON lane runs its pure-Go reference.
 
 var (
 	afirHasAVX     = archsimd.X86.AVX()
@@ -100,7 +99,7 @@ func afirAdaptBlockAVX2(x, g, h *FftData) {
 	archsimd.ClearAVXUpperBits()
 }
 
-// afirFreqRespBlockAVX2: re2 = re*re; re2 = _mm256_fmadd_ps(im, im, re2).
+// afirFreqRespBlockAVX2 is h2 = max(h2, _mm256_fmadd_ps(im, im, re*re)).
 func afirFreqRespBlockAVX2(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 	for j := 0; j < FftLengthBy2; j += 8 {
 		re := archsimd.LoadFloat32x8Array((*[8]float32)(h.Re[j : j+8]))
@@ -160,15 +159,14 @@ func afirFreqRespBlock(opt Aec3Optimization, h *FftData, h2 *[FftLengthBy2Plus1]
 	}
 }
 
-// afirHasTermKernels reports that afirApplyTerms/afirAdaptTerms are archsimd
-// kernels. Every lane computes the same rounded products and per-bin
-// accumulation order, so one kernel serves the NEON, SSE2 and AVX2 lanes;
-// 256-bit code needs AVX2, 128-bit code AVX.
+// afirHasTermKernels reports whether afirApplyTerms and afirAdaptTerms replace
+// the per-partition loops. The lanes agree bin for bin, so one kernel serves
+// the NEON, SSE2 and AVX2 lanes.
 var afirHasTermKernels = afirHasAVX
 
 // afirApplyTerms is afirApplyTermsGo with the bin loop outside the pair loop:
-// a block of S stays in registers while all pairs accumulate into it, in
-// pair order, starting from +0.
+// a block of s stays in registers while the pairs accumulate into it in pair
+// order from +0.
 func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 	hs = hs[:len(xs)]
 	if afirHasAVX2 {
@@ -245,8 +243,8 @@ func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 	s.Re[n], s.Im[n] = re, im
 }
 
-// afirAdaptTerms is afirAdaptTermsGo with a block of G held in registers
-// across all pairs.
+// afirAdaptTerms is afirAdaptTermsGo with a block of g held in registers
+// across the pairs.
 func afirAdaptTerms(xs, hs []*FftData, g *FftData) {
 	hs = hs[:len(xs)]
 	if afirHasAVX2 {
@@ -327,22 +325,21 @@ func afirErlBlock(opt Aec3Optimization, h2, erl *[FftLengthBy2Plus1]float32) {
 	}
 }
 
-// afirHasNeonFreqResp is false: the NEON lane runs afirFreqRespBlock per
-// channel.
+// afirHasNeonFreqResp reports whether afirFreqRespPartitionNEON exists.
 const afirHasNeonFreqResp = false
 
 func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 	panic("aec3: no NEON frequency response kernel")
 }
 
-// afirMaxAbsUpdate is afirMaxAbsUpdateGo: the ordered compare of the absolute
-// values is false for a NaN on either side, which keeps ir.
+// afirMaxAbsUpdate is afirMaxAbsUpdateGo. The ordered compare is false for a
+// NaN on either side, which keeps ir.
 func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) {
 	if !afirHasAVX {
 		afirMaxAbsUpdateGo(ir, h)
 		return
 	}
-	// Float32x4.Abs builds its mask with VPBROADCASTD, an AVX2 instruction.
+	// Float32x4.Abs builds its mask with an AVX2 instruction.
 	abs := kernSplatI4(0x7fffffff)
 	for k := 0; k < FftLengthBy2; k += 4 {
 		p := (*[4]float32)(ir[k : k+4])
@@ -354,19 +351,16 @@ func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) {
 	}
 }
 
-// afirHasX86FreqResp reports whether afirFreqRespPartitionX86 runs the
-// lane: SSE2 with AVX (VEX encoding), AVX2 with FMA.
+// afirHasX86FreqResp reports whether afirFreqRespPartitionX86 runs the lane:
+// SSE2 needs AVX, AVX2 needs FMA.
 func afirHasX86FreqResp(opt Aec3Optimization) bool {
 	return opt == OptSse2 && afirHasAVX || opt == OptAvx2 && afirHasAVX2FMA
 }
 
 // afirFreqRespPartitionX86 computes one partition of
-// ComputeFrequencyResponse_Sse2 or _Avx2: H2 = +0, then
-// H2 = _mm_max_ps(H2, |H[ch]|^2) for every channel in order (bin 64 with
-// std::max), with sixteen bins held in registers across the channels
-// instead of being cleared, loaded and stored per channel. It tests the CPU
-// features itself, as afirHasX86FreqResp does, so that every vector
-// instruction follows a test of its feature (TestSimdInstructionsGated).
+// ComputeFrequencyResponse_Sse2 or _Avx2: h2 = +0, then the maximum with the
+// response of every channel in order, sixteen bins held in registers across
+// the channels. It tests the CPU features itself (TestSimdInstructionsGated).
 func afirFreqRespPartitionX86(opt Aec3Optimization, hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 	switch {
 	case opt == OptAvx2 && afirHasAVX2FMA:

@@ -4,7 +4,7 @@ package aec3
 
 import "simd/archsimd"
 
-// archsimd (NEON) kernels for the kern_bins.go helpers.
+// NEON archsimd kernels of the kern_bins.go helpers.
 
 func kernScale(x []float32, a float32, z []float32) {
 	z = z[:len(x)]
@@ -75,9 +75,8 @@ func kernSub(x, y, z []float32) {
 	}
 }
 
-// kernSumRows keeps the 64 bins of dst in sixteen registers while all rows
-// accumulate into them, in row order starting from +0: one pass over the
-// rows, and the additions of a row do not wait for each other.
+// kernSumRows keeps the 64 bins of dst in sixteen registers while the rows
+// accumulate into them in row order from +0.
 func kernSumRows(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]float32) {
 	var a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15 f32x4
 	for _, r := range rows {
@@ -123,8 +122,8 @@ func kernSumRows(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]flo
 	dst[FftLengthBy2] = last
 }
 
-// kernUnpack deinterleaves v into re[0..63] (even) and im[0..63] (odd),
-// then moves the Nyquist real part from im[0] to re[64].
+// kernUnpack deinterleaves v into re[0..63] and im[0..63], then moves the
+// real part of the last bin from im[0] to re[64].
 func kernUnpack(v *[FftLength]float32, re, im *[FftLengthBy2Plus1]float32) {
 	var zero f32x4
 	f := func(k int) {
@@ -151,8 +150,8 @@ func kernUnpack(v *[FftLength]float32, re, im *[FftLengthBy2Plus1]float32) {
 	im[FftLengthBy2] = 0
 }
 
-// kernPack interleaves re[0..63] and im[0..63] into v, then puts the Nyquist
-// real part re[64] in v[1].
+// kernPack interleaves re[0..63] and im[0..63] into v, then stores the real
+// part of the last bin, re[64], in v[1].
 func kernPack(re, im *[FftLengthBy2Plus1]float32, v *[FftLength]float32) {
 	var zero f32x4
 	f := func(k int) {
@@ -180,14 +179,15 @@ func kernPack(re, im *[FftLengthBy2Plus1]float32, v *[FftLength]float32) {
 // kernMinMaxFast reports whether kernMinMax has a fast path.
 const kernMinMaxFast = true
 
-// kernMinMax returns the minimum and maximum of x with ok = true when they
-// are exact for every compare-loop formulation (first or last occurrence,
-// strict or non-strict comparisons, std::min_element/std::max_element and
-// the pairwise std::minmax_element): FMIN/FMAX give the same extreme values
-// as such loops unless a NaN is present (FMIN/FMAX propagate it, the loops
-// skip or pick it by position) or an extreme is zero (the loops pick -0 or
-// +0 by position). Those cases return ok = false and the caller runs its
-// own loop. Any other extreme value has a single bit pattern.
+// kernMinMax returns the minimum and the maximum of x. ok reports whether
+// they are those of every compare loop: first or last occurrence, strict or
+// not, std::min_element, std::max_element and the pairwise
+// std::minmax_element.
+//
+// FMIN and FMAX find the extremes of such loops unless x holds a NaN, which
+// they propagate and the loops skip or pick by position, or an extreme is
+// zero, where the loops pick -0 or +0 by position. Then ok is false and the
+// caller runs its loop. Any other extreme has one bit pattern.
 func kernMinMax(x []float32) (mn, mx float32, ok bool) {
 	if len(x) >= 8 {
 		var vmn, vmx f32x4
@@ -215,7 +215,7 @@ func kernMinMax(x []float32) (mn, mx float32, ok bool) {
 	return 0, 0, false
 }
 
-// kernClamp is kernClampGeneric: std::min(std::max(x, lo), hi).
+// kernClamp is kernClampGeneric.
 func kernClamp(x []float32, lo, hi float32) {
 	if kernIs64(len(x)) {
 		if len(x) == 65 {
@@ -238,7 +238,8 @@ func kernClamp(x []float32, lo, hi float32) {
 	}
 }
 
-// kernHas128 reports whether the 128-bit kernels run (always on arm64).
+// kernHas128 reports whether the CPU runs the kernels of
+// kern_bins_simd128.go.
 const kernHas128 = true
 
 // kernMinMaxStep folds x[k:k+4] into the lane minima and maxima.

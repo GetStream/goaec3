@@ -1,14 +1,14 @@
 package aec3
 
-// SubtractorOutputAnalyzer mirrors subtractor_output_analyzer.h: analyzes
-// the properties of the subtractor output.
+// SubtractorOutputAnalyzer analyzes the properties of the subtractor output
+// (subtractor_output_analyzer.h).
 type SubtractorOutputAnalyzer struct {
 	*subtractorOutputAnalyzerState
 	more *soaMore // with more than inlineChannels channels
 }
 
 // subtractorOutputAnalyzerState is the state of a SubtractorOutputAnalyzer
-// but its pointer.
+// except its pointer.
 type subtractorOutputAnalyzerState struct {
 	numCaptureChannels int
 	filtersConverged   [inlineChannels]bool
@@ -20,7 +20,6 @@ type soaMore struct {
 	filtersConverged []bool
 }
 
-// bind makes s the view of st.
 func (s *SubtractorOutputAnalyzer) bind(st *subtractorOutputAnalyzerState, b *binder) {
 	s.subtractorOutputAnalyzerState = st
 	if b != nil {
@@ -35,7 +34,6 @@ func NewSubtractorOutputAnalyzer(numCaptureChannels int) *SubtractorOutputAnalyz
 	return s
 }
 
-// init sets up s in place.
 func (s *SubtractorOutputAnalyzer) init(numCaptureChannels int) {
 	st := s.subtractorOutputAnalyzerState
 	*st = subtractorOutputAnalyzerState{numCaptureChannels: numCaptureChannels}
@@ -46,7 +44,7 @@ func (s *SubtractorOutputAnalyzer) init(numCaptureChannels int) {
 	}
 }
 
-// Update analyzes the subtractor output.
+// Update takes the subtractor output of one block.
 func (s SubtractorOutputAnalyzer) Update(subtractorOutput []SubtractorOutput) (anyFilterConverged, anyCoarseFilterConverged, allFiltersDiverged bool) {
 	allFiltersDiverged = true
 	filtersConverged := s.ConvergedFilters()
@@ -69,7 +67,7 @@ func (s SubtractorOutputAnalyzer) Update(subtractorOutput []SubtractorOutput) (a
 	return
 }
 
-// ConvergedFilters returns the per-channel convergence flags.
+// ConvergedFilters returns the convergence flags, one per channel.
 func (s SubtractorOutputAnalyzer) ConvergedFilters() []bool {
 	if s.more != nil {
 		return s.more.filtersConverged

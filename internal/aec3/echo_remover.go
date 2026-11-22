@@ -1,6 +1,7 @@
 package aec3
 
-// Port of echo_remover.{h,cc} (the EchoRemover interface and EchoRemoverImpl).
+// Port of echo_remover.{h,cc}: the EchoRemover interface and
+// EchoRemoverImpl.
 
 // EchoControlMetrics mirrors EchoControl::Metrics (api/audio/echo_control.h).
 type EchoControlMetrics struct {
@@ -11,9 +12,7 @@ type EchoControlMetrics struct {
 
 // EchoRemover removes the echo from the capture signal.
 //
-// Its components are part of the EchoRemover, as is the per-channel state of
-// up to inlineChannels capture channels. The components that hold pointers
-// come first.
+// The components that hold pointers come first.
 type EchoRemover struct {
 	*echoRemoverState
 	more       *erMore // with more than inlineChannels channels
@@ -25,7 +24,7 @@ type EchoRemover struct {
 	suppressionFilter SuppressionFilter
 }
 
-// echoRemoverState is the state of an EchoRemover but its pointers.
+// echoRemoverState is the state of an EchoRemover except its pointers.
 type echoRemoverState struct {
 	_                     noCopy
 	aecState              aecStateState
@@ -52,9 +51,8 @@ type echoRemoverState struct {
 	erChannels
 }
 
-// erChannels is the per-channel state of an EchoRemover with up to
-// inlineChannels capture channels; all but channels is per-block scratch
-// (the C++ stack/heap channel data).
+// erChannels is the per-channel state of an EchoRemover. All but channels is
+// scratch of one block.
 type erChannels struct {
 	channels             [inlineChannels]erChannel
 	Y2                   [inlineChannels][FftLengthBy2Plus1]float32
@@ -86,16 +84,15 @@ type erMore struct {
 	subtractorOutput     []SubtractorOutput
 }
 
-// erChannel is the state of one capture channel that only the EchoRemover
-// reads: the previous block of the capture signal and of the linear filter
-// output, and the current linear filter output.
+// erChannel holds what the EchoRemover keeps of one capture channel: the
+// previous block of the capture signal and of the linear filter output, and
+// the current linear filter output.
 type erChannel struct {
 	eOld [FftLengthBy2]float32
 	yOld [FftLengthBy2]float32
 	e    [FftLengthBy2]float32
 }
 
-// bind makes e the view of st.
 func (e *EchoRemover) bind(st *echoRemoverState, b *binder) {
 	e.echoRemoverState = st
 	if b != nil {
@@ -108,15 +105,14 @@ func (e *EchoRemover) bind(st *echoRemoverState, b *binder) {
 	e.suppressionFilter.bind(&st.suppressionFilter, b)
 }
 
-// NewEchoRemover mirrors EchoRemover::Create; the optimization is
-// DetectOptimization().
+// NewEchoRemover mirrors EchoRemover::Create in the lane of
+// DetectOptimization.
 func NewEchoRemover(config *EchoCanceller3Config, sampleRateHz, numRenderChannels, numCaptureChannels int) *EchoRemover {
 	return NewEchoRemoverWithOptimization(config, sampleRateHz, numRenderChannels, numCaptureChannels,
 		DetectOptimization())
 }
 
-// NewEchoRemoverWithOptimization creates an EchoRemover that runs the given
-// optimization lane instead of DetectOptimization().
+// NewEchoRemoverWithOptimization is NewEchoRemover in the given lane.
 func NewEchoRemoverWithOptimization(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int, optimization Aec3Optimization) *EchoRemover {
 	e := &EchoRemover{}
@@ -125,7 +121,6 @@ func NewEchoRemoverWithOptimization(config *EchoCanceller3Config, sampleRateHz, 
 	return e
 }
 
-// init sets up e in place.
 func (e *EchoRemover) init(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int, optimization Aec3Optimization) {
 	if !ValidFullBandRate(sampleRateHz) {
@@ -168,19 +163,19 @@ func (e *EchoRemover) init(config *EchoCanceller3Config, sampleRateHz, numRender
 	e.aecState.initDefault(&e.config, numCaptureChannels, make([]float32, aecStorageSize(&e.config, numCaptureChannels)))
 }
 
-// GetMetrics returns the current metrics. DelayMs is left at zero; the
-// EchoRemover does not set it.
+// GetMetrics returns the current metrics. It leaves DelayMs at zero.
 func (e *EchoRemover) GetMetrics() EchoControlMetrics {
-	// Echo return loss (ERL) is inverted to go from gain to attenuation.
+	// The ERL is inverted: from gain to attenuation.
 	return EchoControlMetrics{
 		EchoReturnLoss:            -10.0 * float64(Log10f(e.aecState.ErlTimeDomain())),
 		EchoReturnLossEnhancement: float64(Log2TodB(e.aecState.FullBandErleLog2())),
 	}
 }
 
-// ProcessCapture removes the echo from one capture block. externalDelay is nil
-// when absent; linearOutput is nil when the linear AEC output is not exported.
-// The render signal is assumed to be pre-aligned with the capture signal.
+// ProcessCapture removes the echo from one capture block, which the render
+// signal is aligned with. externalDelay is nil without an external delay
+// estimate; linearOutput is nil when the output of the linear filter is not
+// wanted.
 func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, captureSignalSaturation bool,
 	externalDelay *DelayEstimate, renderBuffer *RenderBuffer, linearOutput, capture *Block) {
 	e.blockCounter++
@@ -206,7 +201,7 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 	e.aecState.UpdateCaptureSaturation(captureSignalSaturation)
 
 	if echoPathVariability.AudioPathChanged() {
-		// Ensure that the gain change is only acted on once per frame.
+		// A gain change is acted on once per frame.
 		if echoPathVariability.GainChange {
 			if e.gainChangeHangover == 0 {
 				const maxBlocksPerFrame = 3
@@ -227,19 +222,15 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 		e.gainChangeHangover--
 	}
 
-	// Analyze the render signal.
 	e.renderSignalAnalyzer.Update(renderBuffer, e.aecState.MinDirectPathFilterDelay(), true)
 
-	// State transition.
 	if e.aecState.TransitionTriggered() {
 		e.subtractor.ExitInitialState()
 		e.suppressionGain.SetInitialState(false)
 	}
 
-	// Perform linear echo cancellation.
 	e.subtractor.Process(renderBuffer, y, &e.renderSignalAnalyzer, &e.aecState, subtractorOutput)
 
-	// Compute spectra.
 	for ch := range channels {
 		c := &channels[ch]
 		e.formLinearFilterOutput(&subtractorOutput[ch], &c.e)
@@ -253,35 +244,29 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 		E[ch].Spectrum(e.optimization, E2[ch][:])
 	}
 
-	// Optionally return the linear filter output.
 	if linearOutput != nil {
 		for ch := 0; ch < nch; ch++ {
 			copy(linearOutput.View(0, ch), channels[ch].e[:])
 		}
 	}
 
-	// Update the AEC state information.
 	e.aecState.Update(externalDelay, e.subtractor.FilterFrequencyResponses(), e.subtractor.FilterImpulseResponses(),
 		renderBuffer, E2, Y2, subtractorOutput)
 
-	// Choose the linear output.
 	YFft := Y
 	if e.aecState.UseLinearFilterOutput() {
 		YFft = E
 	}
 
-	// Estimate the comfort noise.
 	e.cng.Compute(e.aecState.SaturatedCapture(), Y2, comfortNoise, highBandComfortNoise)
 
-	// Only do the below processing if the output of the audio processing
-	// module is used.
+	// The rest runs only when the output is used.
 	G := &e.G
 	if e.captureOutputUsed {
-		// Estimate the residual echo power.
 		e.residualEchoEstimator.Estimate(&e.aecState, renderBuffer, S2Linear, Y2,
 			e.suppressionGain.IsDominantNearend(), R2, R2Unbounded)
 
-		// Suppressor nearend estimate.
+		// The nearend estimate of the suppressor.
 		if e.aecState.UsableLinearEstimate() {
 			// E2 is bound by Y2.
 			for ch := 0; ch < nch; ch++ {
@@ -293,16 +278,14 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 			nearendSpectrum = E2
 		}
 
-		// Suppressor echo estimate.
+		// The echo estimate of the suppressor.
 		echoSpectrum := R2
 		if e.aecState.UsableLinearEstimate() {
 			echoSpectrum = S2Linear
 		}
 
-		// Determine if the suppressor should assume clock drift.
 		clockDrift := e.config.EchoRemovalControl.HasClockDrift || echoPathVariability.ClockDrift
 
-		// Compute preferred gains.
 		var highBandsGain float32
 		e.suppressionGain.GetGain(nearendSpectrum, echoSpectrum, R2, R2Unbounded, e.cng.NoiseSpectrum(),
 			&e.renderSignalAnalyzer, &e.aecState, &x, clockDrift, &highBandsGain, G)
@@ -312,37 +295,33 @@ func (e *EchoRemover) ProcessCapture(echoPathVariability EchoPathVariability, ca
 		*G = [FftLengthBy2Plus1]float32{}
 	}
 
-	// Update the metrics.
 	e.metrics.Update(&e.aecState, &e.cng.NoiseSpectrum()[0], G)
 }
 
-// UpdateEchoLeakageStatus reports whether echo leakage is detected in the
-// output of the echo remover.
+// UpdateEchoLeakageStatus tells the remover whether echo leaks into its
+// output.
 func (e *EchoRemover) UpdateEchoLeakageStatus(leakageDetected bool) {
 	e.echoLeakageDetected = leakageDetected
 }
 
-// SetCaptureOutputUsage tells the remover whether its output is used. When it
-// is not, the residual echo estimation and the suppression are skipped.
+// SetCaptureOutputUsage tells the remover whether its output is used. An
+// unused output skips the residual echo estimation and the suppression.
 func (e *EchoRemover) SetCaptureOutputUsage(captureOutputUsed bool) {
 	e.captureOutputUsed = captureOutputUsed
 }
 
-// formLinearFilterOutput selects which of the coarse and refined linear filter
-// outputs is most appropriate to pass to the suppressor and forms the linear
-// filter output by smoothly transitioning between those.
+// formLinearFilterOutput selects the coarse or the refined filter output for
+// the suppressor and fades to it from the one selected before.
 func (e *EchoRemover) formLinearFilterOutput(so *SubtractorOutput, output *[FftLengthBy2]float32) {
 	useRefinedOutput := true
 	if e.useCoarseFilterOutput {
-		// As the output of the refined adaptive filter generally should be
-		// better than the coarse filter output, add a margin and threshold for
-		// when choosing the coarse filter output.
+		// The refined output is the better one as a rule: the coarse output
+		// needs a margin to be chosen.
 		if so.E2CoarseSum < float32(0.9*so.E2RefinedSum) && so.Y2 > 30*30*BlockSize &&
 			(so.S2Refined > 60*60*BlockSize || so.S2Coarse > 60*60*BlockSize) {
 			useRefinedOutput = false
 		} else if so.E2CoarseSum < so.E2RefinedSum && so.Y2 < so.E2RefinedSum {
-			// If the refined filter is diverged, choose the filter output that
-			// has the lowest power.
+			// A diverged refined filter: the output of lower power.
 			useRefinedOutput = false
 		}
 	}
@@ -359,14 +338,14 @@ func (e *EchoRemover) formLinearFilterOutput(so *SubtractorOutput, output *[FftL
 	e.refinedFilterOutputLastSelected = useRefinedOutput
 }
 
-// erLinearEchoPower computes the power of the difference between Y and E.
+// erLinearEchoPower sets S2 to the power of Y - E.
 func erLinearEchoPower(E, Y *FftData, S2 *[FftLengthBy2Plus1]float32) {
 	kernDiffPower(Y.Re[:], E.Re[:], Y.Im[:], E.Im[:], S2[:])
 }
 
-// erSignalTransition fades between two input signals using a fixed-size
-// transition. As in the C++ (ArrayView equality), from and to are compared by
-// identity, not by content.
+// erSignalTransition fades from one signal to another over a fixed
+// transition. It compares from and to by identity, as ArrayView equality
+// does.
 func erSignalTransition(from, to *[BlockSize]float32, out *[FftLengthBy2]float32) {
 	if from == to {
 		*out = *to

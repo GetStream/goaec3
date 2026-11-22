@@ -11,7 +11,7 @@ type SubbandNearendDetectionConfig struct {
 }
 
 // SubbandNearendDetector detects nearend activity from the power in two
-// subbands.
+// subbands (subband_nearend_detector.h).
 type SubbandNearendDetector struct {
 	config                SubbandNearendDetectionConfig
 	numCaptureChannels    int
@@ -27,7 +27,6 @@ func NewSubbandNearendDetector(config *SubbandNearendDetectionConfig, numCapture
 	return d
 }
 
-// init sets up d in place.
 func (d *SubbandNearendDetector) init(config *SubbandNearendDetectionConfig, numCaptureChannels int) {
 	*d = SubbandNearendDetector{
 		config:                *config,
@@ -61,16 +60,13 @@ func (d *SubbandNearendDetector) Update(nearendSpectrum, _,
 		var nearend [FftLengthBy2Plus1]float32
 		smoothers[ch].Average(nearendSpectrum[ch][:], nearend[:])
 
-		// Noise power of the first region.
 		noisePower := supSumRange(noise[s1.Low:s1.High+1]) * d.oneOverSubbandLength1
 
-		// Nearend power of the first region.
 		nearendPowerSubband1 := supSumRange(nearend[s1.Low:s1.High+1]) * d.oneOverSubbandLength1
 
-		// Nearend power of the second region.
 		nearendPowerSubband2 := supSumRange(nearend[s2.Low:s2.High+1]) * d.oneOverSubbandLength2
 
-		// One channel is sufficient to trigger nearend state.
+		// One channel in the nearend state is enough.
 		d.nearendState = d.nearendState ||
 			(nearendPowerSubband1 < d.config.NearendThreshold*nearendPowerSubband2 &&
 				(nearendPowerSubband1 > d.config.SnrThreshold*noisePower))

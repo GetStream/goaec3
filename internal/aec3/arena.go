@@ -1,16 +1,13 @@
 package aec3
 
-// A component that needs pointers (slices whose size depends on the config,
-// what more than inlineChannels channels need) is two types: xState, a
-// pointer-free struct that its parent's state holds by value, and X, a view
-// that embeds *xState next to the slices and the views of its children. The
-// methods are those of the view; the fields of the state are promoted into
-// it.
+// A component that needs pointers is two types: xState, a pointer-free
+// struct that the state of its parent holds by value, and X, a view that
+// embeds *xState next to the slices and the views of its children. The
+// methods are those of the view.
 //
-// A canceller keeps the states in one object the garbage collector does not
-// read (Ec3Core) and the slices in a few pointer-free arenas. The views are
-// not kept: every entry point binds them on its stack. Each view type has
-// one method, bind, that lists its slices and children for the binder:
+// A canceller keeps the states in one object (Ec3Core) and the slices in
+// pointer-free arenas. Every entry point binds the views on its stack. A
+// view type lists its slices and children for the binder in its bind method:
 //
 //	func (x *X) bind(st *xState, b *binder) {
 //		x.xState = st
@@ -21,10 +18,10 @@ package aec3
 //		x.child.bind(&st.child, b)
 //	}
 //
-// A view made by NewX stands alone: bind(st, bindAlone) attaches it to a state
-// and to nothing else, and init allocates its slices.
+// A view made by NewX stands alone: bind(st, bindAlone) attaches it to its
+// state only, and init allocates its slices.
 
-// span is where a slice of a view lies in its arena; off is negative for a
+// span is the place of a slice of a view in its arena. off is negative for a
 // nil slice.
 type span struct{ off, end int }
 
@@ -36,13 +33,13 @@ const (
 	// them up per arena.
 	bindMeasure bindMode = iota + 1
 	// bindMove copies every slice to its span of the arenas and points the
-	// view at the copy; pointers go to the extras.
+	// view at the copy. Pointers go to the extras.
 	bindMove
 	// bindView points the view at the arenas and the extras.
 	bindView
 )
 
-// bpArenas hold the slices of a block processor and its components.
+// bpArenas holds the slices of a block processor and its components.
 type bpArenas struct {
 	f32  []float32
 	fft  []FftData
@@ -50,13 +47,12 @@ type bpArenas struct {
 	i32  []int32
 }
 
-// arenaSizes are the lengths of the arenas.
+// arenaSizes holds the lengths of the arenas.
 type arenaSizes struct{ f32, fft, spec, i32 int32 }
 
 // bpExtra holds what a block processor keeps outside its state and its
 // arenas: the state of more than inlineChannels channels and the optional
-// components. A canceller with up to inlineChannels channels and the
-// default components has none.
+// components.
 type bpExtra struct {
 	erMore  *erMore
 	subMore *subMore
@@ -75,32 +71,28 @@ type bpExtra struct {
 	sfMore                       *sfMore
 }
 
-// bpNoExtra is what a view binds to without extras; it is never written.
+// bpNoExtra is what a view without extras binds to. It is never written.
 var bpNoExtra bpExtra
 
-// bindAlone is the binder of a view that stands alone: it attaches the view
-// to its state and to nothing else. It is never written.
+// bindAlone is the binder of a view that stands alone. It is never written.
 var bindAlone = &binder{notView: -1, x: &bpNoExtra}
 
 // binder binds the views of a block processor to its state.
 type binder struct {
 	mode bindMode
-	// notView is 0 in a binder with the mode bindView and -1 in every other,
-	// so that one test tells a slice to bind for a call (r.off|notView >= 0)
-	// from a nil slice and from the other modes.
+	// notView is 0 with bindView and -1 otherwise: r.off|notView >= 0 holds
+	// for a slice to bind for a call, and for no other.
 	notView int
 	a       bpArenas
 	n       arenaSizes
 	x       *bpExtra
-	// hasExtra is set by bindMove when a pointer it moved is not nil.
+	// hasExtra is set by bindMove when it moves a pointer that is not nil.
 	hasExtra bool
 }
 
-// The binding of a view for a call is the part that inlines; the rest is in
-// the Slow methods.
-//
 // f32, fft, spec and i32 bind the slice s of a view, which lies at r in the
-// arena of its type. They do nothing for a view that stands alone.
+// arena of its type. They do nothing for a view that stands alone. The
+// binding for a call inlines; the rest is in the Slow methods.
 func (b *binder) f32(s *[]float32, r *span) {
 	if r.off|b.notView < 0 {
 		b.f32Slow(s, r)
@@ -186,8 +178,8 @@ func bindSlice[T any](mode bindMode, s *[]T, r *span, arena []T, n *int32) {
 	}
 }
 
-// bindPtr binds the pointer (or slice) v of a view, which the extras keep
-// in home.
+// bindPtr binds the pointer or slice v of a view, which the extras keep in
+// home.
 func bindPtr[T comparable](b *binder, v *T, home *T) {
 	switch b.mode {
 	case bindView:

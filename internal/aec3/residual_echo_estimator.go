@@ -11,8 +11,8 @@ const (
 	stReverbNonLinear
 )
 
-// ResidualEchoEstimator mirrors residual_echo_estimator.h: estimates the
-// residual echo power. Field trials are at their defaults.
+// ResidualEchoEstimator estimates the power of the residual echo
+// (residual_echo_estimator.h). Field trials are at their defaults.
 type ResidualEchoEstimator struct {
 	config                                 EchoCanceller3Config
 	numRenderChannels                      int
@@ -26,14 +26,12 @@ type ResidualEchoEstimator struct {
 	echoReverb                             ReverbModel
 }
 
-// NewResidualEchoEstimator mirrors the C++ constructor.
 func NewResidualEchoEstimator(config *EchoCanceller3Config, numRenderChannels int) *ResidualEchoEstimator {
 	r := &ResidualEchoEstimator{}
 	r.init(config, numRenderChannels)
 	return r
 }
 
-// init sets up r in place.
 func (r *ResidualEchoEstimator) init(config *EchoCanceller3Config, numRenderChannels int) {
 	*r = ResidualEchoEstimator{
 		config:                                 *config,
@@ -78,7 +76,7 @@ func stNonLinearEstimate(echoPathGain float32, X2 *[FftLengthBy2Plus1]float32, R
 	}
 }
 
-// Estimate estimates the residual echo power R2 and its unbounded variant.
+// Estimate computes the residual echo power R2 and its unbounded variant.
 func (r *ResidualEchoEstimator) Estimate(aecState *AecState, renderBuffer *RenderBuffer, S2Linear, Y2 [][FftLengthBy2Plus1]float32,
 	dominantNearend bool, R2, R2Unbounded [][FftLengthBy2Plus1]float32) {
 	numCaptureChannels := len(R2)
@@ -173,9 +171,9 @@ func (r *ResidualEchoEstimator) renderPowerAt(renderBuffer *RenderBuffer, offset
 	return &X2[0]
 }
 
-// noiseFloorHold is config.EchoModel.NoiseFloorHold as the 32-bit counters
-// see it. The counters start at the hold and count up to it from zero, so a
-// hold beyond 32 bits acts as the nearest 32-bit value.
+// noiseFloorHold returns config.EchoModel.NoiseFloorHold clamped to 32 bits.
+// The counters count from zero up to the hold, so a larger hold acts as the
+// largest one.
 func (r *ResidualEchoEstimator) noiseFloorHold() int32 {
 	return int32(min(max(r.config.EchoModel.NoiseFloorHold, math.MinInt32), math.MaxInt32))
 }

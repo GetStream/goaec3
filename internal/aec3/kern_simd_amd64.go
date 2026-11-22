@@ -4,10 +4,9 @@ package aec3
 
 import "simd/archsimd"
 
-// archsimd kernels for amd64. Multiply/Accumulate/Sqrt and the SSE2
-// Spectrum are one IEEE operation per element, so 256-bit AVX2 or 128-bit
-// AVX code gives the same bits as the SSE2/AVX2 C++. The kAvx2 Spectrum is
-// fused (_mm256_fmadd_ps) and uses Float32x8.MulAdd.
+// archsimd kernels for amd64. Multiply, Accumulate, Sqrt and the SSE2
+// Spectrum are one IEEE operation per element, so 256-bit and 128-bit code
+// give the bits of the SSE2 and AVX2 C++. The kAvx2 Spectrum is fused.
 
 var (
 	kernHasAVX  = archsimd.X86.AVX()
@@ -52,7 +51,7 @@ func kernSpectrumAvx2(re, im, out *[FftLengthBy2Plus1]float32) {
 	out[n] = float32(re[n]*re[n]) + float32(im[n]*im[n])
 }
 
-// kernSpectrumSse2 is the unfused r*r + i*i of the scalar/SSE2 lanes.
+// kernSpectrumSse2 is the unfused r*r + i*i of the scalar and SSE2 lanes.
 func kernSpectrumSse2(re, im, out *[FftLengthBy2Plus1]float32) {
 	var zero archsimd.Float32x8
 	f := func(k int) {
@@ -74,8 +73,8 @@ func kernSpectrumSse2(re, im, out *[FftLengthBy2Plus1]float32) {
 	out[n] = float32(re[n]*re[n]) + float32(im[n]*im[n])
 }
 
-// kernSpectrumSse2x4 is kernSpectrumSse2 with 128-bit operations, for
-// CPUs (or GODEBUG settings) with AVX but not AVX2.
+// kernSpectrumSse2x4 is kernSpectrumSse2 with 128-bit operations, for CPUs
+// with AVX and no AVX2.
 func kernSpectrumSse2x4(re, im, out *[FftLengthBy2Plus1]float32) {
 	var zero f32x4
 	f := func(k int) {
@@ -160,7 +159,7 @@ func vectorAccumulate(x, z []float32) {
 	}
 }
 
-// kernVectorSqrt is VectorMath::Sqrt (sqrtps is IEEE sqrt).
+// kernVectorSqrt is VectorMath::Sqrt.
 func kernVectorSqrt(x []float32) {
 	if kernHasAVX && kernIs64(len(x)) {
 		if len(x) == 65 {
@@ -188,17 +187,16 @@ func kernVectorSqrt(x []float32) {
 	kernVectorSqrtGeneric(x[j:])
 }
 
-// kernSplat4 returns x in all four lanes with AVX instructions (VMOVSS,
-// VSHUFPS). archsimd.BroadcastFloat32x4 compiles to VBROADCASTSS from a
-// register, and BroadcastInt32x4 to VPBROADCASTD, which are AVX2
-// instructions: the 128-bit kernels run on CPUs with AVX only.
+// kernSplat4 returns x in all four lanes, using AVX instructions only.
+// archsimd.BroadcastFloat32x4 and BroadcastInt32x4 compile to AVX2
+// instructions.
 func kernSplat4(x float32) archsimd.Float32x4 {
 	var z archsimd.Float32x4
 	v := z.SetElem(0, x)
 	return v.ConcatPermuteScalars(0, 0, 0, 0, v)
 }
 
-// kernSplatI4 is kernSplat4 for int32 lanes (VMOVD, VPSHUFD).
+// kernSplatI4 is kernSplat4 for int32 lanes.
 func kernSplatI4(x int32) archsimd.Int32x4 {
 	var z archsimd.Int32x4
 	return z.SetElem(0, x).PermuteScalars(0, 0, 0, 0)

@@ -4,14 +4,12 @@ package aec3
 
 import "simd/archsimd"
 
-// archsimd kernels for the kern_bins.go helpers: 256-bit code with AVX2,
-// 128-bit (VEX) code with AVX, the references otherwise.
+// archsimd kernels of the kern_bins.go helpers: 256-bit code with AVX2,
+// 128-bit code with AVX, the references otherwise.
 //
-// Every 256-bit section ends with archsimd.ClearAVXUpperBits (VZEROUPPER).
-// Go's scalar float code is legacy-SSE encoded, and on Intel cores legacy
-// SSE instructions issued while the upper halves of the YMM registers are
-// dirty run with a large penalty (false dependencies and state
-// transitions), which slows every scalar float operation that follows.
+// Every 256-bit section ends with archsimd.ClearAVXUpperBits. Go's scalar
+// float code is legacy-SSE encoded, which is slow while the upper halves of
+// the YMM registers are dirty.
 
 func kernScale(x []float32, a float32, z []float32) {
 	z = z[:len(x)]
@@ -103,9 +101,8 @@ func kernSub(x, y, z []float32) {
 	}
 }
 
-// kernSumRows keeps the 64 bins of dst in eight registers while all rows
-// accumulate into them, in row order starting from +0: one pass over the
-// rows, and the additions of a row do not wait for each other.
+// kernSumRows keeps the 64 bins of dst in eight registers while the rows
+// accumulate into them in row order from +0.
 func kernSumRows(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]float32) {
 	if !kernHasAVX2 {
 		kernSumRows128(dst, rows)
@@ -140,8 +137,8 @@ func kernSumRows(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]flo
 	dst[FftLengthBy2] = last
 }
 
-// kernSumRows128 is kernSumRows with 128-bit operations (AVX without AVX2):
-// two passes over the rows, 32 bins in eight registers each.
+// kernSumRows128 is kernSumRows with 128-bit operations: two passes over the
+// rows, 32 bins in eight registers each.
 func kernSumRows128(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]float32) {
 	if !kernHasAVX {
 		kernSumRowsGeneric(dst, rows)
@@ -177,8 +174,8 @@ func kernSumRows128(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]
 	dst[FftLengthBy2] = last
 }
 
-// kernUnpack deinterleaves v into re[0..63] (even) and im[0..63] (odd),
-// then moves the Nyquist real part from im[0] to re[64].
+// kernUnpack deinterleaves v into re[0..63] and im[0..63], then moves the
+// real part of the last bin from im[0] to re[64].
 func kernUnpack(v *[FftLength]float32, re, im *[FftLengthBy2Plus1]float32) {
 	if !kernHasAVX {
 		kernUnpackGeneric(v, re, im)
@@ -209,8 +206,8 @@ func kernUnpack(v *[FftLength]float32, re, im *[FftLengthBy2Plus1]float32) {
 	im[FftLengthBy2] = 0
 }
 
-// kernPack interleaves re[0..63] and im[0..63] into v, then puts the Nyquist
-// real part re[64] in v[1].
+// kernPack interleaves re[0..63] and im[0..63] into v, then stores the real
+// part of the last bin, re[64], in v[1].
 func kernPack(re, im *[FftLengthBy2Plus1]float32, v *[FftLength]float32) {
 	if !kernHasAVX {
 		kernPackGeneric(re, im, v)
@@ -239,18 +236,17 @@ func kernPack(re, im *[FftLengthBy2Plus1]float32, v *[FftLength]float32) {
 	v[1] = re[FftLengthBy2]
 }
 
-// kernHas128 reports whether the 128-bit kernels of kern_bins_simd128.go
-// run; their VEX encoding needs AVX.
+// kernHas128 reports whether the CPU runs the kernels of
+// kern_bins_simd128.go, which are VEX encoded.
 var kernHas128 = archsimd.X86.AVX()
 
 // kernMinMaxFast reports whether kernMinMax has a fast path.
 const kernMinMaxFast = true
 
-// kernMinMax returns the minimum and maximum of x with ok = true when they
-// are exact for every compare-loop formulation (see the arm64 kernMinMax):
-// no element is NaN and neither extreme is zero, so each extreme has a
-// single bit pattern. MINPS/MAXPS drop a NaN operand instead of propagating
-// it, so NaN is detected by its own unordered compare.
+// kernMinMax returns the minimum and the maximum of x. ok reports whether
+// they are those of every compare loop (see the arm64 kernMinMax): no
+// element is NaN and neither extreme is zero. MINPS and MAXPS drop a NaN
+// operand, so an unordered compare finds it.
 func kernMinMax(x []float32) (mn, mx float32, ok bool) {
 	if !kernHas128 || len(x) < 8 {
 		return 0, 0, false
@@ -285,9 +281,9 @@ func kernMinMax(x []float32) (mn, mx float32, ok bool) {
 	return 0, 0, false
 }
 
-// kernClamp is kernClampGeneric, std::min(std::max(x, lo), hi), as compares
-// and selects: MINPS/MAXPS return their second operand on NaN and equal
-// zeros, and archsimd does not fix which operand that is.
+// kernClamp is kernClampGeneric as compares and selects. MINPS and MAXPS
+// return their second operand on NaN and on equal zeros, and archsimd does
+// not say which operand that is.
 func kernClamp(x []float32, lo, hi float32) {
 	if kernHasAVX && kernIs64(len(x)) {
 		if len(x) == 65 {
@@ -318,10 +314,11 @@ func kernClamp(x []float32, lo, hi float32) {
 }
 
 // kernScale256 and kernClamp256 are the 256-bit loops of kernScale and
-// kernClamp; they return the number of elements done. They do not inline:
-// a float32 live across ClearAVXUpperBits is spilled with a 4-byte store
-// and restored with a 16-byte load, which the CPU cannot forward from that
-// store, and the callers' scalar tails use a, lo and hi.
+// kernClamp. They return the number of elements done.
+//
+// They do not inline: the scalar tails of the callers use a, lo and hi, and
+// a float32 live across ClearAVXUpperBits is spilled with a 4-byte store and
+// restored with a 16-byte load, which the store cannot forward to.
 //
 //go:noinline
 func kernScale256(x []float32, a float32, z []float32) int {
@@ -348,9 +345,9 @@ func kernClamp256(x []float32, lo, hi float32) int {
 	return j
 }
 
-// 256-bit forms of the 64-element kernels in kern_bins_simd64.go: eight
-// steps with constant offsets, then VZEROUPPER. Nothing is live after it,
-// and the helpers store the 65th element before the call.
+// 256-bit forms of the 64-element kernels of kern_bins_simd64.go: eight
+// steps with constant offsets, then VZEROUPPER. Nothing is live across it;
+// the helpers store the 65th element before the call.
 
 func kernLd64y(a *[64]float32, k int) archsimd.Float32x8 {
 	return archsimd.LoadFloat32x8Array((*[8]float32)(a[k : k+8]))
@@ -464,10 +461,9 @@ func kernClamp64y(x *[64]float32, lo, hi float32) {
 	archsimd.ClearAVXUpperBits()
 }
 
-// kernMinMax64 is kernMinMax for a block. MINPS and MAXPS are order
-// dependent only on NaN and on equal zeros; a NaN is detected by its own
-// compare and a zero extreme is rejected, so the block is folded as
-// independent chains.
+// kernMinMax64 is kernMinMax for a block. MINPS and MAXPS depend on the
+// order of their operands only on NaN and on equal zeros, which give ok =
+// false, so the block is folded as independent chains.
 func kernMinMax64(x *[64]float32) (mn, mx float32, ok bool) {
 	var a, b [4]float32
 	var nan bool

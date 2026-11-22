@@ -2,7 +2,7 @@ package aec3
 
 import "github.com/GetStream/goaec3/internal/ooura"
 
-// Window selects the analysis window applied by Aec3Fft.
+// Window selects the analysis window of an Aec3Fft.
 type Window int
 
 const (
@@ -62,30 +62,27 @@ var sqrtHanning128 = [FftLength]float32{
 	0.09801714032956, 0.07356456359967, 0.04906767432742, 0.02454122852291,
 }
 
-// Aec3Fft wraps the 128-point Ooura real FFT. The zero value is ready to use.
-// The kernel lane (scalar vs NEON/SSE2 butterflies) follows the build: the
-// default build on arm64/amd64 reproduces the libwebrtc SIMD path bit-exactly,
-// the purego build reproduces the scalar C path. An Aec3Fft holds the work
-// area of its transforms and serves one goroutine at a time.
+// Aec3Fft is the 128-point Ooura real FFT in the lane of the build. The zero
+// value is ready to use. An Aec3Fft holds the work area of its transforms
+// and serves one goroutine at a time.
 type Aec3Fft struct {
 	scratch ooura.Scratch
 	x       [FftLength]float32
 }
 
-// Fft transforms x into X (the transform followed by
-// FftData::CopyFromPackedArray). It uses x as work space.
+// Fft transforms x into X, using x as work space. It is the transform
+// followed by FftData::CopyFromPackedArray.
 func (f *Aec3Fft) Fft(x *[FftLength]float32, X *FftData) {
 	ooura.FftSplit(x, &X.Re, &X.Im, &f.scratch)
 }
 
-// Ifft inverse transforms X into x, unscaled (FftData::CopyToPackedArray
-// followed by the transform).
+// Ifft sets x to the inverse transform of X, unscaled. It is
+// FftData::CopyToPackedArray followed by the transform.
 func (f *Aec3Fft) Ifft(X *FftData, x *[FftLength]float32) {
 	ooura.InverseFftSplit(&X.Re, &X.Im, x, &f.scratch)
 }
 
-// ZeroPaddedFft windows x (64 samples) into the upper half of a zeroed
-// 128-sample frame and transforms it.
+// ZeroPaddedFft transforms the 64 samples of x, windowed, behind 64 zeros.
 func (f *Aec3Fft) ZeroPaddedFft(x []float32, window Window, X *FftData) {
 	fft := &f.x
 	clear(fft[:FftLengthBy2])
@@ -101,7 +98,7 @@ func (f *Aec3Fft) ZeroPaddedFft(x []float32, window Window, X *FftData) {
 	f.Fft(fft, X)
 }
 
-// PaddedFft transforms the concatenation [xOld, x] with the given window.
+// PaddedFft transforms the windowed concatenation of xOld and x.
 func (f *Aec3Fft) PaddedFft(x, xOld []float32, window Window, X *FftData) {
 	fft := &f.x
 	x = x[:FftLengthBy2]
@@ -119,9 +116,8 @@ func (f *Aec3Fft) PaddedFft(x, xOld []float32, window Window, X *FftData) {
 	f.Fft(fft, X)
 }
 
-// aec3FftPair runs two transforms of Aec3Fft at a time (ooura.FftSplitPair): each
-// result is bit-identical to the single transform, and builds with 256-bit
-// vectors compute the two in one pass. The zero value is ready to use.
+// aec3FftPair runs two transforms of Aec3Fft at a time. Each result is that
+// of the single transform bit for bit. The zero value is ready to use.
 type aec3FftPair struct {
 	scratch ooura.PairScratch
 	x0, x1  [FftLength]float32

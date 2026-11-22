@@ -6,7 +6,8 @@ type FftData struct {
 	Im [FftLengthBy2Plus1]float32
 }
 
-// Assign copies src and zeroes the DC/Nyquist imaginary parts.
+// Assign copies src and zeroes the imaginary parts of the first and the last
+// bin.
 func (f *FftData) Assign(src *FftData) {
 	f.Re = src.Re
 	f.Im = src.Im
@@ -19,11 +20,9 @@ func (f *FftData) Clear() {
 	f.Im = [FftLengthBy2Plus1]float32{}
 }
 
-// Spectrum computes re^2+im^2 per bin. The scalar, SSE2 and NEON lanes round
-// each product separately and agree bitwise; the AVX2 lane
-// (FftData::SpectrumAVX2) fuses im*im+re^2 with _mm256_fmadd_ps and differs.
-// libwebrtc compiles the AVX2 case only on x86, so OptAvx2 is honored on amd64
-// only.
+// Spectrum sets powerSpectrum to re*re + im*im per bin. The AVX2 lane fuses
+// the sum (FftData::SpectrumAVX2), on amd64 only; the other lanes agree bit
+// for bit.
 func (f *FftData) Spectrum(opt Aec3Optimization, powerSpectrum []float32) {
 	_ = powerSpectrum[FftLengthBy2]
 	fftDataSpectrum(opt, &f.Re, &f.Im, (*[FftLengthBy2Plus1]float32)(powerSpectrum))
@@ -35,8 +34,8 @@ func fftDataSpectrumGeneric(re, im, out *[FftLengthBy2Plus1]float32) {
 	}
 }
 
-// CopyFromPackedArray unpacks the Ooura output layout.
+// CopyFromPackedArray unpacks the output of the Ooura transform.
 func (f *FftData) CopyFromPackedArray(v *[FftLength]float32) { kernUnpack(v, &f.Re, &f.Im) }
 
-// CopyToPackedArray packs into the Ooura input layout.
+// CopyToPackedArray packs f into the input of the Ooura transform.
 func (f *FftData) CopyToPackedArray(v *[FftLength]float32) { kernPack(&f.Re, &f.Im, v) }

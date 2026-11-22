@@ -13,7 +13,7 @@ func stFindPeakIndex(filterTimeDomain []float32, peakIndexIn, startSample, endSa
 	return peakIndexOut
 }
 
-// FilterRegion is the region of the filter analyzed in one block.
+// FilterRegion is the part of the filter analyzed in one block.
 type FilterRegion struct {
 	StartSample int
 	EndSample   int
@@ -52,7 +52,7 @@ func (d *stConsistentFilterDetector) Detect(filterToAnalyze []float32, region Fi
 		} else {
 			d.filterFloorLowLimit = peakIndex - 64
 		}
-		// The C++ compares against an unsigned size()-129.
+		// The C++ compares with size()-129, which is unsigned.
 		if uint64(peakIndex) > uint64(n)-129 {
 			d.filterFloorHighLimit = 0
 		} else {
@@ -119,19 +119,18 @@ func (s *stFilterAnalysisState) Reset(defaultGain float32) {
 	s.consistentFilterDetector.Reset()
 }
 
-// FilterAnalyzer mirrors filter_analyzer.h: analyzes the adaptive filter
-// impulse responses for delay, gain and consistency.
+// FilterAnalyzer analyzes the impulse responses of the adaptive filters for
+// delay, gain and consistency (filter_analyzer.h).
 //
-// The high-pass filtered impulse responses of all channels share one array
-// (storage), hCap samples per channel: room for the longest filter of the
-// config.
+// The high-pass filtered impulse responses share storage, hCap samples per
+// channel: room for the longest filter of the config.
 type FilterAnalyzer struct {
 	*filterAnalyzerState
 	more    *faChannels // with more than inlineChannels channels
 	storage []float32
 }
 
-// filterAnalyzerState is the state of a FilterAnalyzer but its pointers.
+// filterAnalyzerState is the state of a FilterAnalyzer except its pointers.
 type filterAnalyzerState struct {
 	storageSpan          span
 	numCaptureChannels   int
@@ -142,7 +141,6 @@ type filterAnalyzerState struct {
 	region               FilterRegion
 	minFilterDelayBlocks int
 
-	// The per-channel state for up to inlineChannels channels.
 	inline struct {
 		hLen                 [inlineChannels]int
 		filterAnalysisStates [inlineChannels]stFilterAnalysisState
@@ -158,8 +156,6 @@ type faChannels struct {
 	filterDelaysBlocks   []int
 }
 
-// channels returns the per-channel state: views of f for up to
-// inlineChannels channels.
 func (f FilterAnalyzer) channels() faChannels {
 	if f.more != nil {
 		return *f.more
@@ -172,13 +168,12 @@ func (f FilterAnalyzer) channels() faChannels {
 	}
 }
 
-// hHighpass returns the high-pass filtered impulse response of channel ch,
-// which has n samples.
+// hHighpass returns the n samples of the high-pass filtered impulse response
+// of channel ch.
 func (f FilterAnalyzer) hHighpass(ch, n int) []float32 {
 	return f.storage[ch*f.hCap : ch*f.hCap+n : (ch+1)*f.hCap]
 }
 
-// bind makes f the view of st.
 func (f *FilterAnalyzer) bind(st *filterAnalyzerState, b *binder) {
 	f.filterAnalyzerState = st
 	b.f32(&f.storage, &st.storageSpan)
@@ -202,12 +197,12 @@ func faStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
 
 // faChannelSize returns the number of samples a FilterAnalyzer keeps per
 // channel for config: those of the longest refined filter, the initial one
-// included, so that the filters of a Subtractor never make it grow.
+// included.
 func faChannelSize(config *EchoCanceller3Config) int {
 	return GetTimeDomainLength(max(config.Filter.Refined.LengthBlocks, config.Filter.RefinedInitial.LengthBlocks))
 }
 
-// init sets up f in place over storage, which holds faStorageSize zeros.
+// init sets up f in place. storage holds faStorageSize zeros.
 func (f *FilterAnalyzer) init(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
 	st := f.filterAnalyzerState
 	*st = filterAnalyzerState{
@@ -248,8 +243,8 @@ func (f FilterAnalyzer) Reset() {
 	clear(c.filterDelaysBlocks)
 }
 
-// Update analyzes the filters and returns whether any filter is consistent
-// and the maximum echo path gain.
+// Update analyzes the filters. It reports whether any filter is consistent
+// and returns the largest echo path gain.
 func (f *FilterAnalyzer) Update(filtersTimeDomain [][]float32, renderBuffer *RenderBuffer) (anyFilterConsistent bool, maxEchoPathGain float32) {
 	f.blocksSinceReset++
 	f.SetRegionToAnalyze(len(filtersTimeDomain[0]))
@@ -268,10 +263,10 @@ func (f *FilterAnalyzer) Update(filtersTimeDomain [][]float32, renderBuffer *Ren
 	return
 }
 
-// FilterDelaysBlocks returns the per-channel filter delays.
+// FilterDelaysBlocks returns the filter delays, one per channel.
 func (f FilterAnalyzer) FilterDelaysBlocks() []int { return f.channels().filterDelaysBlocks }
 
-// MinFilterDelayBlocks returns the minimum delay over channels.
+// MinFilterDelayBlocks returns the smallest filter delay of the channels.
 func (f FilterAnalyzer) MinFilterDelayBlocks() int { return f.minFilterDelayBlocks }
 
 // FilterLengthBlocks returns the filter length of channel 0.
@@ -284,8 +279,8 @@ func (f FilterAnalyzer) GetAdjustedFilters() [][]float32 {
 	return f.adjustedFilters(make([][]float32, f.numCaptureChannels))
 }
 
-// adjustedFilters returns the high-pass filtered impulse responses in dst,
-// which has room for one per channel.
+// adjustedFilters is GetAdjustedFilters into dst, which has one element per
+// channel.
 func (f FilterAnalyzer) adjustedFilters(dst [][]float32) [][]float32 {
 	c := f.channels()
 	dst = dst[:f.numCaptureChannels]
@@ -329,7 +324,7 @@ func (f FilterAnalyzer) updateFilterGain(filterTimeDomain []float32, st *stFilte
 var stHighpassCoeffs = [3]float32{0.7929742, -0.36072128, -0.47047766}
 
 // grow gives every channel room for n samples. Only a FilterAnalyzer that
-// stands alone grows: the filters of a canceller fit the storage of init.
+// stands alone grows.
 func (f *FilterAnalyzer) grow(c faChannels, n int) {
 	storage := make([]float32, f.numCaptureChannels*n)
 	for ch := range c.hLen {
@@ -353,8 +348,8 @@ func (f *FilterAnalyzer) preProcessFilters(c faChannels, filtersTimeDomain [][]f
 		h := &stHighpassCoeffs
 		clear(hp[f.region.StartSample : f.region.EndSample+1])
 		x := filtersTimeDomain[ch]
-		// hp[k] was cleared above, so each output is +0 plus the three
-		// products in tap order.
+		// hp[k] is +0 here, so an output is +0 plus the three products in
+		// tap order.
 		kernFir3(x, h, hp, max(len(h)-1, f.region.StartSample), f.region.EndSample)
 	}
 }

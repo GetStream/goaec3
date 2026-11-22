@@ -17,8 +17,8 @@ func stFormSubbandMap() [FftLengthBy2Plus1]int {
 	return m
 }
 
-// stDefineFilterSectionSizes splits the filter in sections whose sizes grow
-// with the distance to the direct path.
+// stDefineFilterSectionSizes splits the filter into sections that grow with
+// the distance from the direct path.
 func stDefineFilterSectionSizes(delayHeadroomBlocks, numBlocks, numSections int) []int {
 	filterLengthBlocks := numBlocks - delayHeadroomBlocks
 	sectionSizes := make([]int, numSections)
@@ -67,9 +67,9 @@ func stSetSectionsBoundaries(delayHeadroomBlocks, numBlocks, numSections int) []
 	return b
 }
 
-// SignalDependentErleEstimator mirrors signal_dependent_erle_estimator.h:
-// refines the ERLE with a correction factor that depends on how many filter
-// sections carry the echo energy.
+// SignalDependentErleEstimator refines the ERLE with a correction factor
+// that depends on the number of filter sections that carry the echo energy
+// (signal_dependent_erle_estimator.h).
 type SignalDependentErleEstimator struct {
 	minErle                 float32
 	numSections             int
@@ -148,7 +148,8 @@ func (s *SignalDependentErleEstimator) Reset() {
 	}
 }
 
-// Erle returns the ERLE, onset compensated when requested and enabled.
+// Erle returns the ERLE, compensated for onsets if onsetCompensated and
+// enabled.
 func (s *SignalDependentErleEstimator) Erle(onsetCompensated bool) [][FftLengthBy2Plus1]float32 {
 	if onsetCompensated && s.useOnsetDetection {
 		return s.erleOnsetCompensated
@@ -156,8 +157,8 @@ func (s *SignalDependentErleEstimator) Erle(onsetCompensated bool) [][FftLengthB
 	return s.erle
 }
 
-// Update refines averageErle and averageErleOnsetCompensated with the
-// signal dependent correction factors.
+// Update refines averageErle and averageErleOnsetCompensated with the signal
+// dependent correction factors.
 func (s *SignalDependentErleEstimator) Update(renderBuffer *RenderBuffer, filterFrequencyResponses [][][FftLengthBy2Plus1]float32,
 	X2 *[FftLengthBy2Plus1]float32, Y2, E2, averageErle, averageErleOnsetCompensated [][FftLengthBy2Plus1]float32,
 	convergedFilters []bool) {

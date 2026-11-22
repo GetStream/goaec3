@@ -4,13 +4,12 @@ package aec3
 
 import "simd/archsimd"
 
-// NEON kernels for adaptive_fir_filter.cc / adaptive_fir_filter_erl.cc. Each
-// kernel processes bins 0..63 of one FftData with the operation order of the
-// libwebrtc NEON intrinsics. vmlaq_f32/vmlsq_f32 are separate multiply and
-// add/sub in the -ffp-contract=off build, so they map to Mul followed by
-// Add/Sub (never MulAdd). The x86 lanes run their pure-Go references.
+// NEON kernels of adaptive_fir_filter.cc and adaptive_fir_filter_erl.cc. A
+// kernel processes bins 0..63 of one FftData in the operation order of the
+// libwebrtc intrinsics. vmlaq_f32 and vmlsq_f32 are unfused: Mul followed by
+// Add or Sub, never MulAdd. The x86 lanes run their pure-Go references.
 
-// afirApplyBlockNEON: S.re += X.re*H.re - X.im*H.im; S.im += X.re*H.im + X.im*H.re.
+// afirApplyBlockNEON adds x*h to s.
 func afirApplyBlockNEON(x, h, s *FftData) {
 	for k := 0; k < FftLengthBy2; k += 4 {
 		xRe := archsimd.LoadFloat32x4Array((*[4]float32)(x.Re[k : k+4]))
@@ -26,7 +25,7 @@ func afirApplyBlockNEON(x, h, s *FftData) {
 	}
 }
 
-// afirAdaptBlockNEON: H.re += X.re*G.re + X.im*G.im; H.im += X.re*G.im - X.im*G.re.
+// afirAdaptBlockNEON adds conj(x)*g to h.
 func afirAdaptBlockNEON(x, g, h *FftData) {
 	for k := 0; k < FftLengthBy2; k += 4 {
 		gRe := archsimd.LoadFloat32x4Array((*[4]float32)(g.Re[k : k+4]))
@@ -42,7 +41,7 @@ func afirAdaptBlockNEON(x, g, h *FftData) {
 	}
 }
 
-// afirFreqRespBlockNEON: H2 = max(H2, re*re + im*im).
+// afirFreqRespBlockNEON sets h2 = max(h2, re*re + im*im).
 func afirFreqRespBlockNEON(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 	for j := 0; j < FftLengthBy2; j += 4 {
 		re := archsimd.LoadFloat32x4Array((*[4]float32)(h.Re[j : j+4]))
@@ -53,7 +52,7 @@ func afirFreqRespBlockNEON(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 	}
 }
 
-// afirErlBlockNEON: erl += H2 over bins 0..63.
+// afirErlBlockNEON adds h2 to erl.
 func afirErlBlockNEON(h2, erl *[FftLengthBy2Plus1]float32) {
 	for k := 0; k < FftLengthBy2; k += 4 {
 		p := (*[4]float32)(erl[k : k+4])
@@ -98,14 +97,14 @@ func afirErlBlock(opt Aec3Optimization, h2, erl *[FftLengthBy2Plus1]float32) {
 	afirErlBlockGo(h2, erl)
 }
 
-// afirHasTermKernels reports that afirApplyTerms/afirAdaptTerms are archsimd
-// kernels. Every lane computes the same rounded products and per-bin
-// accumulation order, so one kernel serves the NEON, SSE2 and AVX2 lanes.
+// afirHasTermKernels reports whether afirApplyTerms and afirAdaptTerms replace
+// the per-partition loops. The lanes agree bin for bin, so one kernel serves
+// the NEON, SSE2 and AVX2 lanes.
 const afirHasTermKernels = true
 
 // afirApplyTerms is afirApplyTermsGo with the bin loop outside the pair loop:
-// sixteen bins of S stay in registers while all pairs accumulate into them, in
-// pair order, starting from +0.
+// sixteen bins of s stay in registers while the pairs accumulate into them in
+// pair order from +0.
 func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 	hs = hs[:len(xs)]
 	for k := 0; k < FftLengthBy2; k += 16 {
@@ -140,8 +139,8 @@ func afirApplyTerms(xs, hs []*FftData, s *FftData) {
 	s.Re[n], s.Im[n] = re, im
 }
 
-// afirAdaptTerms is afirAdaptTermsGo with sixteen bins of G held in registers
-// across all pairs.
+// afirAdaptTerms is afirAdaptTermsGo with sixteen bins of g held in registers
+// across the pairs.
 func afirAdaptTerms(xs, hs []*FftData, g *FftData) {
 	hs = hs[:len(xs)]
 	for k := 0; k < FftLengthBy2; k += 16 {
@@ -184,13 +183,12 @@ func afirSt8(a *[FftLengthBy2Plus1]float32, k int, lo, hi archsimd.Float32x4) {
 	hi.StoreArray((*[4]float32)(p[4:]))
 }
 
-// afirHasNeonFreqResp reports that afirFreqRespPartitionNEON is available.
+// afirHasNeonFreqResp reports whether afirFreqRespPartitionNEON exists.
 const afirHasNeonFreqResp = true
 
 // afirFreqRespPartitionNEON computes one partition of
-// ComputeFrequencyResponse_Neon: H2 = +0, then H2 = vmaxq(H2, |H[ch]|^2) for
-// every channel in order, with eight bins held in registers across the
-// channels instead of being stored and reloaded.
+// ComputeFrequencyResponse_Neon: h2 = +0, then the maximum with the response
+// of every channel in order, eight bins held in registers across the channels.
 func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 	for k := 0; k < FftLengthBy2; k += 8 {
 		var a0, a1 archsimd.Float32x4
@@ -215,8 +213,8 @@ func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 	h2[n] = m
 }
 
-// afirMaxAbsUpdate is afirMaxAbsUpdateGo: the ordered compare of the absolute
-// values is false for a NaN on either side, which keeps ir.
+// afirMaxAbsUpdate is afirMaxAbsUpdateGo. The ordered compare is false for a
+// NaN on either side, which keeps ir.
 func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) {
 	for k := 0; k < FftLengthBy2; k += 4 {
 		p := (*[4]float32)(ir[k : k+4])
@@ -226,8 +224,7 @@ func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) {
 	}
 }
 
-// afirHasX86FreqResp is false: this build has no SSE2 or AVX2 partition
-// kernel for the frequency response.
+// afirHasX86FreqResp reports whether afirFreqRespPartitionX86 runs the lane.
 func afirHasX86FreqResp(Aec3Optimization) bool { return false }
 
 func afirFreqRespPartitionX86(Aec3Optimization, []FftData, *[FftLengthBy2Plus1]float32) {

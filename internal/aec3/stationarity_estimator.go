@@ -62,8 +62,8 @@ func (n *stNoiseSpectrum) getAlpha() float32 {
 	if n.blockCounter > stNBlocksInitialPhase+stNBlocksAverageInitPhase {
 		return alpha
 	}
-	// The C++ subtracts in size_t, which wraps for the first blocks; the
-	// value is unused there.
+	// The C++ subtracts in size_t, which wraps for the first blocks, where
+	// the value is not used.
 	d := float32(uint64(n.blockCounter) - stNBlocksAverageInitPhase)
 	return alphaInit - float32(stTiltAlpha*d)
 }
@@ -85,8 +85,8 @@ func (n *stNoiseSpectrum) updateBandBySmoothing(powerBand, powerBandNoise, alpha
 	return powerBandNoiseUpdated
 }
 
-// StationarityEstimator mirrors stationarity_estimator.h: estimates the
-// stationarity of the render signal per band.
+// StationarityEstimator estimates the stationarity of the render signal per
+// band (stationarity_estimator.h).
 type StationarityEstimator struct {
 	noise             stNoiseSpectrum
 	hangovers         [FftLengthBy2Plus1]int
@@ -105,12 +105,12 @@ func (s *StationarityEstimator) Reset() {
 	s.stationarityFlags = [FftLengthBy2Plus1]bool{}
 }
 
-// UpdateNoiseEstimator updates only the noise estimator.
+// UpdateNoiseEstimator updates the noise estimator alone.
 func (s *StationarityEstimator) UpdateNoiseEstimator(spectrum [][FftLengthBy2Plus1]float32) {
 	s.noise.Update(spectrum)
 }
 
-// UpdateStationarityFlags updates the per-band stationarity flags.
+// UpdateStationarityFlags updates the stationarity flags of the bands.
 func (s *StationarityEstimator) UpdateStationarityFlags(spectrumBuffer *SpectrumBuffer,
 	renderReverbContributionSpectrum []float32, idxCurrent, numLookahead int) {
 	var indexes [stWindowLength]int

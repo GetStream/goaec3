@@ -2,15 +2,15 @@ package aec3
 
 const stBlocksForOnsetDetection = stBlocksToHoldErle + 150
 
-// SubbandErleEstimator mirrors subband_erle_estimator.h: estimates the ERLE
-// per frequency band.
+// SubbandErleEstimator estimates the ERLE per frequency band
+// (subband_erle_estimator.h).
 type SubbandErleEstimator struct {
 	*subbandErleEstimatorState
 	more *sbErleChannels // with more than inlineChannels channels
 }
 
-// subbandErleEstimatorState is the state of a SubbandErleEstimator but its
-// pointer.
+// subbandErleEstimatorState is the state of a SubbandErleEstimator except
+// its pointer.
 type subbandErleEstimatorState struct {
 	numCaptureChannels     int
 	useOnsetDetection      bool
@@ -18,7 +18,6 @@ type subbandErleEstimatorState struct {
 	maxErle                [FftLengthBy2Plus1]float32
 	useMinErleDuringOnsets bool
 
-	// The per-channel state for up to inlineChannels channels.
 	inline struct {
 		accumY2              [inlineChannels][FftLengthBy2Plus1]float32
 		accumE2              [inlineChannels][FftLengthBy2Plus1]float32
@@ -48,8 +47,6 @@ type sbErleChannels struct {
 	holdCounters         [][FftLengthBy2Plus1]int
 }
 
-// channels returns the per-channel state: views of s for up to
-// inlineChannels channels.
 func (s SubbandErleEstimator) channels() sbErleChannels {
 	if s.more != nil {
 		return *s.more
@@ -69,8 +66,8 @@ func (s SubbandErleEstimator) channels() sbErleChannels {
 	}
 }
 
-// NewSubbandErleEstimator builds the estimator with field trials at their
-// defaults (WebRTC-Aec3MinErleDuringOnsetsKillSwitch disabled).
+// NewSubbandErleEstimator mirrors the C++ constructor with field trials at
+// their defaults.
 func NewSubbandErleEstimator(config *EchoCanceller3Config, numCaptureChannels int) *SubbandErleEstimator {
 	s := &SubbandErleEstimator{}
 	s.bind(&subbandErleEstimatorState{}, bindAlone)
@@ -78,7 +75,6 @@ func NewSubbandErleEstimator(config *EchoCanceller3Config, numCaptureChannels in
 	return s
 }
 
-// bind makes s the view of st.
 func (s *SubbandErleEstimator) bind(st *subbandErleEstimatorState, b *binder) {
 	s.subbandErleEstimatorState = st
 	if b != nil {
@@ -86,7 +82,6 @@ func (s *SubbandErleEstimator) bind(st *subbandErleEstimatorState, b *binder) {
 	}
 }
 
-// init sets up s in place.
 func (s *SubbandErleEstimator) init(config *EchoCanceller3Config, numCaptureChannels int) {
 	st := s.subbandErleEstimatorState
 	*st = subbandErleEstimatorState{
@@ -136,7 +131,8 @@ func (s SubbandErleEstimator) Reset() {
 	s.resetAccumulatedSpectra(c)
 }
 
-// Erle returns the ERLE, onset compensated when requested and enabled.
+// Erle returns the ERLE, compensated for onsets if onsetCompensated and
+// enabled.
 func (s SubbandErleEstimator) Erle(onsetCompensated bool) [][FftLengthBy2Plus1]float32 {
 	c := s.channels()
 	if onsetCompensated && s.useOnsetDetection {
@@ -153,7 +149,7 @@ func (s SubbandErleEstimator) ErleDuringOnsets() [][FftLengthBy2Plus1]float32 {
 	return c.erleDuringOnsets
 }
 
-// Update updates the ERLE estimate.
+// Update takes the spectra of one block.
 func (s SubbandErleEstimator) Update(X2 *[FftLengthBy2Plus1]float32, Y2, E2 [][FftLengthBy2Plus1]float32, convergedFilters []bool) {
 	c := s.channels()
 	s.updateAccumulatedSpectra(c, X2, Y2, E2, convergedFilters)
@@ -187,9 +183,8 @@ func stUpdateErleBand(erle *float32, newErle float32, lowRenderEnergy bool, minE
 }
 
 // updateBands and the loops below take each per-channel array through a
-// local pointer: indexing the slices of s inside a bin loop reloads the
-// slice and checks the channel on every access, because the stores of the
-// loop may alias s.
+// local pointer. A bin loop that indexes the slices of s reloads the slice
+// and checks the index on every access, since its stores may alias s.
 func (s SubbandErleEstimator) updateBands(c sbErleChannels, convergedFilters []bool) {
 	for ch := range c.accumY2 {
 		if !convergedFilters[ch] {

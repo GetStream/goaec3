@@ -2,22 +2,19 @@ package aec3
 
 import "sync"
 
-// SplitBandSize is the number of samples per band in a 10 ms frame
+// SplitBandSize is the number of samples per band of a 10 ms frame
 // (AudioBuffer::kSplitBandSize).
 const SplitBandSize = 160
 
-// AdjustConfig mirrors the function of the same name in echo_canceller3.cc,
-// which adjusts config parameter dependencies through field trials. Every
-// field trial is fixed at its default (disabled, no parameter string), so
-// each adjustment keeps the incoming value: the float parameters make an
-// exact float -> double -> float round trip and the range-checked overrides
-// only apply when the parsed value differs from the current one. The
-// adjusted config is therefore a copy of the input.
+// AdjustConfig mirrors AdjustConfig of echo_canceller3.cc, which applies
+// field trials to the config. With every trial at its default it returns a
+// copy: a float parameter survives the round trip through double, and an
+// override applies only when the parsed value differs from the current one.
 func AdjustConfig(config *EchoCanceller3Config) EchoCanceller3Config {
 	adjusted := *config
 
-	// WebRTC-Aec3UseNearendReverbLen: the parsed values are the current ones
-	// and are only applied when both lie in (-1, 1).
+	// WebRTC-Aec3UseNearendReverbLen: the parsed values are the current
+	// ones, applied only when both lie in (-1, 1).
 	defaultLen := float32(float64(adjusted.EpStrength.DefaultLen))
 	nearendLen := float32(float64(adjusted.EpStrength.NearendLen))
 	if defaultLen > -1 && defaultLen < 1 && nearendLen > -1 && nearendLen < 1 {
@@ -36,17 +33,16 @@ func ec3DetectSaturation(y []float32) bool {
 	return false
 }
 
-// Frame is a 10 ms frame of split-band audio, [band][channel][SplitBandSize]
-// in FloatS16 scale, stored contiguously in one pointer-free backing array:
-// what AudioBuffer::split_bands exposes. View and SubFrame return views
-// computed from the band and channel.
+// Frame is a 10 ms frame of split-band audio in FloatS16 scale, as
+// AudioBuffer::split_bands exposes it: SplitBandSize samples per band and
+// channel in one pointer-free array.
 type Frame struct {
 	numBands    int
 	numChannels int
 	data        []float32
 }
 
-// NewFrame returns a zero frame of numBands bands and numChannels channels.
+// NewFrame returns a frame of zeros.
 func NewFrame(numBands, numChannels int) Frame {
 	return ec3FrameOver(numBands, numChannels, make([]float32, numBands*numChannels*SplitBandSize))
 }
@@ -60,17 +56,17 @@ func ec3FrameOver(numBands, numChannels int, storage []float32) Frame {
 func (f Frame) NumBands() int    { return f.numBands }
 func (f Frame) NumChannels() int { return f.numChannels }
 
-// Samples returns all samples of the frame, [band][channel][SplitBandSize].
+// Samples returns the samples of f, band-major.
 func (f Frame) Samples() []float32 { return f.data }
 
-// View returns the SplitBandSize samples of one band and channel.
+// View returns the samples of one band and channel.
 func (f Frame) View(band, channel int) []float32 {
 	i := (band*f.numChannels + channel) * SplitBandSize
 	return f.data[i : i+SplitBandSize : i+SplitBandSize]
 }
 
-// SubFrame returns the SubFrameLength samples of subframe subFrameIndex (0
-// or 1) of one band and channel.
+// SubFrame returns the SubFrameLength samples of subframe subFrameIndex, 0
+// or 1, of one band and channel.
 func (f Frame) SubFrame(band, channel, subFrameIndex int) []float32 {
 	i := (band*f.numChannels+channel)*SplitBandSize + subFrameIndex*SubFrameLength
 	return f.data[i : i+SubFrameLength : i+SubFrameLength]
@@ -94,15 +90,11 @@ func (f Frame) CopyTo(frame [][][]float32) {
 	}
 }
 
-// ec3RenderTransferQueue is the SwapQueue that moves 10 ms render frames
-// from AnalyzeRender to the capture side. Insert copies the caller's frame
-// into the queue and Remove copies the oldest queued frame out; Insert fails
-// (and drops the frame) when maxFrames frames are queued, Remove fails when
-// the queue is empty. The frames live in one flat buffer that starts at
-// ec3RenderTransferQueueInitialFrames frames and doubles, up to maxFrames,
-// when a render burst fills it, so the queue holds as many frames as the
-// deepest burst so far. It is safe for one inserting and one removing
-// goroutine.
+// ec3RenderTransferQueue is the SwapQueue that carries render frames to the
+// capture side. Insert copies a frame in and fails when maxFrames frames are
+// queued; Remove copies the oldest frame out and fails when the queue is
+// empty. The buffer doubles, up to maxFrames, when a render burst fills it.
+// The queue is safe for one inserting and one removing goroutine.
 type ec3RenderTransferQueue struct {
 	buffer         []float32 // [frame][band][channel][SplitBandSize]
 	mu             sync.Mutex
@@ -113,8 +105,8 @@ type ec3RenderTransferQueue struct {
 	numElements    int
 }
 
-// ec3RenderTransferQueueInitialFrames is the initial queue capacity: render
-// and capture alternate in steady state, so one frame is queued at a time.
+// ec3RenderTransferQueueInitialFrames is the initial capacity of the queue.
+// Render and capture alternate in steady state, which queues one frame.
 const ec3RenderTransferQueueInitialFrames = 4
 
 // ec3RenderTransferQueueInitialSize returns the number of samples the queue
@@ -123,17 +115,15 @@ func ec3RenderTransferQueueInitialSize(maxFrames, numBands, numChannels int) int
 	return min(maxFrames, ec3RenderTransferQueueInitialFrames) * numBands * numChannels * SplitBandSize
 }
 
-// init sets up q. The queue starts with the
-// ec3RenderTransferQueueInitialSize samples of buffer and allocates only
-// when it grows; with a nil buffer it starts with those the caller passes
-// to insert and remove (the canceller's, which keeps no pointer for them).
+// init sets up q over the ec3RenderTransferQueueInitialSize samples of
+// buffer. With a nil buffer the queue starts with the samples the caller
+// passes to insert and remove.
 func (q *ec3RenderTransferQueue) init(maxFrames, numBands, numChannels int, buffer []float32) {
 	q.frameSize, q.maxFrames = numBands*numChannels*SplitBandSize, maxFrames
 	q.buffer = buffer
 }
 
-// buf returns the frames of the queue: its buffer, or initial before it has
-// one.
+// buf returns the buffer of the queue, or initial before it has one.
 func (q *ec3RenderTransferQueue) buf(initial []float32) []float32 {
 	if q.buffer != nil {
 		return q.buffer
@@ -145,8 +135,8 @@ func ec3QueueSlot(buffer []float32, n, index int) []float32 {
 	return buffer[index*n : (index+1)*n : (index+1)*n]
 }
 
-// grow doubles the capacity (up to maxFrames), keeping the queued frames in
-// order at the start of the new buffer.
+// grow doubles the capacity, up to maxFrames, and moves the queued frames to
+// the start of the new buffer in order.
 func (q *ec3RenderTransferQueue) grow(old []float32) {
 	n := q.frameSize
 	capacity := len(old) / n
@@ -201,20 +191,19 @@ func (q *ec3RenderTransferQueue) remove(output Frame, initial []float32) bool {
 	return true
 }
 
-// ec3RenderWriter is EchoCanceller3::RenderWriter: it moves the split-band
-// render frame (which the canceller holds) into the transfer queue,
-// optionally high-pass filtering its lowest band first.
+// ec3RenderWriter moves the render frame into the transfer queue, after
+// high-pass filtering its lowest band if configured
+// (EchoCanceller3::RenderWriter).
 //
-// Its high-pass filter (HighPassFilter at 16 kHz) is one section per
-// channel: those of up to inlineChannels channels are part of the writer,
-// those of more channels are the canceller's (Ec3Core.hpMore).
+// The filter has one section per channel. Those of more than inlineChannels
+// channels are the canceller's (Ec3Core.hpMore).
 type ec3RenderWriter struct {
 	hasHighPassFilter bool
 	sections          [inlineChannels]BiQuad
 }
 
-// init sets up w and returns the sections of more than inlineChannels
-// channels, nil otherwise.
+// init sets up w. It returns the sections of more than inlineChannels
+// channels, or nil.
 func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numChannels int) (more []BiQuad) {
 	*w = ec3RenderWriter{}
 	if config.Filter.HighPassFilterEchoReference {
@@ -229,8 +218,8 @@ func (w *ec3RenderWriter) init(config *EchoCanceller3Config, numChannels int) (m
 	return more
 }
 
-// Insert moves renderQueueInputFrame into the transfer queue; more is what
-// init returned.
+// Insert moves renderQueueInputFrame into the transfer queue. more is the
+// result of init.
 func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue, renderQueueInputFrame Frame, more []BiQuad,
 	initial []float32) {
 	if w.hasHighPassFilter {
@@ -244,31 +233,22 @@ func (w *ec3RenderWriter) Insert(renderTransferQueue *ec3RenderTransferQueue, re
 	_ = renderTransferQueue.insert(renderQueueInputFrame, initial)
 }
 
-// EchoCanceller3 is the main AEC3 class (echo_canceller3.h). It receives
-// 10 ms frames of band-split audio, provides the BlockProcessor with blocks
-// of 64 samples and partially handles the jitter in the render and capture
-// API call sequence.
+// EchoCanceller3 is the echo canceller (echo_canceller3.h). It takes 10 ms
+// frames of split-band audio in FloatS16 scale, feeds the BlockProcessor
+// blocks of 64 samples and absorbs jitter between the render and the capture
+// calls. A frame has NumBandsForRate(sampleRateHz) bands.
 //
-// Audio is in FloatS16 scale. A split-band frame is [band][channel][160]
-// with NumBandsForRate(sampleRateHz) bands, which is what
-// AudioBuffer::split_bands exposes; at 16 kHz the single band is the
-// full-band signal.
+// The canceller owns the frames it works on. The caller fills RenderFrame
+// and calls AnalyzeRenderFrame, fills CaptureFrame and calls
+// ProcessCaptureFrame. AnalyzeRender and ProcessCapture copy frames of the
+// caller instead.
 //
-// The canceller owns the frames it works on: the caller fills RenderFrame
-// and calls AnalyzeRenderFrame, and fills CaptureFrame and calls
-// ProcessCaptureFrame, which processes it in place. AnalyzeRender and
-// ProcessCapture do the same for frames of the caller, which they copy.
+// RenderFrame, AnalyzeRenderFrame and AnalyzeRender may run concurrently
+// with the other methods. The other methods must not run concurrently with
+// each other.
 //
-// The render-side methods (RenderFrame, AnalyzeRenderFrame, AnalyzeRender)
-// may be called concurrently with the other methods; the other methods must
-// not be called concurrently with each other.
-//
-// The frames, blocks and framing buffers are views of one pointer-free
-// array (storage), computed from their offsets on use.
-//
-// An EchoCanceller3 is a view of an Ec3Core, which keeps the state: the one
-// NewEchoCanceller3 returns is bound for good, Ec3Core.Bind binds one for a
-// call.
+// An EchoCanceller3 is a view of an Ec3Core. NewEchoCanceller3 returns one
+// that stays bound; Ec3Core.Bind binds one for a call.
 type EchoCanceller3 struct {
 	*ec3State
 	core                     *Ec3Core
@@ -280,23 +260,19 @@ type EchoCanceller3 struct {
 	blockProcessor           BlockProcessor
 }
 
-// Ec3Core is what a canceller keeps between calls: a few pointer words at
-// its start, of which one is not nil in a canceller with up to
-// inlineChannels channels and the default components (its arena), and the
-// pointer-free state of every component. That start is all the garbage
-// collector reads of it. Bind and BindRender make an EchoCanceller3 the view
-// of it that has the methods.
+// Ec3Core is what a canceller keeps between calls: a few pointer words, then
+// the pointer-free state of every component. The garbage collector reads the
+// pointer words only.
 //
-// The render side (BindRender and the render-side methods of its view) may
-// run concurrently with the capture side: it reads arena and hpMore, which
-// are set once, and the queue.
+// BindRender and the render-side methods of its view may run concurrently
+// with the capture side. They read arena and hpMore, which are set once, and
+// the queue.
 type Ec3Core struct {
-	// arena holds the storage of the canceller and, after it, the arrays of
-	// the block processor it started with.
+	// arena holds the storage of the canceller, then the arrays of the block
+	// processor it started with.
 	arena Arena
 	// bpArena holds the arrays of a block processor that was set up again
-	// and does not fit into arena (stereo content in a canceller that
-	// started without); nil otherwise.
+	// and does not fit arena, or nil.
 	bpArena Arena
 	queue   ec3RenderTransferQueue
 	hpMore  []BiQuad
@@ -304,17 +280,15 @@ type Ec3Core struct {
 	st      ec3State
 }
 
-// Arena is one object that holds the arrays of a canceller. One whose
-// arrays are part of it (a struct of arrays, which has no pointers) costs
-// the garbage collector one object and the canceller one pointer.
+// Arena is one object that holds the arrays of a canceller.
 type Arena interface {
-	// Views returns the arrays; every call returns the same.
+	// Views returns the arrays. Every call returns the same ones.
 	Views() ArenaViews
 	// Alloc returns another arena that holds at least the given sizes.
 	Alloc(ArenaSizes) Arena
 }
 
-// ArenaViews are the arrays of an Arena, one per element type.
+// ArenaViews holds the arrays of an Arena, one per element type.
 type ArenaViews struct {
 	F32  []float32
 	Fft  []FftData
@@ -322,7 +296,7 @@ type ArenaViews struct {
 	I32  []int32
 }
 
-// ArenaSizes are the lengths a canceller needs of the arrays of its Arena.
+// ArenaSizes holds the lengths a canceller needs of the arrays of an Arena.
 type ArenaSizes struct{ F32, Fft, Spec, I32 int }
 
 // sliceArena is an Arena of four allocations.
@@ -332,8 +306,7 @@ func (a *sliceArena) Views() ArenaViews { return a.v }
 
 func (a *sliceArena) Alloc(n ArenaSizes) Arena { return NewSliceArena(n) }
 
-// NewSliceArena returns an Arena of any size: its arrays are allocated one
-// by one, so it costs the garbage collector five objects.
+// NewSliceArena returns an Arena whose arrays are separate allocations.
 func NewSliceArena(n ArenaSizes) Arena {
 	return &sliceArena{v: ArenaViews{
 		F32:  make([]float32, n.F32),
@@ -343,10 +316,9 @@ func NewSliceArena(n ArenaSizes) Arena {
 	}}
 }
 
-// Init sets up c, which must be the zero value. The storage has room for
+// Init sets up c, which is the zero value. The storage has room for
 // extraSamples samples of the caller (EchoCanceller3.ExtraSamples). alloc
-// returns the arena, which holds at least the given sizes (nil:
-// NewSliceArena).
+// returns an arena of at least the given sizes; nil is NewSliceArena.
 func (c *Ec3Core) Init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
 	numRenderChannels, numCaptureChannels, extraSamples int, alloc func(ArenaSizes) Arena) {
 	var e EchoCanceller3
@@ -380,8 +352,8 @@ func (c *Ec3Core) bp() bpArenas {
 	return bpArenas{f32: v.F32[c.st.offsets.size:], fft: v.Fft, spec: v.Spec, i32: v.I32}
 }
 
-// BindRender makes e the view of c for the render-side methods (RenderFrame,
-// AnalyzeRenderFrame, AnalyzeRender).
+// BindRender makes e the view of c for RenderFrame, AnalyzeRenderFrame and
+// AnalyzeRender.
 func (c *Ec3Core) BindRender(e *EchoCanceller3) {
 	e.ec3State = &c.st
 	e.core = c
@@ -390,7 +362,7 @@ func (c *Ec3Core) BindRender(e *EchoCanceller3) {
 	e.hpMore = c.hpMore
 }
 
-// Bind makes e the view of c for the capture side.
+// Bind makes e the view of c for the capture-side methods.
 func (c *Ec3Core) Bind(e *EchoCanceller3) {
 	v := c.arena.Views()
 	n := c.st.offsets.size
@@ -409,22 +381,19 @@ func (c *Ec3Core) Bind(e *EchoCanceller3) {
 	e.blockProcessor.bind(&c.st.blockProcessor, &b)
 }
 
-// measure returns the lengths of the slices that the init of p allocated,
-// per arena, and records them in the state.
+// measure records the lengths of the slices the init of p allocated in the
+// state and returns their sums per arena.
 func (c *Ec3Core) measure(p *BlockProcessor) arenaSizes {
 	b := binder{mode: bindMeasure, notView: -1, x: &bpNoExtra}
 	p.bind(&c.st.blockProcessor, &b)
 	return b.n
 }
 
-// adopt moves the slices that the init of p allocated into the arena of c,
-// and its pointers into the extras: afterwards a view of c needs nothing
-// else. The first time it allocates the arena with alloc, for the storage
-// of the canceller and the slices of p. Later (a canceller with several
-// render channels sets its block processor up again, at another size, when
-// stereo content starts or ends) the slices go into the arena again when
-// they fit and into an arena of their own, which lives as long as that
-// block processor, when they do not.
+// adopt moves the slices the init of p allocated into the arena of c and its
+// pointers into the extras. The first call allocates the arena with alloc. A
+// later one, when stereo content starts or ends and the block processor is
+// set up at another size, uses the arena again if the slices fit and an
+// arena of their own otherwise.
 func (c *Ec3Core) adopt(p *BlockProcessor, alloc func(ArenaSizes) Arena) {
 	n := c.measure(p)
 	need := ArenaSizes{F32: int(n.f32), Fft: int(n.fft), Spec: int(n.spec), I32: int(n.i32)}
@@ -445,7 +414,7 @@ func (c *Ec3Core) adopt(p *BlockProcessor, alloc func(ArenaSizes) Arena) {
 	}
 }
 
-// ec3State is the state of an EchoCanceller3 but its pointers.
+// ec3State is the state of an EchoCanceller3 except its pointers.
 type ec3State struct {
 	renderWriter   ec3RenderWriter
 	blockProcessor blockProcessorState
@@ -462,8 +431,8 @@ type ec3State struct {
 	saturatedMicrophoneSignal   bool
 	hasBlockDelayBuffer         bool
 
-	// Where the buffers start in storage, and what the framing components
-	// keep besides their samples.
+	// The buffers in storage, and what the framing components keep besides
+	// their samples.
 	offsets                ec3Offsets
 	outputFramerFill       int
 	captureBlockerFill     int
@@ -473,7 +442,7 @@ type ec3State struct {
 	blockDelayLastInsert   int
 }
 
-// ec3Offsets is where each buffer of an EchoCanceller3 starts in its
+// ec3Offsets holds the start of each buffer of an EchoCanceller3 in its
 // storage.
 type ec3Offsets struct {
 	outputFramer           int // [band][capture channel][BlockSize]
@@ -493,9 +462,8 @@ type ec3Offsets struct {
 	size                   int // of the storage
 }
 
-// The views below are the frames, blocks and framing components of e over
-// its storage. A framing component is a copy: its fill is stored back after
-// use.
+// The frames, blocks and framing components of e are views over its storage.
+// A framing component is a copy: its fill is stored back after use.
 
 func (e *EchoCanceller3) renderQueueInputFrame() Frame {
 	return ec3FrameOver(e.numBands, e.numRenderInputChannels, e.storage[e.offsets.renderQueueInputFrame:])
@@ -524,8 +492,8 @@ func (e *EchoCanceller3) captureBlock() Block {
 	return ec3BlockOver(e.numBands, e.numCaptureChannels, e.storage[e.offsets.captureBlock:])
 }
 
-// linearOutputBlock returns the block that receives the linear filter
-// output; ok is false without Filter.ExportLinearAecOutput.
+// linearOutputBlock returns the block that receives the output of the linear
+// filter. ok is false without Filter.ExportLinearAecOutput.
 func (e *EchoCanceller3) linearOutputBlock() (block Block, ok bool) {
 	if !e.hasLinearOutput {
 		return Block{}, false
@@ -560,9 +528,8 @@ func (e *EchoCanceller3) blockDelayBuffer() BlockDelayBuffer {
 		buf: e.storage[e.offsets.blockDelayBuffer:][:e.numCaptureChannels*e.numBands*e.blockDelay]}
 }
 
-// NewEchoCanceller3 creates an echo canceller. multichannelConfig is the
-// optional config used once proper multichannel render content is detected
-// (nil corresponds to std::nullopt).
+// NewEchoCanceller3 returns an echo canceller. multichannelConfig is the
+// config for multichannel render content, or nil for std::nullopt.
 func NewEchoCanceller3(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
 	numRenderChannels, numCaptureChannels int) *EchoCanceller3 {
 	c := &Ec3Core{}
@@ -572,7 +539,7 @@ func NewEchoCanceller3(config, multichannelConfig *EchoCanceller3Config, sampleR
 	return e
 }
 
-// init sets up the core of e, which must be the zero value.
+// init sets up the core of e, which is the zero value.
 func (e *EchoCanceller3) init(config, multichannelConfig *EchoCanceller3Config, sampleRateHz,
 	numRenderChannels, numCaptureChannels, extraSamples int, alloc func(ArenaSizes) Arena) {
 	if !ValidFullBandRate(sampleRateHz) {
@@ -592,7 +559,7 @@ func (e *EchoCanceller3) init(config, multichannelConfig *EchoCanceller3Config, 
 		active.MultiChannel.StereoDetectionHysteresisSeconds)
 	e.hasLinearOutput = active.Filter.ExportLinearAecOutput
 
-	// One backing array for every sample buffer but the transfer queue. The
+	// One array for every sample buffer except the transfer queue. The
 	// render frame, which the render side writes, comes last.
 	renderViews := e.numBands * e.numRenderInputChannels
 	captureViews := e.numBands * e.numCaptureChannels
@@ -644,8 +611,8 @@ func ec3BlockOver(numBands, numChannels int, storage []float32) Block {
 	return Block{numBands: numBands, numChannels: numChannels, data: storage[:n:n]}
 }
 
-// initialize (re-)initializes the selected subset of the fields, at creation
-// as well as during reconfiguration.
+// initialize sets up the fields that depend on the active config, at
+// creation and when the config changes.
 func (e *EchoCanceller3) initialize() {
 	e.numRenderChannelsToAec = 1
 	if e.multichannelContentDetector.IsProperMultiChannelContentDetected() {
@@ -666,7 +633,6 @@ func (e *EchoCanceller3) initialize() {
 	e.renderBlockerFill = 0
 }
 
-// processor returns the block processor in use.
 func (e *EchoCanceller3) processor() *BlockProcessor {
 	if e.blockProcessorForTesting != nil {
 		return e.blockProcessorForTesting
@@ -674,9 +640,8 @@ func (e *EchoCanceller3) processor() *BlockProcessor {
 	return &e.blockProcessor
 }
 
-// SetBlockProcessorForTesting replaces the internal block processor.
-// ZeroGainSkipsForTesting returns the number of filter adaptations skipped
-// because the gain was zero (BlockProcessor.ZeroGainSkipsForTesting).
+// ZeroGainSkipsForTesting returns BlockProcessor.ZeroGainSkipsForTesting of
+// the block processor.
 func (e *EchoCanceller3) ZeroGainSkipsForTesting() uint64 {
 	return e.blockProcessor.ZeroGainSkipsForTesting()
 }
@@ -705,18 +670,18 @@ func (e *EchoCanceller3) queueInitial() []float32 {
 // ExtraSamples returns the samples Ec3Core.Init set aside for the caller.
 func (e *EchoCanceller3) ExtraSamples() []float32 { return e.storage[e.offsets.extra:] }
 
-// RenderFrame returns the split-band render frame that AnalyzeRenderFrame
-// consumes. The caller fills every band and channel before each call.
+// RenderFrame returns the render frame AnalyzeRenderFrame consumes. The
+// caller fills every band and channel before each call.
 func (e *EchoCanceller3) RenderFrame() Frame { return e.renderQueueInputFrame() }
 
-// AnalyzeRenderFrame analyzes and stores an internal copy of RenderFrame,
-// whose contents are unspecified afterwards.
+// AnalyzeRenderFrame queues a copy of RenderFrame for the capture side. The
+// contents of RenderFrame are unspecified afterwards.
 func (e *EchoCanceller3) AnalyzeRenderFrame() {
 	e.renderWriter.Insert(e.renderTransferQueue, e.renderQueueInputFrame(), e.hpMore, e.queueInitial())
 }
 
-// AnalyzeRender analyzes and stores an internal copy of the split-band
-// render signal ([band][channel][SplitBandSize]).
+// AnalyzeRender queues a copy of the split-band render signal,
+// render[band][channel], for the capture side.
 func (e *EchoCanceller3) AnalyzeRender(render [][][]float32) {
 	if len(render) > 0 && len(render[0]) != e.numRenderInputChannels {
 		panic("aec3: EchoCanceller3.AnalyzeRender channel count mismatch")
@@ -728,8 +693,8 @@ func (e *EchoCanceller3) AnalyzeRender(render [][][]float32) {
 	e.AnalyzeRenderFrame()
 }
 
-// AnalyzeCapture analyzes the full-band capture signal ([channel][samples])
-// to detect signal saturation.
+// AnalyzeCapture detects saturation in the full-band capture signal,
+// capture[channel].
 func (e *EchoCanceller3) AnalyzeCapture(capture [][]float32) {
 	e.saturatedMicrophoneSignal = false
 	for channel := range capture {
@@ -740,26 +705,26 @@ func (e *EchoCanceller3) AnalyzeCapture(capture [][]float32) {
 	}
 }
 
-// AnalyzeCaptureSamples is AnalyzeCapture for a full-band capture signal
-// whose channels are stored one after the other.
+// AnalyzeCaptureSamples is AnalyzeCapture for channels stored one after the
+// other.
 func (e *EchoCanceller3) AnalyzeCaptureSamples(capture []float32) {
 	e.saturatedMicrophoneSignal = ec3DetectSaturation(capture)
 }
 
-// CaptureFrame returns the split-band capture frame that ProcessCaptureFrame
-// processes in place.
+// CaptureFrame returns the capture frame ProcessCaptureFrame processes in
+// place.
 func (e *EchoCanceller3) CaptureFrame() Frame { return e.captureFrame() }
 
-// LinearOutputFrame returns the frame ([1][channel][SplitBandSize], 16 kHz)
-// that receives the linear filter output. It is the zero Frame without
+// LinearOutputFrame returns the one-band frame at 16 kHz that receives the
+// output of the linear filter, or the zero Frame without
 // Filter.ExportLinearAecOutput.
 func (e *EchoCanceller3) LinearOutputFrame() Frame { return e.linearOutputFrame() }
 
-// ProcessCapture removes the echo from the split-band capture signal
-// ([band][channel][SplitBandSize]) in place. linearOutput, when non-nil,
-// receives the linear filter output ([channel][SplitBandSize], 16 kHz); it
-// requires Filter.ExportLinearAecOutput, and must then be passed on every
-// call. levelChange flags an echo path gain change.
+// ProcessCapture removes the echo from the split-band capture signal,
+// capture[band][channel], in place. A linearOutput that is not nil receives
+// the output of the linear filter at 16 kHz; it needs
+// Filter.ExportLinearAecOutput and is then passed on every call. levelChange
+// reports a gain change of the echo path.
 func (e *EchoCanceller3) ProcessCapture(capture [][][]float32, linearOutput [][]float32, levelChange bool) {
 	if len(capture) != e.numBands || len(capture[0]) != e.numCaptureChannels {
 		panic("aec3: EchoCanceller3.ProcessCapture capture shape mismatch")
@@ -777,15 +742,14 @@ func (e *EchoCanceller3) ProcessCapture(capture [][][]float32, linearOutput [][]
 }
 
 // ProcessCaptureFrame removes the echo from CaptureFrame in place. With
-// linearOutput, LinearOutputFrame receives the linear filter output; that
-// requires Filter.ExportLinearAecOutput, and linearOutput must then be set on
-// every call. levelChange flags an echo path gain change.
+// linearOutput, LinearOutputFrame receives the output of the linear filter;
+// that needs Filter.ExportLinearAecOutput and is then set on every call.
+// levelChange reports a gain change of the echo path.
 func (e *EchoCanceller3) ProcessCaptureFrame(linearOutput, levelChange bool) {
 	if linearOutput && !e.hasLinearOutput {
 		panic("aec3: linear AEC output requested without Filter.ExportLinearAecOutput")
 	}
 
-	// Optionally delay the capture signal.
 	if e.configSelector.ActiveConfig().Delay.FixedCaptureDelaySamples > 0 {
 		if !e.hasBlockDelayBuffer {
 			panic("aec3: fixed capture delay enabled by a config switch")
@@ -805,19 +769,15 @@ func (e *EchoCanceller3) ProcessCaptureFrame(linearOutput, levelChange bool) {
 		e.multichannelContentDetector.IsTemporaryMultiChannelContentDetected())
 }
 
-// ec3DownmixRenderSubFrame prepares subframe subFrameIndex of the render
-// frame for an AEC that runs on numChannelsToAec channels (the
-// FillSubFrameView overload for the render frame): when that is fewer than
-// the frame has, the AEC reads channel 0, after all channels are averaged
-// into it when a proper downmix is needed.
+// ec3DownmixRenderSubFrame prepares a subframe of the render frame for an
+// AEC that runs on numChannelsToAec channels. With fewer than the frame has,
+// the AEC reads channel 0, which first takes the average of all channels if
+// properDownmixNeeded.
 func ec3DownmixRenderSubFrame(properDownmixNeeded bool, frame Frame, subFrameIndex, numChannelsToAec int) {
 	frameNumChannels := frame.numChannels
 	if frameNumChannels > numChannelsToAec && properDownmixNeeded {
-		// When a proper downmix is needed (which is the case when proper
-		// stereo is present in the echo reference signal but the echo
-		// canceller does the processing in mono) downmix the echo
-		// reference by averaging the channel content (otherwise
-		// downmixing is done by selecting channel 0).
+		// Stereo content that the AEC processes in mono is averaged into
+		// channel 0; otherwise channel 0 is the downmix.
 		for band := 0; band < frame.numBands; band++ {
 			dst := frame.SubFrame(band, 0, subFrameIndex)
 			for ch := 1; ch < frameNumChannels; ch++ {
@@ -905,18 +865,16 @@ func (e *EchoCanceller3) bufferRemainingRenderFrameContent() {
 	e.processor().BufferRender(&renderBlock)
 }
 
-// emptyRenderQueue empties the render transfer queue.
 func (e *EchoCanceller3) emptyRenderQueue() {
 	renderQueueOutputFrame := e.renderQueueOutputFrame()
 	queueInitial := e.queueInitial()
 	frameToBuffer := e.renderTransferQueue.remove(renderQueueOutputFrame, queueInitial)
 	for frameToBuffer {
 		if e.multichannelContentDetector.UpdateDetection(renderQueueOutputFrame) {
-			// Reinitialize the AEC when proper stereo is detected.
+			// Stereo content reinitializes the AEC.
 			e.initialize()
 		}
 
-		// Buffer frame content.
 		e.bufferRenderFrameContent(e.multichannelContentDetector.IsTemporaryMultiChannelContentDetected(), 0)
 		e.bufferRenderFrameContent(e.multichannelContentDetector.IsTemporaryMultiChannelContentDetected(), 1)
 		e.bufferRemainingRenderFrameContent()
@@ -925,31 +883,29 @@ func (e *EchoCanceller3) emptyRenderQueue() {
 	}
 }
 
-// GetMetrics collects the current metrics from the echo canceller.
+// GetMetrics returns the current metrics.
 func (e *EchoCanceller3) GetMetrics() EchoControlMetrics {
 	return e.processor().GetMetrics()
 }
 
-// SetAudioBufferDelay provides an optional external estimate of the audio
-// buffer delay.
+// SetAudioBufferDelay sets an external estimate of the audio buffer delay.
 func (e *EchoCanceller3) SetAudioBufferDelay(delayMs int) {
 	e.processor().SetAudioBufferDelay(delayMs)
 }
 
-// SetCaptureOutputUsage specifies whether the capture output will be used,
-// allowing some processing to be deactivated when it is not, for instance
-// when the endpoint is muted.
+// SetCaptureOutputUsage tells the canceller whether the capture output is
+// used. It may skip work whose result nothing uses, as when the endpoint is
+// muted.
 func (e *EchoCanceller3) SetCaptureOutputUsage(captureOutputUsed bool) {
 	e.processor().SetCaptureOutputUsage(captureOutputUsed)
 }
 
-// ActiveProcessing reports whether the echo canceller is processing; AEC3
-// always is.
+// ActiveProcessing reports whether the canceller processes the capture
+// signal. AEC3 always does.
 func (e *EchoCanceller3) ActiveProcessing() bool { return true }
 
-// UpdateEchoLeakageStatus signals whether an external detector has detected
-// echo leakage from the echo canceller. Once flagged, leakage should be
-// unflagged when it no longer occurs.
+// UpdateEchoLeakageStatus tells the canceller whether an external detector
+// sees echo leak into its output.
 func (e *EchoCanceller3) UpdateEchoLeakageStatus(leakageDetected bool) {
 	e.processor().UpdateEchoLeakageStatus(leakageDetected)
 }
@@ -960,6 +916,6 @@ func (e *EchoCanceller3) SampleRateHz() int { return e.sampleRateHz }
 // NumBands returns the number of split bands.
 func (e *EchoCanceller3) NumBands() int { return e.numBands }
 
-// ArenasForTesting returns the arena of c and, when the block processor has
-// its own, that one.
+// ArenasForTesting returns the arena of c and the one of the block
+// processor, which is nil unless it has its own.
 func (c *Ec3Core) ArenasForTesting() (arena, blockProcessor Arena) { return c.arena, c.bpArena }

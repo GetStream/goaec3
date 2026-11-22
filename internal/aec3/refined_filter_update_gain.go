@@ -7,7 +7,7 @@ const (
 	afirPoorExcitationCounterInitial         = 1000
 )
 
-// RefinedFilterUpdateGain computes the NLMS-style gain for the refined filter.
+// RefinedFilterUpdateGain computes the NLMS gain of the refined filter.
 type RefinedFilterUpdateGain struct {
 	configChangeDurationBlocks      int
 	oneByConfigChangeDurationBlocks float32
@@ -26,7 +26,6 @@ func NewRefinedFilterUpdateGain(config RefinedConfiguration, configChangeDuratio
 	return g
 }
 
-// init sets up g in place.
 func (g *RefinedFilterUpdateGain) init(config RefinedConfiguration, configChangeDurationBlocks int) {
 	*g = RefinedFilterUpdateGain{
 		configChangeDurationBlocks: configChangeDurationBlocks,
@@ -39,7 +38,7 @@ func (g *RefinedFilterUpdateGain) init(config RefinedConfiguration, configChange
 	g.oneByConfigChangeDurationBlocks = 1 / float32(g.configChangeDurationBlocks)
 }
 
-// HandleEchoPathChange reacts to a known echo path change.
+// HandleEchoPathChange resets what the echo path change invalidates.
 func (g *RefinedFilterUpdateGain) HandleEchoPathChange(echoPathVariability EchoPathVariability) {
 	if echoPathVariability.DelayChange != DelayAdjustmentNone {
 		for k := range g.hError {
@@ -52,7 +51,7 @@ func (g *RefinedFilterUpdateGain) HandleEchoPathChange(echoPathVariability EchoP
 	}
 }
 
-// SetConfig sets a new config, immediately or gradually.
+// SetConfig sets the config, immediately or gradually.
 func (g *RefinedFilterUpdateGain) SetConfig(config RefinedConfiguration, immediateEffect bool) {
 	if immediateEffect {
 		g.oldTargetConfig, g.currentConfig, g.targetConfig = config, config, config
@@ -64,7 +63,7 @@ func (g *RefinedFilterUpdateGain) SetConfig(config RefinedConfiguration, immedia
 	}
 }
 
-// Compute computes the gain gainFft. erl must hold FftLengthBy2Plus1 values.
+// Compute computes the gain G. erl holds FftLengthBy2Plus1 values.
 func (g *RefinedFilterUpdateGain) Compute(renderPower *[FftLengthBy2Plus1]float32, renderSignalAnalyzer *RenderSignalAnalyzer, subtractorOutput *SubtractorOutput, erl []float32, sizePartitions int, saturatedCaptureSignal, disallowLeakageDiverged bool, gainFft *FftData) {
 	ERefined := &subtractorOutput.ERefinedFft
 	E2Refined := &subtractorOutput.E2Refined
@@ -80,7 +79,7 @@ func (g *RefinedFilterUpdateGain) Compute(renderPower *[FftLengthBy2Plus1]float3
 		g.poorExcitationCounter = 0
 	}
 
-	// Do not update the filter if the render is not sufficiently excited.
+	// No update while the render lacks excitation.
 	g.poorExcitationCounter++
 	if g.poorExcitationCounter < sizePartitions || saturatedCaptureSignal || g.callCounter <= sizePartitions {
 		G.Re = [FftLengthBy2Plus1]float32{}
@@ -90,7 +89,7 @@ func (g *RefinedFilterUpdateGain) Compute(renderPower *[FftLengthBy2Plus1]float3
 		var mu [FftLengthBy2Plus1]float32
 		kernRefinedMu(X2, &g.hError, E2Refined, g.currentConfig.NoiseGate, float32(sizePartitions), &mu)
 
-		// Avoid updating the filter close to narrow bands in the render signals.
+		// No update close to narrow bands of the render signal.
 		renderSignalAnalyzer.MaskRegionsAroundNarrowBands(&mu)
 
 		// H_error = H_error - 0.5 * mu * X2 * H_error.

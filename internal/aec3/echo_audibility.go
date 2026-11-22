@@ -1,7 +1,7 @@
 package aec3
 
-// EchoAudibility mirrors echo_audibility.h: estimates the audibility of the
-// echo from the render signal stationarity.
+// EchoAudibility estimates the audibility of the echo from the stationarity
+// of the render signal (echo_audibility.h).
 type EchoAudibility struct {
 	renderSpectrumWritePrev      int
 	renderSpectrumWritePrevValid bool
@@ -22,7 +22,7 @@ func (e *EchoAudibility) init(useRenderStationarityAtInit bool) {
 	e.reset()
 }
 
-// Update feeds new render data to the audibility estimator.
+// Update takes the render data of one block.
 func (e *EchoAudibility) Update(renderBuffer *RenderBuffer, averageReverb []float32, delayBlocks int, externalDelaySeen bool) {
 	e.updateRenderNoiseEstimator(renderBuffer.GetSpectrumBuffer(), renderBuffer.GetBlockBuffer(), externalDelaySeen)
 	if externalDelaySeen || e.useRenderStationarityAtInit {
@@ -30,7 +30,8 @@ func (e *EchoAudibility) Update(renderBuffer *RenderBuffer, averageReverb []floa
 	}
 }
 
-// GetResidualEchoScaling returns the residual echo scaling per band.
+// GetResidualEchoScaling sets residualScaling to the scaling of the residual
+// echo per band.
 func (e *EchoAudibility) GetResidualEchoScaling(filterHasHadTimeToConverge bool, residualScaling []float32) {
 	for band := range residualScaling {
 		if e.renderStationarity.IsBandStationary(band) && (filterHasHadTimeToConverge || e.useRenderStationarityAtInit) {
