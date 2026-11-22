@@ -474,17 +474,22 @@ func TestSteadyStateAllocations(t *testing.T) {
 
 // TestBoundaryConfigSweep sets each config field, one at a time, to the
 // extremes of its type, its edge values and the Validate bounds, validates
-// the config and runs echo audio through three base setups (16 kHz mono;
-// 48 kHz stereo with subband nearend detection and linear output; 32 kHz
-// external delay). Nothing may panic and, for finite fields, the output must
-// stay finite, and the configs New rejects (robustRejected) must return
-// ErrConfig.
+// the config and runs the signals of robustSweepPhases through three base
+// setups (16 kHz mono; 48 kHz stereo with subband nearend detection and
+// linear output; 32 kHz external delay). Nothing may panic and, for finite
+// fields, the output must stay finite, and the configs New rejects
+// (robustRejected) must return ErrConfig.
 func TestBoundaryConfigSweep(t *testing.T) {
-	frames := 40
+	unit := 10
 	if testing.Short() {
-		frames = 6
+		unit = 1
 	}
-	failures := robustSweepFailures(t, frames, func(path string, cfg *Config) bool {
+	// A delay that is found, with the estimates that follow it, takes more
+	// than two seconds of the echo scene: GOAEC3_SWEEP_UNIT=40.
+	if v, err := strconv.Atoi(os.Getenv("GOAEC3_SWEEP_UNIT")); err == nil && v > 0 {
+		unit = v
+	}
+	failures := robustSweepFailures(t, unit, func(path string, cfg *Config) bool {
 		if robustRejected(cfg) {
 			// The documented ErrConfig set: New must refuse it.
 			if _, err := New(*cfg, 16000, 1, 1); !errors.Is(err, ErrConfig) {
