@@ -5,12 +5,11 @@ import (
 	"github.com/GetStream/goaec3/internal/bands"
 )
 
-// The arrays of a canceller (samples, filter coefficients, spectra, delay
-// histograms, band-splitting filters) have sizes that depend on its format
-// and config. For the usual sizes they are the fields of one struct, an
-// arena class: one pointer-free heap object, of which the canceller holds
-// one pointer. A canceller that fits no class allocates each array
-// (ecSliceArena).
+// The sizes of a canceller's arrays (samples, filter coefficients, spectra,
+// delay histograms, band-splitting filters) depend on its format and
+// config. For the usual sizes the arrays are the fields of one pointer-free
+// struct, an arena class. A canceller that fits no class allocates each
+// array (ecSliceArena).
 
 // ecArena is the arena of a canceller: the arrays of the AEC3 core and the
 // band-splitting filters.
@@ -33,17 +32,14 @@ type (
 	ecF76k [76800]float32
 	ecF86k [86016]float32
 
-	ecH0   [0]aec3.FftData
 	ecH200 [200]aec3.FftData
 	ecH224 [224]aec3.FftData
 	ecH448 [448]aec3.FftData
 
-	ecS0   [0][aec3.FftLengthBy2Plus1]float32
 	ecS184 [184][aec3.FftLengthBy2Plus1]float32
 	ecS200 [200][aec3.FftLengthBy2Plus1]float32
 	ecS368 [368][aec3.FftLengthBy2Plus1]float32
 
-	ecI0  [0]int32
 	ecI2k [2624]int32
 
 	ecP0 [0]bands.ChannelSplitter
@@ -61,12 +57,10 @@ func (a *ecF61k) s() []float32 { return a[:] }
 func (a *ecF76k) s() []float32 { return a[:] }
 func (a *ecF86k) s() []float32 { return a[:] }
 
-func (a *ecH0) s() []aec3.FftData   { return a[:] }
 func (a *ecH200) s() []aec3.FftData { return a[:] }
 func (a *ecH224) s() []aec3.FftData { return a[:] }
 func (a *ecH448) s() []aec3.FftData { return a[:] }
 
-func (a *ecS0) s() [][aec3.FftLengthBy2Plus1]float32   { return a[:] }
 func (a *ecS184) s() [][aec3.FftLengthBy2Plus1]float32 { return a[:] }
 func (a *ecS200) s() [][aec3.FftLengthBy2Plus1]float32 { return a[:] }
 func (a *ecS368) s() [][aec3.FftLengthBy2Plus1]float32 { return a[:] }
@@ -115,16 +109,13 @@ func ecClass[F, H, S, I, P any,
 	return new(ecArenaOf[F, H, S, I, P, PF, PH, PS, PI, PP])
 }
 
-// ecArenaClasses are the arena classes in the order of their size (a
-// canceller takes the first that holds what it needs): what a class holds
-// of samples, filter coefficients, spectra, histogram bins and
-// band-splitting filters, and how to allocate one. The classes are sized
-// for the default configs with up to two channels a side, with some room:
-// the canceller's samples and the block processor's arrays in one arena, at
-// 16, 32 and 48 kHz, for one and for two capture channels, for a block
-// processor on one render channel and on two; and the arrays of a block
-// processor alone (the one a canceller sets up when stereo content starts
-// goes into an arena of its own).
+// ecArenaClasses lists the arena classes in order of size: the samples,
+// filter coefficients, spectra, histogram bins and band-splitting filters a
+// class holds, and its allocator. A canceller takes the first class that
+// holds what it needs. The classes cover the default configs with up to two
+// channels a side at 16, 32 and 48 kHz, and the arrays of a block processor
+// alone, which a canceller sets up in an arena of its own when stereo
+// content starts.
 var ecArenaClasses = []struct {
 	f, h, s, i, p int
 	alloc         func() ecArena
@@ -158,7 +149,7 @@ func (a *ecSliceArena) Alloc(n aec3.ArenaSizes) aec3.Arena { return newEcArena(n
 func (a *ecSliceArena) splitters() []bands.ChannelSplitter { return a.p }
 
 // newEcArena returns an arena that holds at least n and numSplitters
-// band-splitting filters: of the first class that does, or of slices.
+// band-splitting filters: the first class that does, or one of slices.
 func newEcArena(n aec3.ArenaSizes, numSplitters int) ecArena {
 	for _, c := range ecArenaClasses {
 		if n.F32 <= c.f && n.Fft <= c.h && n.Spec <= c.s && n.I32 <= c.i && numSplitters <= c.p {

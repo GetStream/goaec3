@@ -75,11 +75,11 @@ var (
 )
 
 // ec3Side converts one signal direction between the caller's full-band
-// frames and the split-band frame of the canceller. At 32 and 48 kHz it uses
-// a FloatS16 full-band copy of the frame (in the canceller's extra samples,
-// from fullOffset) and one band-splitting filter per channel (in the
-// canceller's splitters, from firstSplitter); at 16 kHz the single band is
-// the full-band signal and it uses neither. It holds no pointers.
+// frames and the split-band frame of the canceller. At 32 and 48 kHz it
+// keeps a FloatS16 copy of the frame in the canceller's extra samples, from
+// fullOffset, and uses one band-splitting filter per channel, from
+// firstSplitter. At 16 kHz the single band is the full-band signal.
+// ec3Side holds no pointers.
 type ec3Side struct {
 	numChannels   int
 	numBands      int
@@ -88,7 +88,7 @@ type ec3Side struct {
 	firstSplitter int
 }
 
-// init sets up s; it returns the number of extra samples the side uses.
+// init sets up s and returns the number of extra samples it uses.
 func (s *ec3Side) init(sampleRateHz, numChannels, fullOffset, firstSplitter int) int {
 	s.numChannels = numChannels
 	s.frameLength = sampleRateHz / 100
@@ -100,8 +100,7 @@ func (s *ec3Side) init(sampleRateHz, numChannels, fullOffset, firstSplitter int)
 	return 0
 }
 
-// full returns the full-band FloatS16 samples of every channel, given the
-// canceller's extra samples.
+// full returns the full-band FloatS16 samples of every channel.
 func (s *ec3Side) full(extra []float32) []float32 {
 	n := s.numChannels * s.frameLength
 	return extra[s.fullOffset : s.fullOffset+n : s.fullOffset+n]
@@ -176,11 +175,8 @@ func ec3CheckFrame(frame [][]float32, numChannels, frameLength int) error {
 // (ProcessCapture, ProcessCaptureWithLinearOutput, SetAudioBufferDelay,
 // SetCaptureOutputUsage, Metrics). Calls on each side must be serialized.
 //
-// The canceller is one heap object whose few pointer words come first; they
-// are all the garbage collector reads of it. The state of every component
-// follows by value and holds no pointers: its buffers are views, bound on
-// the stack of each call, of the arrays of one more pointer-free object (the
-// arena; see arena.go).
+// An EchoCanceller is two heap objects: itself, whose pointer words come
+// first, and a pointer-free arena that holds its arrays.
 type EchoCanceller struct {
 	core    aec3.Ec3Core
 	render  ec3Side
@@ -239,13 +235,10 @@ func newEchoCanceller(cfg, multichannelCfg *Config, sampleRateHz, numRenderChann
 		numCaptureChannels: numCaptureChannels,
 		exportLinearOutput: cfg.Filter.ExportLinearAecOutput,
 	}
-	// The full-band copies of both sides are extra samples of the core; the
-	// capture side comes first, the render side, which AnalyzeRender writes,
-	// last.
+	// The full-band copies are extra samples of the core: capture first,
+	// then render, which AnalyzeRender writes.
 	extra := e.capture.init(sampleRateHz, numCaptureChannels, 0, 0)
 	extra += e.render.init(sampleRateHz, numRenderChannels, extra, numCaptureChannels)
-	// The arena holds the band-splitting filters, of the capture channels
-	// first.
 	numSplitters := 0
 	if sampleRateHz > 16000 {
 		numSplitters = numCaptureChannels + numRenderChannels
@@ -384,8 +377,7 @@ func (e *EchoCanceller) processCapture(ec *aec3.EchoCanceller3, capture [][]floa
 		e.capture.analysis(frame, extra, splitters)
 	}
 	levelChange := e.echoPathGainChange.Swap(false)
-	// With Filter.ExportLinearAecOutput the linear output framer must see
-	// every frame.
+	// The linear output framer must see every frame.
 	ec.ProcessCaptureFrame(e.exportLinearOutput, levelChange)
 	e.capture.merge(frame, capture, extra, splitters)
 }
@@ -434,12 +426,4 @@ func (e *EchoCanceller) NumCaptureChannels() int { return e.numCaptureChannels }
 // splitters returns the band-splitting filters of e, which its arena holds.
 func (e *EchoCanceller) splitters() []bands.ChannelSplitter {
 	return e.core.Arena().(ecArena).splitters()
-}
-
-// stereoActive reports whether e processes its render signal in stereo (for
-// tests; it belongs to the capture side).
-func stereoActive(e *EchoCanceller) bool {
-	var ec aec3.EchoCanceller3
-	e.core.Bind(&ec)
-	return ec.StereoRenderProcessingActiveForTesting()
 }
