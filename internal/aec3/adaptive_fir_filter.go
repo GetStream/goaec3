@@ -826,7 +826,6 @@ func (f *AdaptiveFirFilter) init(maxSizePartitions, initialSizePartitions, sizeC
 	f.SetSizePartitions(f.currentSizePartitions, true)
 }
 
-// bind makes f the view of st.
 func (f *AdaptiveFirFilter) bind(st *afirState, b *binder) {
 	f.afirState = st
 	f.H.numChannels = st.numRenderChannels
