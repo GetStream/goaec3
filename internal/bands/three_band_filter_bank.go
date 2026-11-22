@@ -59,12 +59,35 @@ var bsDctModulation = [NumNonZeroFilters][bsDctSize]float32{
 	{bsSqrt3, 0, -bsSqrt3},
 }
 
-// The fast filter banks keep each filter input as a history buffer:
-// MemorySize samples of state followed by the SplitBandSize new samples.
+// The filter banks of both builds (three_band_filter_bank_simd.go and
+// three_band_filter_bank_nosimd.go) compute every output sample with the
+// operations of threeBandFilterBankRef in its order: bsFilterCore forms
+// out[k] as ((((0 + x0*h0) + x1*h1) + x2*h2) + x3*h3) with
+// xi = x[k - inShift - Stride*i], and the banding adds each filter's
+// modulated output in a fixed filter order.
+//
+// Each filter input is a history buffer, MemorySize samples of state
+// followed by the SplitBandSize new samples, so the state and input cases
+// of bsFilterCore are one tap pattern. The loops run sample-major: every
+// filter of an output sample is evaluated before the next sample, and the
+// band sums stay in registers.
+//
+// The modulation by bsDctModulation is written out per filter. For finite
+// operands the rewrites are exact: m*v for m in {1, -1} is v and -v,
+// (-m)*v is -(m*v) and a + (-b) is a - b; equal products are computed once;
+// and a term 0*v is dropped, because adding ±0 changes a sum only if the
+// sum is -0, and the sums start as 0 + p.
+//
+// With finite input and state every filter output is finite: the taps of a
+// filter sum to less than one in magnitude. A frame whose input or state
+// holds a NaN or an infinity runs the reference on the same state, which
+// also keeps the C++ operand order for NaN payloads.
+
+// bsHistSize is the length of a history buffer.
 const bsHistSize = MemorySize + SplitBandSize
 
-// bsSchedule lists the non-zero filters in the reference loop order
-// (downsampling/upsampling index outer, inShift inner).
+// bsSchedule lists the non-zero filters in the loop order of the reference:
+// by phase (the downsampling or upsampling index), then by inShift.
 var bsSchedule = [NumNonZeroFilters]struct{ phase, inShift, filter int }{
 	{0, 0, 0}, {0, 2, 5},
 	{1, 0, 1}, {1, 1, 3}, {1, 2, 6}, {1, 3, 8},
@@ -80,8 +103,8 @@ const bsNumSynthesisInputs = 6
 // 5: {-1,2,-1}, with s = bsSqrt3.
 var bsSynthesisInput = [NumNonZeroFilters]int{0, 2, 4, 5, 3, 1, 3, 5, 4, 2}
 
-// bsFilterCore filters in with filter using a shift by inShift, taking into
-// account the previous state.
+// bsFilterCore is FilterCore of three_band_filter_bank.cc: it filters in
+// with filter at a shift of inShift, continuing from state.
 func bsFilterCore(filter *[FilterSize]float32, in *[SplitBandSize]float32, inShift int,
 	out *[SplitBandSize]float32, state *[MemorySize]float32) {
 	*out = [SplitBandSize]float32{}
@@ -123,8 +146,8 @@ func bsFilterIndex(index int) int {
 }
 
 // threeBandFilterBankRef is the scalar three_band_filter_bank.cc, operation
-// for operation. It is the spec the archsimd ThreeBandFilterBank kernels are
-// tested against and the implementation used without them.
+// for operation: the spec of the filter banks, and what runs a frame that
+// is not finite.
 type threeBandFilterBankRef struct {
 	stateAnalysis  [NumNonZeroFilters][MemorySize]float32
 	stateSynthesis [NumNonZeroFilters][MemorySize]float32

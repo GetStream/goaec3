@@ -6,6 +6,5 @@ package bands
 // FloatS16ToS16 loop on arm64: fcvtzs gives 0.
 const bsNaNS16Vector int16 = 0
 
-// bsIsAMD64 selects the forms of the pure-Go kernels written for the
-// sixteen float registers and the memory operands of amd64.
+// bsIsAMD64 selects the pure-Go kernels written for amd64.
 const bsIsAMD64 = false

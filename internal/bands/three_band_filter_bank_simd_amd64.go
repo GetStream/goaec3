@@ -4,9 +4,8 @@ package bands
 
 import "simd/archsimd"
 
-// 256-bit ThreeBandFilterBank kernels: the 128-bit kernels of
-// three_band_filter_bank_simd.go with eight output samples per step. Every
-// output sample sees the same sequence of rounded operations.
+// The 256-bit ThreeBandFilterBank kernels: those of
+// three_band_filter_bank_simd.go with eight output samples per step.
 
 var bsHasAVX2 = archsimd.X86.AVX2()
 
@@ -129,10 +128,9 @@ func bsAnalysisAVX2(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 }
 
 // bsSynthesisAVX2 is bsSynthesisSIMD with eight output samples per step.
-// The phases are filtered into t and interleaved into out after
-// ClearAVXUpperBits: the interleave moves single floats, and scalar float
-// moves inside the 256-bit section would each wait on the previous one
-// through the dirty upper register half.
+// The interleave into out moves single floats, which must not run with a
+// dirty upper register half: the phases are filtered into t and interleaved
+// after ClearAVXUpperBits.
 func bsSynthesisAVX2(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 	in0, in1, in2 *[SplitBandSize]float32, out *[FullBandSize]float32) {
 	var t [bsSubSampling][SplitBandSize]float32

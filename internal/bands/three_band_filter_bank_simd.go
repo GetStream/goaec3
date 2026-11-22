@@ -4,27 +4,14 @@ package bands
 
 import "simd/archsimd"
 
-// archsimd ThreeBandFilterBank. The scalar C++ is elementwise in every
-// output sample: bsFilterCore forms out[k] as ((((0 + x0*h0) + x1*h1) +
-// x2*h2) + x3*h3) with xi = x[k - inShift - Stride*i], the banding adds each
-// filter's modulated output to the band in a fixed filter order, and the
-// synthesis modulation and upsampling do the same per sample. The kernels
-// vectorize across output samples and keep that per-sample operation order,
-// so they are bit-identical to threeBandFilterBankRef on every lane.
+// The archsimd ThreeBandFilterBank (see three_band_filter_bank.go). The
+// kernels vectorize across output samples. Analysis filters with the same
+// downsampling index share one history.
 //
-// Each filter input is kept as a history buffer: MemorySize samples of state
-// followed by the SplitBandSize new samples, so bsFilterCore's three state /
-// input cases become one load pattern. The analysis filters that share a
-// downsampling index see the same input, so one history per index holds the
-// state all of them carry in the reference.
-//
-// NaN payloads: when both operands of an add are NaN, the result carries one
-// of the two payloads, picked by operand position (arm64 and x86 differ),
-// and the compiler may commute vector adds. Every NaN the filter bank
-// creates from non-NaN values is the architecture's default NaN, so the
-// payloads only diverge when a NaN reaches it from outside. A frame whose
-// input or state holds a NaN or an infinity therefore runs the reference,
-// which reproduces the C++ operand order, on the same state.
+// When both operands of an add are NaN the result carries the payload of
+// one, picked by operand position, and the compiler may commute vector
+// adds. A NaN the filter bank creates is the default NaN, so payloads
+// diverge only for a NaN from outside, and such a frame runs the reference.
 
 // ThreeBandFilterBank splits a 48 kHz frame into three 16 kHz bands and
 // merges them back. The prototype low-pass filter has half bandwidth, so a
@@ -107,8 +94,8 @@ func bsFiniteState(acc archsimd.Float32x4, h *[bsHistSize]float32) archsimd.Floa
 }
 
 // bsAnalysisFinite reports whether the analysis input and state are finite.
-// The input is accumulated in eight independent sums: only the presence of
-// a NaN in a sum matters, and one sum would chain 120 additions.
+// Only the presence of a NaN in a sum matters, so the input goes into eight
+// independent sums instead of one chain.
 func bsAnalysisFinite(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]float32) bool {
 	var acc archsimd.Float32x4
 	for d := range hist {
@@ -173,21 +160,7 @@ func bsTap4(w *[19]float32, inShift int, c *bsCoeffs) archsimd.Float32x4 {
 	return acc.Add(archsimd.LoadFloat32x4Array((*[4]float32)(w[3-inShift : 7-inShift])).Mul(c.c3))
 }
 
-// bsAnalysisSIMD filters and bands sample-major: every filter of four output
-// samples is evaluated, in the reference filter order, before the next four,
-// so the band sums stay in registers. The modulation by bsDctModulation is
-// written out per filter.
-//
-// For finite operands these rewrites are exact:
-//   - m*v for m in {1, -1} is v and -v; (-m)*v is -(m*v); a + (-b) is a - b.
-//   - Equal products are computed once.
-//   - A term 0*v is +-0, and adding it leaves a sum unchanged unless the sum
-//     is -0. The sums start as 0 + p (never -0) and a sum of two values is
-//     -0 only when both are -0, so the term is dropped.
-//
-// With finite input and state every analysis filter output is finite (the
-// taps of a filter sum to less than one in magnitude), and the synthesis
-// modulation only rewrites operations on the finite band samples.
+// bsAnalysisSIMD filters and bands four output samples per step.
 func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]float32,
 	out0, out1, out2 *[SplitBandSize]float32) {
 	// Downsample: phase d takes in[(bsSubSampling-1) - d + bsSubSampling*k].

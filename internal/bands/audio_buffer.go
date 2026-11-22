@@ -1,17 +1,13 @@
 package bands
 
-// BandSplitter performs what webrtc::AudioBuffer::SplitIntoFrequencyBands and
-// MergeFrequencyBands do on one 10 ms frame (audio_buffer.cc), for a buffer
-// without resampling.
+// BandSplitter is the band splitting of webrtc::AudioBuffer
+// (SplitIntoFrequencyBands and MergeFrequencyBands in audio_buffer.cc) on
+// one 10 ms frame, for a buffer without resampling.
 //
 // Full-band data is data[channel][sampleRateHz/100] and split data is
-// bands[band][channel][160], both in FloatS16 scale and owned by the caller.
-// AudioBuffer::CopyFrom on float input applies FloatToFloatS16 to each
-// sample (see FloatToFloatS16Slice) before splitting, and CopyTo applies
-// FloatS16ToFloat after merging.
-//
-// At 16 kHz AudioBuffer has a single band whose split view aliases the
-// full-band data; Split and Merge then copy between data and bands[0].
+// bands[band][channel][160], both FloatS16 and owned by the caller. At
+// 16 kHz there is one band, and splitting and merging copy between data and
+// bands[0].
 type BandSplitter struct {
 	numChannels      int
 	numBands         int
@@ -19,6 +15,8 @@ type BandSplitter struct {
 	splittingFilter  *SplittingFilter
 }
 
+// NewBandSplitter returns a BandSplitter for numChannels channels at
+// sampleRateHz, which is 16000, 32000 or 48000.
 func NewBandSplitter(sampleRateHz, numChannels int) *BandSplitter {
 	numFrames := sampleRateHz / 100
 	numBands := 1
