@@ -10,7 +10,8 @@ import (
 // libwebrtc cannot run them (the EchoCanceller3 constructor segfaults with
 // zero matched filters and aborts on a negative vector size with a refined
 // filter shorter than 9 blocks; a subband nearend region ending at bin 65
-// reads past the 65-bin spectrum; a refined filter ErrorFloor or NoiseGate
+// reads past the 65-bin spectrum; a delay headroom of the initial refined
+// filter length or more indexes past the frequency responses of the filter; a refined filter ErrorFloor or NoiseGate
 // of 0 turns the output into NaN for good once the capture signal is digital
 // silence). New rejects them with ErrConfig, also
 // when only the multichannel config carries the value.
@@ -27,6 +28,13 @@ func TestConfigsTheCppCannotRunAreRejected(t *testing.T) {
 		"Refined.NoiseGate=0":             func(c *Config) { c.Filter.Refined.NoiseGate = 0 },
 		"RefinedInitial.NoiseGate=0":      func(c *Config) { c.Filter.RefinedInitial.NoiseGate = 0 },
 		"RefinedInitial.NoiseGate=9e-13":  func(c *Config) { c.Filter.RefinedInitial.NoiseGate = 9e-13 },
+		"DelayHeadroomSamples=768":        func(c *Config) { c.Delay.DelayHeadroomSamples = 768 },
+		"DelayHeadroomSamples=1000":       func(c *Config) { c.Delay.DelayHeadroomSamples = 1000 },
+		"DelayHeadroomSamples=5000":       func(c *Config) { c.Delay.DelayHeadroomSamples = 5000 },
+		"DelayHeadroomSamples=64, RefinedInitial.LengthBlocks=1": func(c *Config) {
+			c.Delay.DelayHeadroomSamples = 64
+			c.Filter.RefinedInitial.LengthBlocks = 1
+		},
 		"Subband1High=65": func(c *Config) {
 			c.Suppressor.UseSubbandNearendDetection = true
 			c.Suppressor.SubbandNearendDetection.Subband1.High = 65
@@ -149,6 +157,7 @@ func robustRejected(cfg *Config) bool {
 		(cfg.Suppressor.UseSubbandNearendDetection && (sn.Subband1.High > 64 || sn.Subband2.High > 64)) ||
 		cfg.Buffering.ExcessRenderDetectionIntervalBlocks < 0 ||
 		cfg.Buffering.MaxAllowedExcessRenderBlocks < 0 ||
+		cfg.Delay.DelayHeadroomSamples/64 >= cfg.Filter.RefinedInitial.LengthBlocks ||
 		ec3RefinedStepUndefined(&cfg.Filter.Refined) || ec3RefinedStepUndefined(&cfg.Filter.RefinedInitial) ||
 		cfg.Filter.Refined.LengthBlocks > MaxFilterLengthBlocks ||
 		cfg.Filter.Coarse.LengthBlocks > MaxFilterLengthBlocks ||
