@@ -4,23 +4,9 @@ package aec3
 
 import "math"
 
-// subPredictionError computes the prediction error e = y - s and the scaled
-// filter output s from the frequency-domain filter output S.
-func subPredictionError(fft *Aec3Fft, S *FftData, y []float32, tmp *[FftLength]float32, e, s *[BlockSize]float32) {
-	fft.Ifft(S, tmp)
-	const scale float32 = 1.0 / FftLengthBy2
-	// e = y - float32(tmp*scale) and s = scale*tmp: the scaled output is
-	// rounded once and shared.
-	var scaled [BlockSize]float32
-	if s == nil {
-		s = &scaled
-	}
-	kernScale(tmp[FftLengthBy2:], scale, s[:])
-	kernSub(y[:BlockSize], s[:], e[:])
-}
-
-// subPredictionErrorPair is subPredictionError for the refined (S0) and the
-// coarse (S1) filter output of one capture signal y.
+// subPredictionErrorPair computes, for the refined (S0) and the coarse (S1)
+// filter output of one capture signal y, the scaled time-domain output s and
+// the prediction error e = y - s.
 func subPredictionErrorPair(fft *aec3FftPair, S0, S1 *FftData, y []float32, tmp0, tmp1 *[FftLength]float32,
 	e0, s0, e1, s1 *[BlockSize]float32) {
 	fft.Ifft(S0, S1, tmp0, tmp1)

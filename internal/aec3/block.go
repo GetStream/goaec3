@@ -11,28 +11,8 @@ func NewBlock(numBands, numChannels int) Block {
 	return Block{numBands: numBands, numChannels: numChannels, data: make([]float32, numBands*numChannels*BlockSize)}
 }
 
-// NewBlockFilled returns a block with every sample set to v.
-func NewBlockFilled(numBands, numChannels int, v float32) Block {
-	b := NewBlock(numBands, numChannels)
-	for i := range b.data {
-		b.data[i] = v
-	}
-	return b
-}
-
 func (b Block) NumBands() int    { return b.numBands }
 func (b Block) NumChannels() int { return b.numChannels }
-
-func (b *Block) SetNumChannels(numChannels int) {
-	b.numChannels = numChannels
-	n := b.numBands * numChannels * BlockSize
-	if cap(b.data) >= n {
-		b.data = b.data[:n]
-	} else {
-		b.data = make([]float32, n)
-	}
-	clear(b.data)
-}
 
 // View returns the BlockSize samples of one band/channel.
 func (b Block) View(band, channel int) []float32 {

@@ -708,3 +708,5 @@ func TestEc3ChannelStateStorage(t *testing.T) {
 		}
 	}
 }
+
+func (q *ec3RenderTransferQueue) capacity() int { return len(q.buffer) / q.frameSize }

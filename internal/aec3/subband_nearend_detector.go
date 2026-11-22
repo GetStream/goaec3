@@ -21,8 +21,6 @@ type SubbandNearendDetector struct {
 	nearendState          bool
 }
 
-var _ NearendDetector = (*SubbandNearendDetector)(nil)
-
 func NewSubbandNearendDetector(config *SubbandNearendDetectionConfig, numCaptureChannels int) *SubbandNearendDetector {
 	d := &SubbandNearendDetector{}
 	d.init(config, numCaptureChannels)

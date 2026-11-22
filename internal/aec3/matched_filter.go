@@ -57,14 +57,6 @@ func MatchedFilterCoreNeon(xStartIndex int, x2SumThreshold, smoothing float32, x
 	dlyCoreLane(4, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum)
 }
 
-// MatchedFilterCoreAccumulatedErrorSse2 mirrors
-// aec3::MatchedFilterCore_AccumulatedError_SSE2.
-func MatchedFilterCoreAccumulatedErrorSse2(xStartIndex int, x2SumThreshold, smoothing float32,
-	x, y, h []float32, filtersUpdated *bool, errorSum *float32, accumulatedError, scratchMemory []float32) {
-	dlyAccErrCore(8, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum,
-		accumulatedError, scratchMemory)
-}
-
 // MatchedFilterCoreSse2 mirrors aec3::MatchedFilterCore_SSE2.
 func MatchedFilterCoreSse2(xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32, computeAccumulatedError bool, accumulatedError, scratchMemory []float32) {
@@ -74,14 +66,6 @@ func MatchedFilterCoreSse2(xStartIndex int, x2SumThreshold, smoothing float32, x
 		return
 	}
 	dlyCoreLane(8, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum)
-}
-
-// MatchedFilterCoreAccumulatedErrorAvx2 mirrors
-// aec3::MatchedFilterCore_AccumulatedError_AVX2.
-func MatchedFilterCoreAccumulatedErrorAvx2(xStartIndex int, x2SumThreshold, smoothing float32,
-	x, y, h []float32, filtersUpdated *bool, errorSum *float32, accumulatedError, scratchMemory []float32) {
-	dlyAccErrCore(16, xStartIndex, x2SumThreshold, smoothing, x, y, h, filtersUpdated, errorSum,
-		accumulatedError, scratchMemory)
 }
 
 // MatchedFilterCoreAvx2 mirrors aec3::MatchedFilterCore_AVX2.

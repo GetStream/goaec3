@@ -110,8 +110,5 @@ func (f *HighPassFilter) ResetChannels(numChannels int) {
 	f.setChannels(numChannels)
 }
 
-// SampleRateHz returns the sample rate the filter was created for.
-func (f *HighPassFilter) SampleRateHz() int { return f.sampleRateHz }
-
 // NumChannels returns the number of channels.
 func (f *HighPassFilter) NumChannels() int { return f.numChannels }

@@ -76,12 +76,6 @@ func dlyPreEchoHistogramSize(maxFilterLag, downSamplingFactor int) int {
 	return ((maxFilterLag + 1) * downSamplingFactor) >> BlockSizeLog2
 }
 
-func newDlyPreEchoLagAggregator(maxFilterLag, downSamplingFactor int) *dlyPreEchoLagAggregator {
-	a := &dlyPreEchoLagAggregator{}
-	a.init(downSamplingFactor, make([]int32, dlyPreEchoHistogramSize(maxFilterLag, downSamplingFactor)))
-	return a
-}
-
 // init sets up the aggregator over histogram, which holds
 // dlyPreEchoHistogramSize zeros.
 func (a *dlyPreEchoLagAggregator) init(downSamplingFactor int, histogram []int32) {

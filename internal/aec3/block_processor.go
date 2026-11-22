@@ -17,8 +17,8 @@ type BlockProcessorEchoRemover interface {
 // block_processor.cc). Metrics reporting is not ported.
 //
 // The render delay buffer, the delay controller and the echo remover that
-// NewBlockProcessor creates are part of the BlockProcessor, which is not
-// copied once it is set up.
+// init creates are part of the BlockProcessor, which is not copied once it
+// is set up.
 type BlockProcessor struct {
 	*blockProcessorState
 	// The components of NewBlockProcessorWithComponents; nil otherwise. A
@@ -62,16 +62,6 @@ type blockProcessorComponents struct {
 	echoRemover     BlockProcessorEchoRemover
 }
 
-// NewBlockProcessor mirrors BlockProcessor::Create(env, config,
-// sample_rate_hz, num_render_channels, num_capture_channels).
-func NewBlockProcessor(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
-	numCaptureChannels int) *BlockProcessor {
-	p := &BlockProcessor{}
-	p.bind(&blockProcessorState{}, bindAlone)
-	p.init(config, sampleRateHz, numRenderChannels, numCaptureChannels)
-	return p
-}
-
 // bind makes p the view of st.
 func (p *BlockProcessor) bind(st *blockProcessorState, b *binder) {
 	p.blockProcessorState = st
@@ -80,7 +70,8 @@ func (p *BlockProcessor) bind(st *blockProcessorState, b *binder) {
 	p.ownEchoRemover.bind(&st.ownEchoRemover, b)
 }
 
-// init sets up p in place, as NewBlockProcessor does.
+// init sets up p in place: BlockProcessor::Create(env, config,
+// sample_rate_hz, num_render_channels, num_capture_channels).
 func (p *BlockProcessor) init(config *EchoCanceller3Config, sampleRateHz, numRenderChannels,
 	numCaptureChannels int) {
 	if !ValidFullBandRate(sampleRateHz) {

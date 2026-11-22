@@ -53,13 +53,6 @@ func (r *ReverbModelEstimator) bind(st *reverbModelEstimatorState, b *binder) {
 	}
 }
 
-func NewReverbModelEstimator(config *EchoCanceller3Config, numCaptureChannels int) *ReverbModelEstimator {
-	r := &ReverbModelEstimator{}
-	r.bind(&reverbModelEstimatorState{}, bindAlone)
-	r.init(config, numCaptureChannels, make([]float32, rmStorageSize(config, numCaptureChannels)))
-	return r
-}
-
 // rmStorageSize returns the number of samples a ReverbModelEstimator keeps
 // for config.
 func rmStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
