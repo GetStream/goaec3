@@ -28,6 +28,8 @@ func TestConfigsTheCppCannotRunAreRejected(t *testing.T) {
 		"RefinedInitial.ErrorFloor=1e-45": func(c *Config) { c.Filter.RefinedInitial.ErrorFloor = 1e-45 },
 		"Refined.ErrorCeil=0":             func(c *Config) { c.Filter.Refined.ErrorCeil = 0 },
 		"RefinedInitial.ErrorCeil=1e-45":  func(c *Config) { c.Filter.RefinedInitial.ErrorCeil = 1e-45 },
+		"Coarse.NoiseGate=0":              func(c *Config) { c.Filter.Coarse.NoiseGate = 0 },
+		"CoarseInitial.NoiseGate=0":       func(c *Config) { c.Filter.CoarseInitial.NoiseGate = 0 },
 		"Refined.NoiseGate=0":             func(c *Config) { c.Filter.Refined.NoiseGate = 0 },
 		"RefinedInitial.NoiseGate=0":      func(c *Config) { c.Filter.RefinedInitial.NoiseGate = 0 },
 		"RefinedInitial.NoiseGate=9e-13":  func(c *Config) { c.Filter.RefinedInitial.NoiseGate = 9e-13 },
@@ -171,6 +173,7 @@ func robustRejected(cfg *Config) bool {
 		cfg.Filter.Coarse.LengthBlocks > ec3RenderBufferBlocks(cfg) ||
 		cfg.Delay.DelayHeadroomSamples/64 >= cfg.Filter.RefinedInitial.LengthBlocks ||
 		ec3RefinedStepUndefined(&cfg.Filter.Refined) || ec3RefinedStepUndefined(&cfg.Filter.RefinedInitial) ||
+		cfg.Filter.Coarse.NoiseGate < minStepOperand || cfg.Filter.CoarseInitial.NoiseGate < minStepOperand ||
 		cfg.Filter.Refined.LengthBlocks > MaxFilterLengthBlocks ||
 		cfg.Filter.Coarse.LengthBlocks > MaxFilterLengthBlocks ||
 		cfg.Delay.NumFilters > MaxDelayFilters

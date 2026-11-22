@@ -234,9 +234,9 @@ type EchoCanceller struct {
 // with the given number of render and capture channels. The config must be
 // valid: New returns ErrConfig if Config.Validate would change it (call
 // Validate first to clamp a config into its legal ranges), if libwebrtc
-// cannot run it (which includes a refined filter ErrorFloor, ErrorCeil or
-// NoiseGate below 1e-12: libwebrtc then turns silence into NaN), or if it
-// exceeds
+// cannot run it (which includes a filter NoiseGate or a refined filter
+// ErrorFloor or ErrorCeil below 1e-12: libwebrtc then turns silence into
+// NaN), or if it exceeds
 // MaxFilterLengthBlocks or MaxDelayFilters, which Validate does not clamp
 // to. New returns ErrNumChannels for more than
 // MaxChannels channels a side.
@@ -381,7 +381,9 @@ func (e *EchoCanceller) ProcessCaptureWithLinearOutput(capture, linearOutput [][
 // silence in the capture signal E2 is 0, and with a floor, a ceiling or a
 // gate of 0, or a product with the gate that underflows, the step size is
 // 0/0 or infinite and every later output is NaN, in libwebrtc too. The
-// three fields are at least minRefinedStepOperand.
+// three fields are at least minStepOperand. So is the NoiseGate of the
+// coarse filter, whose step size is Rate / X2 for X2 above the gate: a
+// render signal that fades through the subnormal range makes it infinite.
 // It also rejects the configs over MaxFilterLengthBlocks and
 // MaxDelayFilters, the fields that size the buffers and that Validate
 // leaves unbounded or bounds too high. The initial filter lengths and
@@ -408,9 +410,11 @@ func ec3CheckConfig(cfg *Config) error {
 			ErrConfig, ec3RenderBufferBlocks(cfg))
 	case cfg.Buffering.ExcessRenderDetectionIntervalBlocks < 0 || cfg.Buffering.MaxAllowedExcessRenderBlocks < 0:
 		return fmt.Errorf("%w: Buffering fields must not be negative", ErrConfig)
+	case cfg.Filter.Coarse.NoiseGate < minStepOperand || cfg.Filter.CoarseInitial.NoiseGate < minStepOperand:
+		return fmt.Errorf("%w: the coarse filter NoiseGate must be at least %g", ErrConfig, minStepOperand)
 	case ec3RefinedStepUndefined(&cfg.Filter.Refined) || ec3RefinedStepUndefined(&cfg.Filter.RefinedInitial):
 		return fmt.Errorf("%w: the refined filter ErrorFloor, ErrorCeil and NoiseGate must be at least %g", ErrConfig,
-			minRefinedStepOperand)
+			minStepOperand)
 	case cfg.Filter.Refined.LengthBlocks > MaxFilterLengthBlocks || cfg.Filter.Coarse.LengthBlocks > MaxFilterLengthBlocks:
 		return fmt.Errorf("%w: filter LengthBlocks must be at most %d", ErrConfig, MaxFilterLengthBlocks)
 	case cfg.Delay.NumFilters > MaxDelayFilters:
@@ -419,14 +423,15 @@ func ec3CheckConfig(cfg *Config) error {
 	return nil
 }
 
-// minRefinedStepOperand is the smallest refined filter ErrorFloor, ErrorCeil
-// and NoiseGate New accepts: the product of two is far from underflow. The
-// defaults are 0.001, 2 and 20075344.
-const minRefinedStepOperand = 1e-12
+// minStepOperand is the smallest refined filter ErrorFloor, ErrorCeil and
+// NoiseGate and the smallest coarse filter NoiseGate New accepts: the
+// product of two is far from underflow and the quotient by one from
+// overflow. The defaults are 0.001, 2 and 20075344.
+const minStepOperand = 1e-12
 
 func ec3RefinedStepUndefined(r *aec3.RefinedConfiguration) bool {
-	return r.ErrorFloor < minRefinedStepOperand || r.ErrorCeil < minRefinedStepOperand ||
-		r.NoiseGate < minRefinedStepOperand
+	return r.ErrorFloor < minStepOperand || r.ErrorCeil < minStepOperand ||
+		r.NoiseGate < minStepOperand
 }
 
 // ec3RenderBufferBlocks returns the number of blocks of the render buffer,
