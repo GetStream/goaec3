@@ -264,7 +264,8 @@ func (m *StSubbandErleEstimator) Update(X2 *[aec3.FftLengthBy2Plus1]float32, Y2,
 	C.st_subband_erle_update(m.c, stF(&X2[0]), stSpec(Y2), stSpec(E2), stInts(stBools(converged)))
 }
 
-// Get returns 0 erle, 1 onset compensated, 2 unbounded, 3 during onsets.
+// Get returns the estimate which selects: 0 erle, 1 onset compensated,
+// 2 unbounded, 3 during onsets.
 func (m *StSubbandErleEstimator) Get(which int) [][aec3.FftLengthBy2Plus1]float32 {
 	out := make([][aec3.FftLengthBy2Plus1]float32, m.nch)
 	C.st_subband_erle_get(m.c, C.int(which), stSpec(out))
@@ -311,7 +312,8 @@ func (m *StErleEstimator) Update(r *StRender, fr [][][aec3.FftLengthBy2Plus1]flo
 	C.st_erle_update(m.c, r.c, stFs(flat), C.int(len(fr[0])), stF(&X2[0]), stSpec(Y2), stSpec(E2), stInts(stBools(converged)))
 }
 
-// Get returns 0 erle, 1 onset compensated, 2 unbounded, 3 during onsets.
+// Get returns the estimate which selects: 0 erle, 1 onset compensated,
+// 2 unbounded, 3 during onsets.
 func (m *StErleEstimator) Get(which int) [][aec3.FftLengthBy2Plus1]float32 {
 	out := make([][aec3.FftLengthBy2Plus1]float32, m.nch)
 	C.st_erle_get(m.c, C.int(which), stSpec(out))
@@ -423,11 +425,11 @@ func (m *StSubtractorOutputAnalyzer) HandleEchoPathChange() {
 	C.st_subtractor_analyzer_handle_echo_path_change(m.c)
 }
 
-// StTransparentMode wraps TransparentMode::Create; hmm enables the
-// WebRTC-Aec3TransparentModeHmm field trial. Returns nil when Create returns
-// no classifier.
+// StTransparentMode wraps the classifier TransparentMode::Create returns.
 type StTransparentMode struct{ c unsafe.Pointer }
 
+// NewStTransparentMode returns nil when TransparentMode::Create returns no
+// classifier; hmm enables the WebRTC-Aec3TransparentModeHmm field trial.
 func NewStTransparentMode(cfg *aec3.EchoCanceller3Config, hmm bool) *StTransparentMode {
 	p := C.st_transparent_mode_new(stCConfig(cfg), stB(hmm))
 	if p == nil {

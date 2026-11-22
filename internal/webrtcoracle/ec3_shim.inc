@@ -1,7 +1,8 @@
 // Shared BlockProcessor / EchoCanceller3 simulation, included by
-// ec3_oracle.cc (prebuilt libwebrtc, EC3_FN(x) = ec3_x) and by
+// ec3_oracle.cc (prebuilt libwebrtc, EC3_FN(x) = ec3_x), by
 // ec3_scalar_shim.cc (scalar source build, where `webrtc` names the renamed
-// namespace and EC3_FN(x) = ec3s_x).
+// namespace and EC3_FN(x) = ec3s_x) and, under both prefixes, by the
+// generated src_gen_ec3*_shim.cc of the webrtc_src_oracle build.
 
 #include <algorithm>
 #include <cstring>

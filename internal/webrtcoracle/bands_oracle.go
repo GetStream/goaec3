@@ -19,12 +19,12 @@ func NewBandsThreeBandFilterBank() *BandsThreeBandFilterBank {
 	return &BandsThreeBandFilterBank{p: C.bands_tbfb_new()}
 }
 
-// Analysis: in has 480 samples, out is [3][160] flattened.
+// Analysis splits the 480 samples of in into out, [3][160] flattened.
 func (f *BandsThreeBandFilterBank) Analysis(in, out []float32) {
 	C.bands_tbfb_analysis(f.p, bandsF(in), bandsF(out))
 }
 
-// Synthesis: in is [3][160] flattened, out has 480 samples.
+// Synthesis merges in, [3][160] flattened, into the 480 samples of out.
 func (f *BandsThreeBandFilterBank) Synthesis(in, out []float32) {
 	C.bands_tbfb_synthesis(f.p, bandsF(in), bandsF(out))
 }

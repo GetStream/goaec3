@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Generates the files of the webrtc_src_oracle build in internal/webrtcoracle
-# (all named src_gen_*):
-#
-#  - one translation unit per compiled WebRTC source file, which includes the
-#    file from tmp_check/webrtc-m141 (src_gen_tu_*.cc/.c);
-#  - the ec3 shim (ec3_shim.inc) under the two entry-point prefixes of
-#    ec3_oracle.go.
+# Generates the src_gen_* files of the webrtc_src_oracle build in
+# internal/webrtcoracle: one translation unit per compiled WebRTC source
+# file, which includes the file from tmp_check/webrtc-m141
+# (src_gen_tu_*.cc/.c), and the ec3 shim (ec3_shim.inc) under the two
+# entry-point prefixes of ec3_oracle.go (src_gen_ec3_shim.cc,
+# src_gen_ec3s_shim.cc).
 #
 #   scripts/gen-src-oracle.sh          regenerate
 #   scripts/gen-src-oracle.sh -check   fail if the generated files are stale
@@ -24,7 +23,7 @@ fi
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 
-# Sources compiled on every architecture.
+# The AVX2/FMA kernels of aec3, x86 only.
 aec3_avx2=(
 	adaptive_fir_filter_avx2.cc
 	adaptive_fir_filter_erl_avx2.cc
@@ -32,6 +31,7 @@ aec3_avx2=(
 	matched_filter_avx2.cc
 	vector_math_avx2.cc
 )
+# Sources compiled on every architecture.
 common_srcs=(
 	api/audio/echo_canceller3_config.cc
 	common_audio/audio_util.cc
@@ -61,8 +61,8 @@ for f in "$src"/modules/audio_processing/aec3/*.cc; do
 	esac
 	common_srcs+=("modules/audio_processing/aec3/$b")
 done
-# x86 only: SSE2 kernels in their own files, and the AVX2/FMA kernels
-# (compiled with -mavx2 -mfma in libwebrtc's GN build).
+# x86 only: the SSE2 kernels that have files of their own, and the AVX2/FMA
+# kernels, which libwebrtc's GN build compiles with -mavx2 -mfma.
 x86_srcs=(
 	common_audio/resampler/sinc_resampler_sse.cc
 	common_audio/third_party/ooura/fft_size_128/ooura_fft_sse2.cc
@@ -129,8 +129,8 @@ for p in "${neon_srcs[@]}"; do
 done
 
 # The ec3 shim, once per entry-point prefix used by ec3_oracle.go: ec3_*
-# (default) and ec3s_* (scalar). Both drive the one
-# source build, whose lane follows the purego tag.
+# (default) and ec3s_* (scalar). Both drive the one source build, whose lane
+# follows the purego tag.
 for prefix in ec3 ec3s; do
 	{
 		header "$tag_plain"

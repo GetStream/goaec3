@@ -96,8 +96,7 @@ func TestSupComfortNoiseGeneratorParity(t *testing.T) {
 // TestSupSuppressionFilterParity compares against the lane the build selects:
 // the libwebrtc.a SuppressionFilter (NEON Ooura FFT) in the default build and
 // the from-source scalar build (sup_scalar.cc) under purego. The default lane
-// passes only once internal/ooura implements the NEON lane
-// (TestOouraFftBitExact).
+// depends on the NEON lane of internal/ooura (TestOouraFftBitExact).
 func TestSupSuppressionFilterParity(t *testing.T) {
 	for _, opt := range supOpts() {
 		for _, rate := range []int{16000, 32000, 48000} {

@@ -1,8 +1,8 @@
 //go:build webrtc_src_oracle && !webrtc_oracle && !webrtc_oracle_stock
 
-// Interpose the libm entry points the AEC3 sources reach so the source build
-// uses exactly the Go implementations in internal/aec3/cmath.go (host libm
-// float results are not correctly rounded and differ between libms). How
+// Interposes the libm entry points the AEC3 sources reach, so that the source
+// build uses exactly the Go implementations in internal/aec3/cmath.go (host
+// libm float results are not correctly rounded and differ between libms). How
 // clang lowers std::pow(2.0f, x) and powf(10.f, x) depends on the target
 // libm: exp2f everywhere, __exp10f on Darwin, exp10f or powf on glibc. Every
 // spelling is covered; powf with another base aborts, since no Go helper

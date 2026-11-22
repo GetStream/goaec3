@@ -22,8 +22,8 @@ import (
 // requires bit-exact capture output, linear output and metrics after every
 // capture frame.
 //
-// The generator stays within defined C++ behavior; each exclusion is listed
-// at fzDecode and fzExternalDelayInRange.
+// The generator stays within defined C++ behavior; the exclusions are listed
+// at fzDefined, fzExternalDelay and fzDecode.
 func FuzzEc3Differential(f *testing.F) {
 	for _, s := range fzSeeds {
 		f.Add(s)
@@ -37,8 +37,9 @@ func FuzzEc3Differential(f *testing.F) {
 	})
 }
 
-// fzSeeds: header (rate, render channels, capture channels, flags, seed,
-// delay, mutation count[, multichannel mutation count]) followed by ops.
+// fzSeeds are the seed programs: a header (rate, render channels, capture
+// channels, flags, seed, delay, mutation count[, multichannel mutation
+// count]) followed by ops.
 var fzSeeds = [][]byte{
 	{0, 0, 0, 0, 1, 40, 0, fzOpPairs, 0, 199},
 	{2, 1, 0, 2 | 8, 2, 60, 0, 0, fzOpPairs, 1, 150, fzOpRenderBurst, 0, 120,
@@ -54,7 +55,6 @@ var fzSeeds = [][]byte{
 	{1, 1, 1, 1 | 2, 6, 100, 0, fzOpPairs, 1, 250, fzOpRenderBurst, 4, 150, fzOpPairs, 1, 50},
 }
 
-// ---------------------------------------------------------------------------
 // Signals.
 
 const (
@@ -72,8 +72,8 @@ const (
 	fzNumSignals
 )
 
-// fzScene: render noise bursts and a swept tone; capture holds the echo of
-// render channel 0 (delayed and scaled) plus noise.
+// fzScene generates render noise bursts and a swept tone; its capture holds
+// the echo of render channel 0 (delayed and scaled) plus noise.
 type fzScene struct {
 	rng   *rand.Rand
 	rate  int
@@ -222,7 +222,6 @@ func (a *fzRoomAudio) capture(frame [][]float32, kind int) {
 	a.spare = append(a.spare, c)
 }
 
-// ---------------------------------------------------------------------------
 // Config.
 
 type fzLeaf struct {
@@ -323,7 +322,8 @@ func fzMutate(r *fzReader, leaves []fzLeaf) {
 	}
 }
 
-// Resource caps (memory and time per execution), not behavior exclusions.
+// fzCapResources bounds the memory and time of an execution; it excludes no
+// behavior.
 func fzCapResources(cfg *aec3.EchoCanceller3Config) {
 	f := &cfg.Filter
 	f.Refined.LengthBlocks = min(f.Refined.LengthBlocks, 40)
@@ -427,7 +427,6 @@ func (x *fzExternalDelay) capture() {
 	x.captureFrames++
 }
 
-// ---------------------------------------------------------------------------
 // Program.
 
 const (
@@ -800,12 +799,12 @@ func fzRandomConfig(rng *rand.Rand, i, count int) aec3.EchoCanceller3Config {
 	}
 }
 
-// TestEc3DifferentialRandomConfigs runs long differential sessions (60 s of
-// audio each by default, GOAEC3_DIFF_SECONDS overrides it; GOAEC3_DIFF_SEED
-// picks another series) of goaec3 against
-// libwebrtc with random validated configs that together cover every config
-// leaf, random rates, channel counts, echo delays and rooms, echo path gain
-// change events, capture output usage toggles and short API call bursts.
+// TestEc3DifferentialRandomConfigs runs long differential sessions of goaec3
+// against libwebrtc (60 s of audio each by default, GOAEC3_DIFF_SECONDS
+// overrides it; GOAEC3_DIFF_SEED picks another series) with random validated
+// configs that together cover every config leaf, random rates, channel
+// counts, echo delays and rooms, echo path gain change events, capture output
+// usage toggles and short API call bursts.
 func TestEc3DifferentialRandomConfigs(t *testing.T) {
 	seconds := 60
 	if v, err := strconv.Atoi(os.Getenv("GOAEC3_DIFF_SECONDS")); err == nil && v > 0 {
@@ -976,13 +975,14 @@ func TestEc3NaNInputParity(t *testing.T) {
 	}
 }
 
-// TestEc3UpperBandsGainNaN: SuppressionGain::UpperBandsGain
-// (suppression_gain.cc) combines band energies and gains with std::max and
-// std::min, which return their first argument when the second is NaN. With
-// a zero anti-howling activation threshold (the lower Validate bound) the
-// anti-howling gain is sqrtf(0 / 0) on silent bands, and with a render power
-// gain of 300 dB the band energies overflow to NaN; libwebrtc stays finite
-// at 32 and 48 kHz and the port must match it bit for bit.
+// TestEc3UpperBandsGainNaN checks the NaN handling of
+// SuppressionGain::UpperBandsGain (suppression_gain.cc), which combines band
+// energies and gains with std::max and std::min; those return their first
+// argument when the second is NaN. With a zero anti-howling activation
+// threshold (the lower Validate bound) the anti-howling gain is sqrtf(0 / 0)
+// on silent bands, and with a render power gain of 300 dB the band energies
+// overflow to NaN; libwebrtc stays finite at 32 and 48 kHz and the port must
+// match it bit for bit.
 // TestEc3NaNMinMaxParity covers more rates, configs and inputs.
 func TestEc3UpperBandsGainNaN(t *testing.T) {
 	cases := map[string]func(*aec3.EchoCanceller3Config){
