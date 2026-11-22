@@ -9,9 +9,9 @@ type EchoPathDelayEstimator struct {
 	matchedFilterLagAggregator MatchedFilterLagAggregator
 }
 
-// echoPathDelayEstimatorState is the state of an EchoPathDelayEstimator but
-// the slice of its mixer. The matched filter and the lag aggregator are
-// part of it as they are, with their slices.
+// echoPathDelayEstimatorState is the state of an EchoPathDelayEstimator
+// except the slice of its mixer. It holds the matched filter and the lag
+// aggregator with their slices.
 type echoPathDelayEstimatorState struct {
 	downSamplingFactor         int
 	subBlockSize               int
@@ -25,8 +25,8 @@ type echoPathDelayEstimatorState struct {
 	clockdriftDetector         ClockdriftDetector
 }
 
-// NewEchoPathDelayEstimator mirrors the C++ constructor (without the data
-// dumper). The matched filter kernel follows DetectOptimization().
+// NewEchoPathDelayEstimator mirrors the C++ constructor. The matched filter
+// runs in the lane of DetectOptimization.
 func NewEchoPathDelayEstimator(config *EchoCanceller3Config, numCaptureChannels int) *EchoPathDelayEstimator {
 	e := &EchoPathDelayEstimator{}
 	e.bind(&echoPathDelayEstimatorState{}, bindAlone)
@@ -34,7 +34,6 @@ func NewEchoPathDelayEstimator(config *EchoCanceller3Config, numCaptureChannels 
 	return e
 }
 
-// bind makes e the view of st.
 func (e *EchoPathDelayEstimator) bind(st *echoPathDelayEstimatorState, b *binder) {
 	e.echoPathDelayEstimatorState = st
 	e.captureMixer.bind(&st.captureMixer, b)
@@ -63,19 +62,19 @@ func (e *EchoPathDelayEstimator) init(config *EchoCanceller3Config, numCaptureCh
 	e.matchedFilterLagAggregator.init(e.matchedFilter.GetMaxFilterLag(), &config.Delay)
 }
 
-// Reset resets the estimation. If the delay confidence is reset, the reset
-// behavior is as if the call is restarted.
+// Reset resets the estimation. With resetDelayConfidence it restarts as at
+// the start of a call.
 func (e *EchoPathDelayEstimator) Reset(resetDelayConfidence bool) {
 	e.reset(true, resetDelayConfidence)
 }
 
-// EstimateDelay produces a delay estimate (in samples) if one is available.
+// EstimateDelay returns a delay estimate in samples, if it has one.
 func (e *EchoPathDelayEstimator) EstimateDelay(renderBuffer *DownsampledRenderBuffer, capture *Block) (DelayEstimate, bool) {
 	return e.EstimateDelayWide(renderBuffer, capture, nil)
 }
 
-// EstimateDelayWide is EstimateDelay with the room the matched filter can
-// use for widened render samples (MatchedFilter.UpdateWide); wide may be nil.
+// EstimateDelayWide is EstimateDelay with work space for
+// MatchedFilter.UpdateWide. wide may be nil.
 func (e *EchoPathDelayEstimator) EstimateDelayWide(renderBuffer *DownsampledRenderBuffer, capture *Block,
 	wide *dlyWide) (DelayEstimate, bool) {
 	var downsampledCaptureData [BlockSize]float32
@@ -89,13 +88,12 @@ func (e *EchoPathDelayEstimator) EstimateDelayWide(renderBuffer *DownsampledRend
 
 	aggregated, ok := e.matchedFilterLagAggregator.Aggregate(e.matchedFilter.GetBestLagEstimate())
 
-	// Run clockdrift detection.
 	if ok && aggregated.Quality == DelayQualityRefined {
 		e.clockdriftDetector.Update(e.matchedFilterLagAggregator.GetDelayAtHighestPeak())
 	}
 
-	// Return the detected delay in samples as the aggregated matched filter lag
-	// compensated by the down sampling factor for the signal being correlated.
+	// The delay in samples is the aggregated lag times the downsampling
+	// factor.
 	if ok {
 		aggregated.Delay *= e.downSamplingFactor
 	}
@@ -113,7 +111,7 @@ func (e *EchoPathDelayEstimator) EstimateDelayWide(renderBuffer *DownsampledRend
 	return aggregated, ok
 }
 
-// Clockdrift returns the level of detected clockdrift.
+// Clockdrift returns the detected level of clock drift.
 func (e *EchoPathDelayEstimator) Clockdrift() ClockdriftDetectorLevel {
 	return e.clockdriftDetector.ClockdriftLevel()
 }

@@ -1,14 +1,14 @@
 package aec3
 
-// MovingAverage mirrors aec3::MovingAverage (moving_average.h): the average
-// of the current input and the memLen-1 previous inputs.
+// MovingAverage averages its input with the memLen-1 inputs before it
+// (moving_average.h).
 type MovingAverage struct {
 	movingAverageState
 	memory []float32
 }
 
 // movingAverageState is a MovingAverage without its memory, which the caller
-// keeps and passes to average; init returns its size. It holds no pointer.
+// keeps and passes to average. It holds no pointer.
 type movingAverageState struct {
 	numElem  int
 	memLen   int
@@ -16,16 +16,16 @@ type movingAverageState struct {
 	memIndex int
 }
 
-// NewMovingAverage accepts inputs of length numElem and averages over memLen
-// inputs.
+// NewMovingAverage returns a MovingAverage of memLen inputs of numElem
+// elements.
 func NewMovingAverage(numElem, memLen int) *MovingAverage {
 	m := &MovingAverage{}
 	m.memory = make([]float32, m.init(numElem, memLen))
 	return m
 }
 
-// Average stores the average of input and the memLen-1 previous inputs in
-// output.
+// Average sets output to the average of input and the memLen-1 inputs before
+// it.
 func (m *MovingAverage) Average(input, output []float32) {
 	m.average(m.memory, input, output)
 }
@@ -40,8 +40,7 @@ func (m *movingAverageState) init(numElem, memLen int) int {
 	return numElem * (memLen - 1)
 }
 
-// average stores the average of input and the memLen-1 previous inputs,
-// which memory holds, in output.
+// average is MovingAverage.Average on the given memory.
 func (m *movingAverageState) average(memory, input, output []float32) {
 	n := m.numElem
 	input = input[:n]

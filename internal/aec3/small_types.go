@@ -71,8 +71,8 @@ func (s *SubtractorOutput) Reset() {
 
 // maxAbsOf is std::max(max, -min) of the largest and the smallest element of
 // x, each found by a loop from x[0] with "if v > max" and "if v < min".
-// Without a NaN and with an element that is not zero, that is the largest
-// magnitude in x (kernMaxAbsBits); maxAbsOfRef runs the loops.
+// Without a NaN and with a nonzero element that is the largest magnitude in
+// x (kernMaxAbsBits). maxAbsOfRef runs the loops.
 func maxAbsOf(x []float32) float32 {
 	if mn, mx, ok := kernMinMax(x); ok {
 		return stdMax(mx, -mn)

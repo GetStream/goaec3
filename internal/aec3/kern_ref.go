@@ -2,22 +2,17 @@ package aec3
 
 import "math"
 
-// Pure-Go lane references for the small vector kernels (FftData::Spectrum,
-// VectorMath::Sqrt/Multiply/Accumulate).
+// Pure-Go lane references of FftData::Spectrum and VectorMath.
 //
-// Multiply, Accumulate and Sqrt compute one correctly rounded IEEE operation
-// per element in every lane (scalar, SSE2, AVX2, NEON), so they share the
-// generic code in vector_math.go. FftData::Spectrum is the same in the
-// scalar, SSE2 and NEON lanes (NEON uses the scalar code), but
-// FftData::SpectrumAVX2 computes bins 0..63 as _mm256_fmadd_ps(r, r, i*i):
-// a fused multiply-add, which kernSpectrumAvx2Ref reproduces.
+// Multiply, Accumulate and Sqrt are one IEEE operation per element in every
+// lane. Spectrum is the same in the scalar, SSE2 and NEON lanes;
+// FftData::SpectrumAVX2 computes bins 0..63 as _mm256_fmadd_ps(r, r, i*i).
 
 // kernSpectrumAvx2Ref is FftData::SpectrumAVX2.
 //
-// The loop computes the fast path of fmaf (fmaf.go) for four bins at a time
-// and stores them when none needs the slow path. The first group that does
-// hands the rest of the spectrum to kernSpectrumAvx2From and returns, so the
-// loop itself contains no call and keeps nothing alive across one.
+// The loop makes no call (see fmaf): the first group of four bins with a sum
+// that needs fmafSlow hands the rest of the spectrum to
+// kernSpectrumAvx2From.
 func kernSpectrumAvx2Ref(re, im, out *[FftLengthBy2Plus1]float32) {
 	for k := 0; k < FftLengthBy2; k += 4 {
 		r0, r1, r2, r3 := re[k], re[k+1], re[k+2], re[k+3]
@@ -44,7 +39,7 @@ func kernSpectrumAvx2From(re, im, out *[FftLengthBy2Plus1]float32, from int) {
 	out[FftLengthBy2] = float32(re[FftLengthBy2]*re[FftLengthBy2]) + float32(im[FftLengthBy2]*im[FftLengthBy2])
 }
 
-// kernVectorSqrtGeneric is VectorMath::Sqrt in every lane.
+// kernVectorSqrtGeneric is VectorMath::Sqrt of every lane.
 func kernVectorSqrtGeneric(x []float32) {
 	for i, a := range x {
 		x[i] = float32(math.Sqrt(float64(a)))

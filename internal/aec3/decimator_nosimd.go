@@ -2,7 +2,7 @@
 
 package aec3
 
-// dlyHasDecimateKernel is false: this build runs the scalar sections.
+// dlyHasDecimateKernel reports whether dlyDecimateDs4 is an archsimd kernel.
 const dlyHasDecimateKernel = false
 
 func dlyDecimateDs4(*[BlockSize]float32, *[BlockSize / 4]float32, *[4]BiQuad) bool {

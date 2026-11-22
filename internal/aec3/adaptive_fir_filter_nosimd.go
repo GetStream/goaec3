@@ -2,7 +2,7 @@
 
 package aec3
 
-// Every lane runs its pure-Go reference.
+// Without archsimd every lane runs its pure-Go reference.
 
 func afirApplyBlock(_ Aec3Optimization, x, h, s *FftData) {
 	afirApplyBinsGo(x, h, s, 0, FftLengthBy2)
@@ -29,18 +29,16 @@ func afirErlBlock(_ Aec3Optimization, h2, erl *[FftLengthBy2Plus1]float32) {
 	afirErlBlockGo(h2, erl)
 }
 
-// afirHasTermKernels reports that afirApplyTerms/afirAdaptTerms are faster
-// than the per-partition loops. Every lane computes the same rounded
-// products and per-bin accumulation order, so one pure-Go kernel serves the
-// NEON, SSE2 and AVX2 lanes.
+// afirHasTermKernels reports whether afirApplyTerms and afirAdaptTerms replace
+// the per-partition loops. The lanes agree bin for bin, so one kernel serves
+// the NEON, SSE2 and AVX2 lanes.
 const afirHasTermKernels = true
 
 func afirApplyTerms(xs, hs []*FftData, s *FftData) { afirApplyTermsFastGo(xs, hs, s) }
 
 func afirAdaptTerms(xs, hs []*FftData, g *FftData) { afirAdaptTermsFastGo(xs, hs, g) }
 
-// afirHasNeonFreqResp is false: the NEON lane runs afirFreqRespBlock per
-// channel.
+// afirHasNeonFreqResp reports whether afirFreqRespPartitionNEON exists.
 const afirHasNeonFreqResp = false
 
 func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
@@ -49,8 +47,7 @@ func afirFreqRespPartitionNEON(hs []FftData, h2 *[FftLengthBy2Plus1]float32) {
 
 func afirMaxAbsUpdate(ir, h *[FftLengthBy2]float32) { afirMaxAbsUpdateGo(ir, h) }
 
-// afirHasX86FreqResp is false: this build has no SSE2 or AVX2 partition
-// kernel for the frequency response.
+// afirHasX86FreqResp reports whether afirFreqRespPartitionX86 runs the lane.
 func afirHasX86FreqResp(Aec3Optimization) bool { return false }
 
 func afirFreqRespPartitionX86(Aec3Optimization, []FftData, *[FftLengthBy2Plus1]float32) {

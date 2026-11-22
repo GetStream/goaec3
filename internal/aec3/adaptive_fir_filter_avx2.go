@@ -4,34 +4,29 @@ package aec3
 
 import "math"
 
-// ComputeFrequencyResponseAvx2 is aec3::ComputeFrequencyResponse_Avx2: bins
-// 0..63 compute fma(im, im, re*re) with a single rounding.
+// ComputeFrequencyResponseAvx2 mirrors aec3::ComputeFrequencyResponse_Avx2.
+// Bins 0..63 are fma(im, im, re*re).
 func ComputeFrequencyResponseAvx2(numPartitions int, H FirCoefficients, H2 [][FftLengthBy2Plus1]float32) {
 	afirComputeFrequencyResponseSimd(OptAvx2, numPartitions, H, H2)
 }
 
-// AdaptPartitionsAvx2 is aec3::AdaptPartitions_Avx2.
+// AdaptPartitionsAvx2 mirrors aec3::AdaptPartitions_Avx2.
 func AdaptPartitionsAvx2(renderBuffer *RenderBuffer, G *FftData, numPartitions int, H FirCoefficients) {
 	afirAdaptPartitionsSimd(OptAvx2, renderBuffer, G, numPartitions, H)
 }
 
-// ApplyFilterAvx2 is aec3::ApplyFilter_Avx2.
+// ApplyFilterAvx2 mirrors aec3::ApplyFilter_Avx2.
 func ApplyFilterAvx2(renderBuffer *RenderBuffer, numPartitions int, H FirCoefficients, S *FftData) {
 	afirApplyFilterSimd(OptAvx2, renderBuffer, numPartitions, H, S)
 }
 
-// afirFreqRespBlockAvx2Go is the pure-Go reference of the AVX2 64-bin
-// frequency-response block: re2 = re*re; re2 = fma(im, im, re2);
-// H2 = _mm256_max_ps(H2, re2).
+// afirFreqRespBlockAvx2Go is the AVX2 lane reference for bins 0..63: h2 =
+// _mm256_max_ps(h2, fma(im, im, re*re)).
 //
-// The loop computes the fast path of fmaf (fmaf.go) for four bins at a time
-// and makes no call: the first group with a sum that needs the slow path
-// hands the rest of the block to afirFreqRespBlockAvx2From and returns.
-//
-// The maximum is the one of afirFreqRespBlockSse2Fast, the larger bit
-// pattern, taken without a branch on the data; a group with a NaN, a
-// negative number or -0 among its operands goes to
-// afirFreqRespBlockAvx2From as well.
+// The loop makes no call (see fmaf). A group of four bins with a sum that
+// needs fmafSlow, or with an operand of the maximum that is a NaN, negative or
+// -0 (see afirFreqRespBlockSse2Fast), hands the rest of the block to
+// afirFreqRespBlockAvx2From.
 func afirFreqRespBlockAvx2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 	for j := 0; j < FftLengthBy2; j += 4 {
 		re := (*[4]float32)(h.Re[j : j+4])
@@ -60,8 +55,8 @@ func afirFreqRespBlockAvx2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 	}
 }
 
-// afirFreqRespBlockAvx2From is the block for bins from..63, one fmaf per
-// bin.
+// afirFreqRespBlockAvx2From is afirFreqRespBlockAvx2Go for bins from..63, one
+// fmaf per bin.
 //
 //go:noinline
 func afirFreqRespBlockAvx2From(h *FftData, h2 *[FftLengthBy2Plus1]float32, from int) {
@@ -70,8 +65,8 @@ func afirFreqRespBlockAvx2From(h *FftData, h2 *[FftLengthBy2Plus1]float32, from 
 	}
 }
 
-// afirFreqRespFirstAvx2Go is afirFreqRespBlockAvx2Go on stored maxima of +0
-// (see afirFreqRespFirstGo): it stores fma(im, im, re*re) for bins 0..63.
+// afirFreqRespFirstAvx2Go is afirFreqRespBlockAvx2Go on an h2 of +0 (see
+// afirFreqRespFirstGo): it stores fma(im, im, re*re) for bins 0..63.
 func afirFreqRespFirstAvx2Go(h *FftData, h2 *[FftLengthBy2Plus1]float32) {
 	hre, him := &h.Re, &h.Im
 	for j := 0; j < FftLengthBy2; j += 4 {

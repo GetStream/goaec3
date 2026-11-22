@@ -28,11 +28,8 @@ func ec3ChooseHighPassCoefficients(sampleRateHz int) []BiQuadCoefficients {
 }
 
 // HighPassFilter is the 100 Hz second order high-pass filter of
-// modules/audio_processing/high_pass_filter.h, one cascaded biquad filter
-// (of one section) per channel. The sections of up to inlineChannels
-// channels are part of the filter; those of more channels share one
-// pointer-free backing array. The AudioBuffer overload of Process is not
-// ported; Process takes the channels directly.
+// modules/audio_processing/high_pass_filter.h: one biquad section per
+// channel. Process takes the channels, not an AudioBuffer.
 type HighPassFilter struct {
 	more         []BiQuad // [channel], with more than inlineChannels channels
 	sampleRateHz int
@@ -40,7 +37,7 @@ type HighPassFilter struct {
 	inline       [inlineChannels]BiQuad
 }
 
-// sections returns the section of every channel.
+// sections returns the sections, one per channel.
 func (f *HighPassFilter) sections() []BiQuad {
 	if f.more != nil {
 		return f.more
@@ -48,8 +45,7 @@ func (f *HighPassFilter) sections() []BiQuad {
 	return f.inline[:f.numChannels]
 }
 
-// setChannels gives f numChannels channels, keeping the sections of the
-// channels it has and adding new ones.
+// setChannels gives f numChannels channels. It keeps the sections it has.
 func (f *HighPassFilter) setChannels(numChannels int) {
 	old := f.sections()
 	sections := f.inline[:min(numChannels, len(f.inline))]
@@ -68,8 +64,8 @@ func (f *HighPassFilter) setChannels(numChannels int) {
 	f.numChannels = numChannels
 }
 
-// NewHighPassFilter returns a filter for numChannels channels at
-// sampleRateHz (16000, 32000 or 48000).
+// NewHighPassFilter returns a filter for a sample rate of 16000, 32000 or
+// 48000 Hz.
 func NewHighPassFilter(sampleRateHz, numChannels int) *HighPassFilter {
 	f := &HighPassFilter{}
 	f.init(sampleRateHz, numChannels)
@@ -81,7 +77,7 @@ func (f *HighPassFilter) init(sampleRateHz, numChannels int) {
 	f.setChannels(numChannels)
 }
 
-// Process filters audio[channel] in place.
+// Process filters the channels of audio in place.
 func (f *HighPassFilter) Process(audio [][]float32) {
 	if len(audio) != f.NumChannels() {
 		panic("aec3: HighPassFilter channel count mismatch")
@@ -96,7 +92,7 @@ func (f *HighPassFilter) ProcessChannel(channel int, audio []float32) {
 	dlyApplyBiQuadCascade(audio, audio, f.sections()[channel:channel+1])
 }
 
-// Reset resets the filter states.
+// Reset clears the state of the sections.
 func (f *HighPassFilter) Reset() {
 	sections := f.sections()
 	for k := range sections {
@@ -104,7 +100,8 @@ func (f *HighPassFilter) Reset() {
 	}
 }
 
-// ResetChannels resets the filter states and changes the number of channels.
+// ResetChannels clears the state of the sections and sets the number of
+// channels.
 func (f *HighPassFilter) ResetChannels(numChannels int) {
 	f.Reset()
 	f.setChannels(numChannels)

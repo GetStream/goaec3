@@ -2,8 +2,8 @@ package aec3
 
 import "math"
 
-// EchoCanceller3Config mirrors api/audio/echo_canceller3_config.h. Field
-// names are the C++ snake_case names in CamelCase; size_t fields are int.
+// EchoCanceller3Config mirrors api/audio/echo_canceller3_config.h. Fields
+// have the C++ names in CamelCase; size_t fields are int.
 type EchoCanceller3Config struct {
 	Buffering struct {
 		ExcessRenderDetectionIntervalBlocks int
@@ -160,7 +160,7 @@ type Tuning struct {
 
 type SubbandRegion struct{ Low, High int }
 
-// DefaultEchoCanceller3Config returns the C++ default-constructed config.
+// DefaultEchoCanceller3Config returns the default-constructed C++ config.
 func DefaultEchoCanceller3Config() EchoCanceller3Config {
 	var c EchoCanceller3Config
 	c.Buffering.ExcessRenderDetectionIntervalBlocks = 250
@@ -265,7 +265,8 @@ func DefaultEchoCanceller3Config() EchoCanceller3Config {
 	return c
 }
 
-// CreateDefaultMultichannelConfig mirrors the C++ static of the same name.
+// CreateDefaultMultichannelConfig mirrors
+// EchoCanceller3Config::CreateDefaultMultichannelConfig.
 func CreateDefaultMultichannelConfig() EchoCanceller3Config {
 	c := DefaultEchoCanceller3Config()
 	c.Filter.Coarse.LengthBlocks = 11
@@ -277,8 +278,9 @@ func CreateDefaultMultichannelConfig() EchoCanceller3Config {
 	return c
 }
 
-// limitF is Limit(float*, min, max) of echo_canceller3_config.cc: SafeClamp
-// (so a -0 at a +0 bound becomes +0), then min for a non-finite value.
+// limitF is Limit(float*, min, max) of echo_canceller3_config.cc: SafeClamp,
+// which turns a -0 at a +0 bound into +0, then min for a value that is not
+// finite.
 func limitF(v *float32, lo, hi float32) bool {
 	c := stSafeClamp(*v, lo, hi)
 	if math.IsNaN(float64(c)) || math.IsInf(float64(c), 0) {
@@ -303,7 +305,7 @@ func floorLimit(v *int, lo int) bool {
 	return res
 }
 
-// Validate clamps c into its legal ranges and reports whether it was valid.
+// Validate clamps c to its legal ranges and reports whether it was valid.
 func (c *EchoCanceller3Config) Validate() bool {
 	res := true
 	and := func(ok bool) { res = res && ok }

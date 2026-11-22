@@ -7,11 +7,12 @@ const (
 	stBlocksPerSection         = 6
 )
 
-// stEarlyReverbFirstPointAtLinearRegressors: the linear regression assumes
-// a symmetric index around 0 (-0.5f * 6 * 64 + 0.5f, exact in float).
+// stEarlyReverbFirstPointAtLinearRegressors is -0.5f*6*64 + 0.5f, exact in
+// float: the regression takes indices symmetric around 0.
 const stEarlyReverbFirstPointAtLinearRegressors float32 = -191.5
 
-// stBlockAverage averages the FftLengthBy2 values of block blockIndex.
+// stBlockAverage returns the average of the FftLengthBy2 values of block
+// blockIndex.
 func stBlockAverage(v []float32, blockIndex int) float32 {
 	const oneByFftLengthBy2 float32 = 1.0 / FftLengthBy2
 	i := blockIndex * FftLengthBy2
@@ -26,7 +27,7 @@ func stAnalyzeBlockGain(h2 *[FftLengthBy2]float32, floorGain float32, previousGa
 	return
 }
 
-// stSymmetricArithmetricSum computes N * (N*N - 1.0f) * (1.f/12.f) in float.
+// stSymmetricArithmetricSum returns N*(N*N - 1.0f)*(1.f/12.f) in float.
 func stSymmetricArithmetricSum(n int) float32 {
 	nn := float32(n*n) - 1
 	return float32(n) * nn * float32(1.0/12.0)
@@ -91,16 +92,16 @@ func (l *lateReverbLinearRegressor) Estimate() float32 {
 
 func (l *lateReverbLinearRegressor) EstimateAvailable() bool { return l.n == l.N && l.N != 0 }
 
-// earlyReverbLengthEstimator identifies the length of the early reverb. Its
-// numerators live with the caller: numeratorsSmooth and numerators, each of
-// stEarlyReverbNumSections(maxBlocks) values.
+// earlyReverbLengthEstimator finds the length of the early reverb. The
+// caller keeps its numerators: numeratorsSmooth and numerators, of
+// stEarlyReverbNumSections(maxBlocks) values each.
 type earlyReverbLengthEstimator struct {
 	coefficientsCounter int
 	blockCounter        int
 	nSections           int
 }
 
-// stEarlyReverbNumSections returns the length of the numerators of an
+// stEarlyReverbNumSections returns the number of numerators of an
 // earlyReverbLengthEstimator for maxBlocks blocks.
 func stEarlyReverbNumSections(maxBlocks int) int { return maxBlocks - stBlocksPerSection }
 
@@ -152,8 +153,8 @@ func (e *earlyReverbLengthEstimator) Estimate(numeratorsSmooth []float32) int {
 			}
 		}
 	} else if e.nSections < len(numeratorsSmooth) {
-		// The C++ dereferences the end iterator of the empty range, which
-		// reads the element at nSections.
+		// The C++ dereferences the end iterator of the empty range: the
+		// element at nSections.
 		minNumeratorTail = numeratorsSmooth[e.nSections]
 	}
 	earlyReverbSizeMinus1 := 0
@@ -169,17 +170,15 @@ func (e *earlyReverbLengthEstimator) Estimate(numeratorsSmooth []float32) int {
 	return earlyReverbSizeMinus1 + 1
 }
 
-// ReverbDecayEstimator mirrors reverb_decay_estimator.h: estimates the decay
-// of the late reverb from the linear filter.
+// ReverbDecayEstimator estimates the decay of the late reverb from the
+// linear filter (reverb_decay_estimator.h).
 type ReverbDecayEstimator struct {
 	storage []float32
 	reverbDecayState
 }
 
-// reverbDecayState is a ReverbDecayEstimator without its samples (the
-// previous gains and the early reverb numerators,
-// stReverbDecayStorageSize(config) values), which its methods take as
-// storage.
+// reverbDecayState is a ReverbDecayEstimator without its samples, which its
+// methods take as storage: stReverbDecayStorageSize(config) values.
 type reverbDecayState struct {
 	filterLengthBlocks            int
 	filterLengthCoefficients      int
@@ -221,21 +220,21 @@ func (r *reverbDecayState) numerators(storage []float32) []float32 {
 	return storage[lb+n : lb+2*n : lb+2*n]
 }
 
-// Update updates the decay estimate.
+// Update takes the linear filter of one block.
 func (r *ReverbDecayEstimator) Update(filter []float32, filterQuality LinearFilterQuality, filterDelayBlocks int,
 	usableLinearFilter, stationarySignal bool) {
 	r.reverbDecayState.Update(r.storage, filter, filterQuality, filterDelayBlocks, usableLinearFilter, stationarySignal)
 }
 
 // stReverbDecayStorageSize returns the number of samples a
-// ReverbDecayEstimator keeps for config: the previous gains and the early
-// reverb numerators.
+// ReverbDecayEstimator keeps for config: the previous gains and the
+// numerators of the early reverb.
 func stReverbDecayStorageSize(config *EchoCanceller3Config) int {
 	lb := config.Filter.Refined.LengthBlocks
 	return lb + 2*stEarlyReverbNumSections(lb-stEarlyReverbMinSizeBlocks)
 }
 
-// init sets up r; its storage holds stReverbDecayStorageSize(config) zeros.
+// init sets up r. Its storage holds stReverbDecayStorageSize(config) zeros.
 func (r *reverbDecayState) init(config *EchoCanceller3Config) {
 	lb := config.Filter.Refined.LengthBlocks
 	*r = reverbDecayState{
@@ -249,8 +248,8 @@ func (r *reverbDecayState) init(config *EchoCanceller3Config) {
 	}
 }
 
-// Decay returns the decay of the exponential model; mild selects the milder
-// decay used during nearend regions.
+// Decay returns the decay of the exponential model. mild selects the decay
+// for nearend regions.
 func (r *reverbDecayState) Decay(mild bool) float32 {
 	if r.useAdaptiveEchoDecay {
 		return r.decay
@@ -261,7 +260,7 @@ func (r *reverbDecayState) Decay(mild bool) float32 {
 	return r.decay
 }
 
-// Update updates the decay estimate.
+// Update takes the linear filter of one block.
 func (r *reverbDecayState) Update(storage, filter []float32, filterQuality LinearFilterQuality, filterDelayBlocks int,
 	usableLinearFilter, stationarySignal bool) {
 	filterSize := len(filter)

@@ -1,7 +1,7 @@
 package aec3
 
 // ConfigSelector selects the config to use (config_selector.h). It holds no
-// pointers, so it can be embedded and copied by value.
+// pointers.
 type ConfigSelector struct {
 	config                EchoCanceller3Config
 	multichannelConfig    EchoCanceller3Config
@@ -9,8 +9,8 @@ type ConfigSelector struct {
 	multichannelActive    bool
 }
 
-// NewConfigSelector mirrors the C++ constructor; multichannelConfig is nil
-// for std::nullopt.
+// NewConfigSelector mirrors the C++ constructor. A nil multichannelConfig is
+// std::nullopt.
 func NewConfigSelector(config, multichannelConfig *EchoCanceller3Config,
 	numRenderInputChannels int) *ConfigSelector {
 	s := &ConfigSelector{}
@@ -27,14 +27,13 @@ func (s *ConfigSelector) init(config, multichannelConfig *EchoCanceller3Config, 
 	s.Update(!s.config.MultiChannel.DetectStereoContent && numRenderInputChannels > 1)
 }
 
-// Update selects the active config based on whether multichannel content is
-// detected.
+// Update selects the config for content that is multichannel or not.
 func (s *ConfigSelector) Update(multichannelContent bool) {
 	s.multichannelActive = multichannelContent && s.hasMultichannelConfig
 }
 
-// ActiveConfig returns the active config. The pointer stays valid, and its
-// target unchanged, for the lifetime of the selector.
+// ActiveConfig returns the active config. The pointer and its target stay
+// valid for the lifetime of the selector.
 func (s *ConfigSelector) ActiveConfig() *EchoCanceller3Config {
 	if s.multichannelActive {
 		return &s.multichannelConfig

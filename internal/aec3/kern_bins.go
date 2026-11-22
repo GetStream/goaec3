@@ -2,14 +2,12 @@ package aec3
 
 import "math"
 
-// Elementwise helpers for the per-block bin loops (65-bin spectra, 64-sample
-// blocks). Each output element is one IEEE operation (or a fixed sequence of
-// them) on the corresponding inputs, so the archsimd kernels in
-// kern_bins_simd_{arm64,amd64}.go are bit-identical to these references in
-// every lane. The references are the spec and the !goexperiment.simd /
-// purego implementation.
+// Element-wise helpers for the bin loops of a block (64 samples) or a
+// spectrum (65 bins). An output element is a fixed sequence of IEEE
+// operations on the input elements, so the archsimd kernels agree with these
+// references bit for bit in every lane.
 
-// kernScaleGeneric sets z = x*a element-wise.
+// kernScaleGeneric sets z = x*a.
 func kernScaleGeneric(x []float32, a float32, z []float32) {
 	z = z[:len(x)]
 	for i, v := range x {
@@ -17,7 +15,7 @@ func kernScaleGeneric(x []float32, a float32, z []float32) {
 	}
 }
 
-// kernAddGeneric sets z = x+y element-wise.
+// kernAddGeneric sets z = x+y.
 func kernAddGeneric(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
@@ -26,7 +24,7 @@ func kernAddGeneric(x, y, z []float32) {
 	}
 }
 
-// kernSubGeneric sets z = x-y element-wise.
+// kernSubGeneric sets z = x-y.
 func kernSubGeneric(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
@@ -36,9 +34,7 @@ func kernSubGeneric(x, y, z []float32) {
 }
 
 // kernSumRowsGeneric sets dst to the sum of the rows, accumulated per bin in
-// row order starting from +0. Four rows are added per pass over the bins;
-// each bin still sees ((((+0 + r0) + r1) + r2) + r3) + ..., one addition per
-// row in row order.
+// row order from +0. A pass over the bins adds four rows.
 func kernSumRowsGeneric(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]float32) {
 	*dst = [FftLengthBy2Plus1]float32{}
 	for len(rows) >= 4 {
@@ -77,8 +73,8 @@ func kernPackGeneric(re, im *[FftLengthBy2Plus1]float32, v *[FftLength]float32) 
 	}
 }
 
-// kernMinMaxGeneric returns the minimum and maximum of x (len(x) > 0) as a
-// loop from x[0] with "if v < mn" and "if v > mx" finds them.
+// kernMinMaxGeneric returns the minimum and the maximum of a non-empty x, as
+// a loop from x[0] with "if v < mn" and "if v > mx" finds them.
 func kernMinMaxGeneric(x []float32) (mn, mx float32) {
 	mn, mx = x[0], x[0]
 	for _, v := range x[1:] {
@@ -92,13 +88,11 @@ func kernMinMaxGeneric(x []float32) (mn, mx float32) {
 	return mn, mx
 }
 
-// kernMaxAbsBits returns the largest bit pattern among the |x[i]|, 0 for
-// an empty x. The patterns of +0, the positive numbers and +Inf are ordered
-// like their values, and those of the NaNs lie above them, so the result is
-// the pattern of the largest magnitude when it is at most that of +Inf and
-// tells that x holds a NaN otherwise. The maximum of two patterns is a
-// conditional move; a float comparison that selects a float is a branch,
-// and on a signal it mispredicts.
+// kernMaxAbsBits returns the largest bit pattern of the |x[i]|, or 0 for an
+// empty x. The patterns of +0, the positive numbers and +Inf are ordered
+// like their values, and those of the NaNs lie above them: a result above
+// kernInfBits tells that x holds a NaN. The maximum of two patterns compiles
+// to a conditional move, a float maximum to a branch.
 func kernMaxAbsBits(x []float32) uint32 {
 	const abs = 1<<31 - 1
 	var m0, m1, m2, m3 uint32
@@ -119,21 +113,17 @@ func kernMaxAbsBits(x []float32) uint32 {
 // kernInfBits is the bit pattern of +Inf.
 const kernInfBits = 0x7F800000
 
-// kernClampGeneric sets x = std::min(std::max(x, lo), hi) element-wise
-// (SuppressionGain::GetMaxGain). For nonzero bounds lo < hi this is also
-// SafeClamp(x, lo, hi) on every input (a value equal to a bound is that
-// bound, and NaN passes through both), as the subtractor and the
-// suppression filter use it.
+// kernClampGeneric sets x = std::min(std::max(x, lo), hi)
+// (SuppressionGain::GetMaxGain). For nonzero bounds lo < hi that is also
+// SafeClamp(x, lo, hi): a value equal to a bound is that bound, and a NaN
+// passes through both.
 func kernClampGeneric(x []float32, lo, hi float32) {
 	for i, v := range x {
 		x[i] = stdMin(stdMax(v, lo), hi)
 	}
 }
 
-// The helpers below have archsimd kernels on arm64 and amd64; other builds
-// run these references (kern_bins_nosimd.go).
-
-// kernMulAdd2Generic sets z = float32(a*b) + float32(c*d) element-wise.
+// kernMulAdd2Generic sets z = a*b + c*d, unfused.
 func kernMulAdd2Generic(a, b, c, d, z []float32) {
 	n := len(z)
 	a, b, c, d = a[:n], b[:n], c[:n], d[:n]
@@ -142,7 +132,7 @@ func kernMulAdd2Generic(a, b, c, d, z []float32) {
 	}
 }
 
-// kernAxpyGeneric sets z += float32(x*a) element-wise.
+// kernAxpyGeneric adds x*a to z, unfused.
 func kernAxpyGeneric(x []float32, a float32, z []float32) {
 	z = z[:len(x)]
 	for i, v := range x {
@@ -150,7 +140,7 @@ func kernAxpyGeneric(x []float32, a float32, z []float32) {
 	}
 }
 
-// kernOneMinusSqGeneric sets z = 1 - float32(x*x) element-wise.
+// kernOneMinusSqGeneric sets z = 1 - x*x, unfused.
 func kernOneMinusSqGeneric(x, z []float32) {
 	z = z[:len(x)]
 	for i, v := range x {
@@ -158,8 +148,8 @@ func kernOneMinusSqGeneric(x, z []float32) {
 	}
 }
 
-// kernDiffPowerGeneric sets z = float32(dr*dr) + float32(di*di) with
-// dr = yr-er and di = yi-ei.
+// kernDiffPowerGeneric sets z = dr*dr + di*di, unfused, with dr = yr-er and
+// di = yi-ei.
 func kernDiffPowerGeneric(yr, er, yi, ei, z []float32) {
 	n := len(z)
 	yr, er, yi, ei = yr[:n], er[:n], yi[:n], ei[:n]
@@ -170,7 +160,7 @@ func kernDiffPowerGeneric(yr, er, yi, ei, z []float32) {
 	}
 }
 
-// kernStdMinGeneric sets z = std::min(x, y) = (y < x ? y : x) element-wise.
+// kernStdMinGeneric sets z = std::min(x, y).
 func kernStdMinGeneric(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
@@ -179,15 +169,14 @@ func kernStdMinGeneric(x, y, z []float32) {
 	}
 }
 
-// kernStdMaxScalarGeneric sets x = std::max(x, a) = (x < a ? a : x)
-// element-wise.
+// kernStdMaxScalarGeneric sets x = std::max(x, a).
 func kernStdMaxScalarGeneric(x []float32, a float32) {
 	for i, v := range x {
 		x[i] = stdMax(v, a)
 	}
 }
 
-// kernSmoothGeneric sets s = s + float32(c*(y-s)) element-wise.
+// kernSmoothGeneric sets s = s + c*(y-s), unfused.
 func kernSmoothGeneric(s, y []float32, c float32) {
 	y = y[:len(s)]
 	for i, a := range s {
@@ -195,7 +184,7 @@ func kernSmoothGeneric(s, y []float32, c float32) {
 	}
 }
 
-// kernNoAudibleEchoGeneric is the per-bin loop of
+// kernNoAudibleEchoGeneric is the bin loop of
 // SuppressionGain::GainToNoAudibleEcho.
 func kernNoAudibleEchoGeneric(nearend, echo, masker, enrT, enrS, emrT, gain *[FftLengthBy2Plus1]float32) {
 	for k := range gain {
@@ -222,8 +211,8 @@ func kernMinGainGeneric(w *[FftLengthBy2Plus1]float32, minEchoPower float32, min
 	}
 }
 
-// kernWeighGeneric is the loop of sgWeigh over echo/weightedEcho:
-// echo * std::max(0.f, 1.f - tmp * tmp), where a NaN tmp gives a factor of 0.
+// kernWeighGeneric is the loop of sgWeigh: echo * std::max(0.f, 1.f -
+// tmp*tmp). A NaN tmp gives a factor of 0.
 func kernWeighGeneric(threshold, normalizer float32, echo, weightedEcho []float32) {
 	weightedEcho = weightedEcho[:len(echo)]
 	for k, e := range echo {
@@ -262,7 +251,7 @@ func kernNoiseInitialUpdateGeneric(n, ini *[FftLengthBy2Plus1]float32) {
 }
 
 // kernFir3Generic sets out[k] = ((+0 + x[k]*h0) + x[k-1]*h1) + x[k-2]*h2 for
-// k in [from, to] (from >= 2).
+// k in [from, to], from >= 2.
 func kernFir3Generic(x []float32, h *[3]float32, out []float32, from, to int) {
 	if to < from {
 		return
@@ -283,7 +272,7 @@ func kernFir3Generic(x []float32, h *[3]float32, out []float32, from, to int) {
 	}
 }
 
-// kernDivGeneric sets z = x/y element-wise.
+// kernDivGeneric sets z = x/y.
 func kernDivGeneric(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
@@ -292,7 +281,7 @@ func kernDivGeneric(x, y, z []float32) {
 	}
 }
 
-// kernReverbGeneric sets r = (r + float32(p*s)) * d element-wise.
+// kernReverbGeneric sets r = (r + p*s) * d, unfused.
 func kernReverbGeneric(r, p, s []float32, d float32) {
 	p = p[:len(r)]
 	s = s[:len(r)]
@@ -301,7 +290,7 @@ func kernReverbGeneric(r, p, s []float32, d float32) {
 	}
 }
 
-// kernStdMaxGeneric sets z = std::max(x, y) = (x < y ? y : x) element-wise.
+// kernStdMaxGeneric sets z = std::max(x, y).
 func kernStdMaxGeneric(x, y, z []float32) {
 	y = y[:len(x)]
 	z = z[:len(x)]
@@ -311,7 +300,7 @@ func kernStdMaxGeneric(x, y, z []float32) {
 }
 
 // kernRefinedMuGeneric is the mu loop of RefinedFilterUpdateGain::Compute:
-// mu = X2 >= gate ? h / (float32(float32(0.5*h)*X2) + float32(sp*E2)) : +0.
+// mu = X2 >= gate ? h / ((0.5*h)*X2 + sp*E2) : +0, unfused.
 func kernRefinedMuGeneric(X2, hError, E2 *[FftLengthBy2Plus1]float32, gate, sp float32, mu *[FftLengthBy2Plus1]float32) {
 	for k := range mu {
 		if X2[k] >= gate {
@@ -323,7 +312,7 @@ func kernRefinedMuGeneric(X2, hError, E2 *[FftLengthBy2Plus1]float32, gate, sp f
 	}
 }
 
-// kernRefinedHErrorGeneric sets h -= float32(float32(float32(0.5*mu)*X2)*h).
+// kernRefinedHErrorGeneric sets h -= ((0.5*mu)*X2)*h, unfused.
 func kernRefinedHErrorGeneric(mu, X2, hError *[FftLengthBy2Plus1]float32) {
 	for k := range hError {
 		hError[k] -= float32(float32(float32(0.5*mu[k])*X2[k]) * hError[k])
@@ -335,10 +324,9 @@ func kernRefinedHErrorGeneric(mu, X2, hError *[FftLengthBy2Plus1]float32) {
 func kernRefinedLeakGeneric(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []float32, disallowLeakageDiverged bool,
 	leakageConverged, leakageDiverged, errorFloor, errorCeil float32, hError *[FftLengthBy2Plus1]float32) {
 	erl = erl[:FftLengthBy2Plus1]
-	// The leakage factor of a bin is picked as a bit pattern, which the
-	// compiler turns into a conditional move: the comparison depends on the
-	// data and would mispredict as a branch. The product is the one of the
-	// branch that the C++ takes.
+	// The leakage factor is selected as a bit pattern, a conditional move:
+	// the comparison would mispredict as a branch. The product is that of
+	// the branch the C++ takes.
 	conv, div := math.Float32bits(leakageConverged), math.Float32bits(leakageDiverged)
 	if disallowLeakageDiverged {
 		div = conv
@@ -365,7 +353,7 @@ func kernCoarseMuGeneric(X2 *[FftLengthBy2Plus1]float32, gate, rate float32, mu 
 	}
 }
 
-// kernReverbScalarGeneric sets r = (r + float32(p*s)) * d element-wise.
+// kernReverbScalarGeneric sets r = (r + p*s) * d, unfused.
 func kernReverbScalarGeneric(r, p []float32, s, d float32) {
 	p = p[:len(r)]
 	for k := range r {
@@ -374,14 +362,13 @@ func kernReverbScalarGeneric(r, p []float32, s, d float32) {
 }
 
 // stErlX2Min is the render power above which ErlEstimator::Update updates a
-// bin: WGN of power -46 dBFS.
+// bin: white noise at -46 dBFS.
 const stErlX2Min float32 = 44015068.0
 
-// kernErlUpdateGeneric is the bin update of ErlEstimator::Update for bins
-// [1, FftLengthBy2): the three loops of the C++ (update, decrement of the
-// hold counters, release) touch one bin each, so they run per bin here.
-// hold[k] is the hold counter of bin k (hold_counters_[k - 1]); hold[0] is
-// unused and stays zero.
+// kernErlUpdateGeneric is ErlEstimator::Update for bins [1, FftLengthBy2).
+// The three loops of the C++ (update, decrement of the hold counters,
+// release) touch one bin each, so they run as one. hold[k] is the hold
+// counter of bin k; hold[0] stays zero.
 func kernErlUpdateGeneric(X2, Y2, erl *[FftLengthBy2Plus1]float32, hold *[FftLengthBy2]int32) {
 	for k := 1; k < FftLengthBy2; k++ {
 		e, h := erl[k], hold[k]
@@ -402,9 +389,9 @@ func kernErlUpdateGeneric(X2, Y2, erl *[FftLengthBy2Plus1]float32, hold *[FftLen
 	}
 }
 
-// kernPeakBinGeneric is the spectral peak search of
-// RenderSignalAnalyzer::IdentifyStrongNarrowBandComponent: the first bin
-// that no later bin exceeds, searched with "x[k] > x[peak]" from bin 0.
+// kernPeakBinGeneric returns the first bin that no later bin exceeds, as the
+// search with "x[k] > x[peak]" from bin 0 finds it
+// (RenderSignalAnalyzer::IdentifyStrongNarrowBandComponent).
 func kernPeakBinGeneric(x *[FftLengthBy2Plus1]float32) int {
 	peakBin := 0
 	for k := 1; k < FftLengthBy2Plus1; k++ {
@@ -415,10 +402,10 @@ func kernPeakBinGeneric(x *[FftLengthBy2Plus1]float32) int {
 	return peakBin
 }
 
-// kernNarrowBandsGeneric sets narrow[k-1] to all ones for every bin k in
-// [1, FftLengthBy2) with x[k] > 3*std::max(x[k-1], x[k+1]) and leaves the
-// other elements as they are (RenderSignalAnalyzer's
-// IdentifySmallNarrowBandRegions). narrow[FftLengthBy2-1] is not written.
+// kernNarrowBandsGeneric sets narrow[k-1] to all ones for every bin k in [1,
+// FftLengthBy2) with x[k] > 3*std::max(x[k-1], x[k+1]) and leaves the other
+// elements alone (IdentifySmallNarrowBandRegions). It does not write
+// narrow[FftLengthBy2-1].
 func kernNarrowBandsGeneric(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32) {
 	for k := 1; k < FftLengthBy2; k++ {
 		narrow[k-1] |= -int32(rsaB2i(x[k] > 3*rsaMax(x[k-1], x[k+1])))
@@ -427,7 +414,7 @@ func kernNarrowBandsGeneric(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2
 
 // kernNoiseFloorUpdateGeneric is the bin loop of
 // ResidualEchoEstimator::UpdateRenderNoisePower. A counter never exceeds
-// hold, so 32 bits hold it.
+// hold.
 func kernNoiseFloorUpdateGeneric(renderPower, noiseFloor *[FftLengthBy2Plus1]float32, counter *[FftLengthBy2Plus1]int32,
 	hold int32, minPower float32) {
 	for k := range noiseFloor {
@@ -442,17 +429,15 @@ func kernNoiseFloorUpdateGeneric(renderPower, noiseFloor *[FftLengthBy2Plus1]flo
 	}
 }
 
-// kernStdMinScalarGeneric sets x = std::min(x, a) = (a < x ? a : x)
-// element-wise.
+// kernStdMinScalarGeneric sets x = std::min(x, a).
 func kernStdMinScalarGeneric(x []float32, a float32) {
 	for i, v := range x {
 		x[i] = stdMin(v, a)
 	}
 }
 
-// kernSumMaxSqGeneric continues two folds over the squares of x in index
-// order: sum += x*x and mx = std::max(mx, x*x)
-// (SuppressionGain::LowNoiseRenderDetector::Detect).
+// kernSumMaxSqGeneric continues sum += x*x and mx = std::max(mx, x*x) over x
+// in index order (SuppressionGain::LowNoiseRenderDetector::Detect).
 func kernSumMaxSqGeneric(x *[BlockSize]float32, sum, mx float32) (float32, float32) {
 	for _, v := range x {
 		x2 := float32(v * v)
@@ -463,9 +448,8 @@ func kernSumMaxSqGeneric(x *[BlockSize]float32, sum, mx float32) (float32, float
 }
 
 // kernSumSq3 returns the sums of squares of three blocks, each accumulated
-// in index order from +0. The three folds are independent serial chains of
-// additions, so they advance side by side in one loop; each sum is the one
-// its own loop gives.
+// in index order from +0. The sums are independent, so the chains run side
+// by side.
 func kernSumSq3(a, b, c *[BlockSize]float32) (sa, sb, sc float32) {
 	for i := range a {
 		sa += float32(a[i] * a[i])

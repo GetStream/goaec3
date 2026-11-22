@@ -12,13 +12,14 @@ type DominantNearendDetectionConfig struct {
 	UseUnboundedEchoSpectrum bool
 }
 
-// DominantNearendDetector detects when the nearend signal dominates the echo.
+// DominantNearendDetector detects a nearend signal that dominates the echo
+// (dominant_nearend_detector.h).
 type DominantNearendDetector struct {
 	*dominantNearendState
 	more *dominantNearendMore // with more than inlineChannels channels
 }
 
-// dominantNearendState is the state of a DominantNearendDetector but its
+// dominantNearendState is the state of a DominantNearendDetector except its
 // pointer.
 type dominantNearendState struct {
 	counters              [inlineChannels]dominantNearendCounters
@@ -32,7 +33,7 @@ type dominantNearendState struct {
 	nearendState          bool
 }
 
-// dominantNearendCounters are the counters of one capture channel.
+// dominantNearendCounters holds the counters of one capture channel.
 type dominantNearendCounters struct {
 	trigger int
 	hold    int
@@ -44,7 +45,6 @@ type dominantNearendMore struct {
 	counters []dominantNearendCounters
 }
 
-// bind makes d the view of st.
 func (d *DominantNearendDetector) bind(st *dominantNearendState, b *binder) {
 	d.dominantNearendState = st
 	if b != nil {
@@ -59,7 +59,6 @@ func NewDominantNearendDetector(config *DominantNearendDetectionConfig, numCaptu
 	return d
 }
 
-// init sets up d in place.
 func (d *DominantNearendDetector) init(config *DominantNearendDetectionConfig, numCaptureChannels int) {
 	st := d.dominantNearendState
 	*d = DominantNearendDetector{}
@@ -103,30 +102,26 @@ func (d DominantNearendDetector) Update(nearendSpectrum, residualEchoSpectrum,
 		echoSum := supLowFrequencyEnergy(&residualEchoSpectrum[ch])
 		noiseSum := supLowFrequencyEnergy(&comfortNoiseSpectrum[ch])
 
-		// Detect strong active nearend if the nearend is sufficiently stronger
-		// than the echo and the nearend noise.
+		// Strong nearend: sufficiently above the echo and the nearend noise.
 		if (!initialState || d.useDuringInitialPhase) &&
 			echoSum < d.enrThreshold*neSum &&
 			neSum > d.snrThreshold*noiseSum {
 			c.trigger++
 			if c.trigger >= d.triggerThreshold {
-				// After a period of strong active nearend activity, flag
-				// nearend mode.
+				// A period of strong nearend sets the nearend state.
 				c.hold = d.holdDuration
 				c.trigger = d.triggerThreshold
 			}
 		} else {
-			// Forget previously detected strong active nearend activity.
 			c.trigger = max(0, c.trigger-1)
 		}
 
-		// Exit nearend-state early at strong echo.
+		// Strong echo ends the nearend state early.
 		if echoSum > d.enrExitThreshold*neSum &&
 			echoSum > d.snrThreshold*noiseSum {
 			c.hold = 0
 		}
 
-		// Remain in any nearend mode for a certain duration.
 		c.hold = max(0, c.hold-1)
 		d.nearendState = d.nearendState || c.hold > 0
 	}

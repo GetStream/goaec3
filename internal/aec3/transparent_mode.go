@@ -6,21 +6,20 @@ const (
 	stInitialTransparentStateProbability float32 = 0.2
 )
 
-// TransparentMode mirrors transparent_mode.h: detects and toggles the
-// transparent mode, in which the suppressor applies less suppression.
+// TransparentMode detects the transparent mode, in which the suppressor
+// suppresses less (transparent_mode.h).
 type TransparentMode interface {
-	// Active reports whether the transparent mode should be active.
+	// Active reports whether the transparent mode is active.
 	Active() bool
-	// Reset resets the state of the detector.
 	Reset()
-	// Update updates the detection decision based on new data.
+	// Update takes the state of one block.
 	Update(filterDelayBlocks int, anyFilterConsistent, anyFilterConverged, anyCoarseFilterConverged,
 		allFiltersDiverged, activeRender, saturatedCapture bool)
 }
 
 // CreateTransparentMode mirrors TransparentMode::Create with field trials at
-// their defaults: nil when ep_strength.bounded_erl is set, otherwise the
-// legacy classifier.
+// their defaults: nil with ep_strength.bounded_erl, the legacy classifier
+// otherwise.
 func CreateTransparentMode(config *EchoCanceller3Config) TransparentMode {
 	if config.EpStrength.BoundedErl {
 		return nil
@@ -28,8 +27,8 @@ func CreateTransparentMode(config *EchoCanceller3Config) TransparentMode {
 	return NewLegacyTransparentMode(config)
 }
 
-// TransparentModeHmm is the HMM classifier (TransparentModeImpl), selected
-// in C++ by the WebRTC-Aec3TransparentModeHmm field trial.
+// TransparentModeHmm is the HMM classifier (TransparentModeImpl), which the
+// C++ selects with the WebRTC-Aec3TransparentModeHmm field trial.
 type TransparentModeHmm struct {
 	transparencyActivated bool
 	probTransparentState  float32

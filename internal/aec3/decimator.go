@@ -22,10 +22,9 @@ var dlyHighPassFilter = [1]BiQuadCoefficients{
 	{B: [3]float32{0.757076375, -1.51415275, 0.757076375}, A: [2]float32{-1.45424359, 0.574061915}},
 }
 
-// Decimator provides decimation by 4 or 8 for the purposes of delay
-// estimation (decimator.h). The sections of its two cascaded biquad filters
-// are stored in the Decimator itself: the anti-aliasing sections followed by
-// the noise reduction ones.
+// Decimator downsamples by 4 or 8 for the delay estimation (decimator.h). It
+// holds the sections of its two filters: anti-aliasing, then noise
+// reduction.
 type Decimator struct {
 	downSamplingFactor int
 	numAntiAliasing    int
@@ -33,7 +32,6 @@ type Decimator struct {
 	sections           [len(dlyBandPassFilterDs8) + len(dlyHighPassFilter)]BiQuad
 }
 
-// NewDecimator returns a decimator for downSamplingFactor 4 or 8.
 func NewDecimator(downSamplingFactor int) *Decimator {
 	d := &Decimator{}
 	d.init(downSamplingFactor)
@@ -60,15 +58,13 @@ func (d *Decimator) init(downSamplingFactor int) {
 	}
 }
 
-// antiAliasing returns the sections of the anti-aliasing filter.
 func (d *Decimator) antiAliasing() []BiQuad { return d.sections[:d.numAntiAliasing] }
 
-// noiseReduction returns the sections of the noise reduction filter.
 func (d *Decimator) noiseReduction() []BiQuad {
 	return d.sections[d.numAntiAliasing : d.numAntiAliasing+d.numNoiseReduction]
 }
 
-// Decimate downsamples the BlockSize samples of in into
+// Decimate downsamples the BlockSize samples of in into the
 // BlockSize/downSamplingFactor samples of out.
 func (d *Decimator) Decimate(in, out []float32) {
 	in = in[:BlockSize]
@@ -80,20 +76,16 @@ func (d *Decimator) Decimate(in, out []float32) {
 	var x [BlockSize]float32
 
 	if aa, nr := d.antiAliasing(), d.noiseReduction(); len(aa) == 3 && len(nr) == 1 {
-		// Limits the frequency content of the signal to avoid aliasing and
-		// reduces the impact of near-end noise, in one pass over the block.
+		// Both filters in one pass over the block.
 		dlyApplyBiQuad4(in, x[:], &aa[0], &aa[1], &aa[2], &nr[0])
 	} else {
-		// Limit the frequency content of the signal to avoid aliasing.
 		dlyApplyBiQuadCascade(in, x[:], aa)
 
-		// Reduce the impact of near-end noise.
 		if len(nr) > 0 {
 			dlyApplyBiQuadCascade(x[:], x[:], nr)
 		}
 	}
 
-	// Downsample the signal.
 	for j, k := 0, 0; j < len(out); j, k = j+1, k+d.downSamplingFactor {
 		out[j] = x[k]
 	}

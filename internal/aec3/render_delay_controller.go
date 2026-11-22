@@ -2,10 +2,8 @@ package aec3
 
 func dlyComputeBufferDelay(currentDelay DelayEstimate, hasCurrentDelay bool, hysteresisLimitBlocks int,
 	estimatedDelay DelayEstimate) DelayEstimate {
-	// Compute the buffer delay increase required to achieve the desired
-	// latency.
+	// The buffer delay that gives the desired latency, with hysteresis.
 	newDelayBlocks := estimatedDelay.Delay >> BlockSizeLog2
-	// Add hysteresis.
 	if hasCurrentDelay {
 		currentDelayBlocks := currentDelay.Delay
 		if newDelayBlocks > currentDelayBlocks && newDelayBlocks <= currentDelayBlocks+hysteresisLimitBlocks {
@@ -17,16 +15,15 @@ func dlyComputeBufferDelay(currentDelay DelayEstimate, hasCurrentDelay bool, hys
 	return newDelay
 }
 
-// RenderDelayController aligns the render and capture signal using a
-// RenderDelayBuffer (render_delay_controller.h; this is the
-// RenderDelayControllerImpl of render_delay_controller.cc). Metrics
-// reporting is not ported.
+// RenderDelayController aligns the render with the capture signal through a
+// RenderDelayBuffer (RenderDelayControllerImpl in
+// render_delay_controller.cc). Metrics reporting is not ported.
 type RenderDelayController struct {
 	*renderDelayControllerState
 	delayEstimator EchoPathDelayEstimator
 }
 
-// renderDelayControllerState is the state of a RenderDelayController but
+// renderDelayControllerState is the state of a RenderDelayController except
 // what the view of its delay estimator holds.
 type renderDelayControllerState struct {
 	hysteresisLimitBlocks    int
@@ -48,7 +45,6 @@ func NewRenderDelayController(config *EchoCanceller3Config, sampleRateHz, numCap
 	return c
 }
 
-// bind makes c the view of st.
 func (c *RenderDelayController) bind(st *renderDelayControllerState, b *binder) {
 	c.renderDelayControllerState = st
 	c.delayEstimator.bind(&st.delayEstimator, b)
@@ -68,8 +64,8 @@ func (c *RenderDelayController) init(config *EchoCanceller3Config, sampleRateHz,
 	c.delayEstimator.init(config, numCaptureChannels)
 }
 
-// Reset resets the delay controller. If the delay confidence is reset, the
-// reset behavior is as if the call is restarted.
+// Reset resets the controller. With resetDelayConfidence it restarts as at
+// the start of a call.
 func (c *RenderDelayController) Reset(resetDelayConfidence bool) {
 	c.hasDelay = false
 	c.hasDelaySamples = false
@@ -80,20 +76,18 @@ func (c *RenderDelayController) Reset(resetDelayConfidence bool) {
 	}
 }
 
-// LogRenderCall logs a render call.
+// LogRenderCall does nothing: metrics reporting is not ported.
 func (c *RenderDelayController) LogRenderCall() {}
 
-// GetDelay aligns the render buffer content with the capture signal and
-// returns the render delay buffer delay in blocks, if any.
+// GetDelay aligns the render buffer with the capture signal. It returns the
+// delay of the render delay buffer in blocks, if it has one.
 func (c *RenderDelayController) GetDelay(renderBuffer *DownsampledRenderBuffer, renderDelayBufferDelay int,
 	capture *Block) (DelayEstimate, bool) {
 	return c.GetDelayWide(renderBuffer, renderDelayBufferDelay, capture, nil)
 }
 
-// GetDelayWide is GetDelay with the room the matched filter can use for
-// widened render samples (MatchedFilter.UpdateWide); wide may be nil. The
-// room is pointer-free and large, so the caller keeps it behind its last
-// pointer.
+// GetDelayWide is GetDelay with work space for MatchedFilter.UpdateWide.
+// wide may be nil.
 func (c *RenderDelayController) GetDelayWide(renderBuffer *DownsampledRenderBuffer, renderDelayBufferDelay int,
 	capture *Block, wide *dlyWide) (DelayEstimate, bool) {
 	_ = renderDelayBufferDelay
@@ -125,7 +119,6 @@ func (c *RenderDelayController) GetDelayWide(renderBuffer *DownsampledRenderBuff
 	}
 
 	if c.hasDelaySamples {
-		// Compute the render delay buffer delay.
 		useHysteresis := c.lastDelayEstimateQuality == DelayQualityRefined &&
 			c.delaySamples.Quality == DelayQualityRefined
 		hysteresis := 0
@@ -142,7 +135,7 @@ func (c *RenderDelayController) GetDelayWide(renderBuffer *DownsampledRenderBuff
 	return c.delay, true
 }
 
-// HasClockdrift returns true if clockdrift has been detected.
+// HasClockdrift reports whether clock drift is detected.
 func (c *RenderDelayController) HasClockdrift() bool {
 	return c.delayEstimator.Clockdrift() != ClockdriftLevelNone
 }

@@ -1,6 +1,6 @@
 package aec3
 
-// Block is a [band][channel][BlockSize] float32 block, stored contiguously.
+// Block holds BlockSize samples per band and channel in one array.
 type Block struct {
 	numBands    int
 	numChannels int
@@ -14,13 +14,13 @@ func NewBlock(numBands, numChannels int) Block {
 func (b Block) NumBands() int    { return b.numBands }
 func (b Block) NumChannels() int { return b.numChannels }
 
-// View returns the BlockSize samples of one band/channel.
+// View returns the samples of one band and channel.
 func (b Block) View(band, channel int) []float32 {
 	i := (band*b.numChannels + channel) * BlockSize
 	return b.data[i : i+BlockSize : i+BlockSize]
 }
 
-// CopyFrom copies o into b (same shape required).
+// CopyFrom copies o, which has the shape of b, into b.
 func (b *Block) CopyFrom(o *Block) {
 	b.numBands, b.numChannels = o.numBands, o.numChannels
 	if cap(b.data) < len(o.data) {

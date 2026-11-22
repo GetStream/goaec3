@@ -4,21 +4,19 @@ import "math"
 
 // Port of suppression_gain.{h,cc}.
 //
-// The only optimization-dependent operation is VectorMath::Sqrt, which is
-// correctly rounded on every lane (sqrtf, _mm_sqrt_ps, _mm256_sqrt_ps and
-// vsqrtq_f32 on arm64), so the lanes share one Go implementation.
+// The lanes differ in VectorMath::Sqrt only, which is correctly rounded in
+// all of them.
 
-// sgLimitLowFrequencyGains limits the low frequency gains to avoid the impact
-// of the high-pass filter on the lower-frequency gain influencing the overall
-// achieved gain.
+// sgLimitLowFrequencyGains limits the gains of the low frequencies, which
+// the high-pass filter would otherwise let dominate the gain.
 func sgLimitLowFrequencyGains(gain *[FftLengthBy2Plus1]float32) {
 	v := stdMin(gain[1], gain[2])
 	gain[0] = v
 	gain[1] = v
 }
 
-// sgLimitHighFrequencyGains limits the high frequency gains to avoid echo
-// leakage due to an imperfect filter.
+// sgLimitHighFrequencyGains limits the gains of the high frequencies against
+// echo that an imperfect filter leaks.
 func sgLimitHighFrequencyGains(conservativeHfSuppression bool, gain *[FftLengthBy2Plus1]float32) {
 	const firstBandToLimit = (64 * 2000) / 8000
 	minUpperGain := gain[firstBandToLimit]
@@ -26,8 +24,7 @@ func sgLimitHighFrequencyGains(conservativeHfSuppression bool, gain *[FftLengthB
 	gain[FftLengthBy2] = gain[FftLengthBy2Minus1]
 
 	if conservativeHfSuppression {
-		// Limits the gain in the frequencies for which the adaptive filter has
-		// not converged.
+		// The frequencies for which the adaptive filter has not converged.
 		const upperAccurateBandPlus1 = 29
 		const oneByBandsInSum = float32(1) / float32(upperAccurateBandPlus1-20)
 		var sum float32
@@ -43,8 +40,8 @@ func sgWeigh(threshold, normalizer float32, begin, end int, echo, weightedEcho *
 	kernWeigh(threshold, normalizer, echo[begin:end], weightedEcho[begin:end])
 }
 
-// sgWeightEchoForAudibility scales the echo according to assessed audibility
-// at the other end.
+// sgWeightEchoForAudibility scales the echo by its audibility at the other
+// end.
 func sgWeightEchoForAudibility(config *EchoCanceller3Config, echo, weightedEcho *[FftLengthBy2Plus1]float32) {
 	ea := &config.EchoAudibility
 	threshold := float32(ea.FloorPower * ea.AudibilityThresholdLf)
@@ -68,13 +65,14 @@ func sgLowFrequencyEnergy(spectrum *[FftLengthBy2Plus1]float32) float32 {
 	return sum
 }
 
-// sgBandEnergies returns the largest sum of squares over the channels of
-// band 0 of render, and over the channels of its upper bands (render has at
-// least two bands). The C++ folds std::max(energy, sum of squares) from +0
-// over the channels of band 0, and over the channels of band 1 and then of
-// band 2. A sum of squares is NaN, which the fold skips, or at least +0, so
-// each fold is the largest non-NaN sum (or +0) in any order of the sums; the
-// sums of the bands of a channel are accumulated side by side.
+// sgBandEnergies returns the largest sum of squares of the channels of band
+// 0 of render, and that of the channels of its upper bands. render has at
+// least two bands.
+//
+// The C++ folds std::max(energy, sum) from +0 over the channels of band 0,
+// and over those of band 1 and then band 2. A sum of squares is NaN, which
+// the fold skips, or at least +0, so a fold has one result in any order of
+// the sums. The sums of the bands of a channel run side by side.
 func sgBandEnergies(render *Block) (lowBandEnergy, highBandEnergy float32) {
 	for ch := 0; ch < render.NumChannels(); ch++ {
 		b0 := (*[BlockSize]float32)(render.View(0, ch))
@@ -95,8 +93,7 @@ type sgLowNoiseRenderDetector struct {
 	averagePower float32
 }
 
-// Detect detects when the render signal can be considered to have low power
-// and consist of stationary noise.
+// Detect reports whether the render signal is stationary noise of low power.
 func (d *sgLowNoiseRenderDetector) Detect(render *Block) bool {
 	var x2Sum, x2Max float32
 	for ch := 0; ch < render.NumChannels(); ch++ {
@@ -121,7 +118,7 @@ type sgGainParameters struct {
 
 func newSgGainParameters(lastLfBand, firstHfBand int, tuning *Tuning) sgGainParameters {
 	p := sgGainParameters{maxIncFactor: tuning.MaxIncFactor, maxDecFactorLf: tuning.MaxDecFactorLf}
-	// Compute per-band masking thresholds.
+	// The masking thresholds per band.
 	lf := &tuning.MaskLf
 	hf := &tuning.MaskHf
 	for k := 0; k < FftLengthBy2Plus1; k++ {
@@ -140,18 +137,19 @@ func newSgGainParameters(lastLfBand, firstHfBand int, tuning *Tuning) sgGainPara
 	return p
 }
 
-// SuppressionGain computes the echo suppression gains.
+// SuppressionGain computes the echo suppression gains (suppression_gain.h).
 type SuppressionGain struct {
 	*suppressionGainState
-	// The nearend detector: subbandNearendDetector with
-	// Suppressor.UseSubbandNearendDetection, dominantNearendDetector (the
-	// default, part of the SuppressionGain) otherwise.
+	// subbandNearendDetector is set with
+	// Suppressor.UseSubbandNearendDetection; dominantNearendDetector is the
+	// default.
 	subbandNearendDetector  *SubbandNearendDetector
 	more                    *sgMore // see sgMore
 	dominantNearendDetector DominantNearendDetector
 }
 
-// suppressionGainState is the state of a SuppressionGain but its pointers.
+// suppressionGainState is the state of a SuppressionGain except its
+// pointers.
 type suppressionGainState struct {
 	dominantNearendDetector dominantNearendState
 
@@ -172,7 +170,7 @@ type suppressionGainState struct {
 }
 
 // sgNearendMemoryInline is the memory of the default nearend smoothing of
-// one channel: FftLengthBy2Plus1 bins over 4 blocks.
+// one channel: the 3 previous blocks of an average over 4.
 const sgNearendMemoryInline = FftLengthBy2Plus1 * 3
 
 // sgChannel is the state of one capture channel of a SuppressionGain.
@@ -182,16 +180,15 @@ type sgChannel struct {
 	nearendSmoother movingAverageState
 }
 
-// sgMore is the state of a SuppressionGain that does not fit in it: the
-// channel states with more than inlineChannels capture channels, and the
-// memory of the nearend smoothers ([channel][nearendMemorySize]) with more
-// channels or a longer smoothing than the default.
+// sgMore holds the state of a SuppressionGain that does not fit in it: the
+// channel states of more than inlineChannels capture channels, and the
+// memory of the nearend smoothers with more channels or a longer smoothing
+// than the default.
 type sgMore struct {
 	channels      []sgChannel
 	nearendMemory []float32
 }
 
-// bind makes s the view of st.
 func (s *SuppressionGain) bind(st *suppressionGainState, b *binder) {
 	s.suppressionGainState = st
 	if b != nil {
@@ -201,8 +198,8 @@ func (s *SuppressionGain) bind(st *suppressionGainState, b *binder) {
 	s.dominantNearendDetector.bind(&st.dominantNearendDetector, b)
 }
 
-// NewSuppressionGain mirrors the C++ constructor. sampleRateHz is unused, as
-// in the C++.
+// NewSuppressionGain mirrors the C++ constructor, which does not use
+// sampleRateHz either.
 func NewSuppressionGain(config *EchoCanceller3Config, optimization Aec3Optimization, sampleRateHz int,
 	numCaptureChannels int) *SuppressionGain {
 	s := &SuppressionGain{}
@@ -211,7 +208,6 @@ func NewSuppressionGain(config *EchoCanceller3Config, optimization Aec3Optimizat
 	return s
 }
 
-// init sets up s in place.
 func (s *SuppressionGain) init(config *EchoCanceller3Config, optimization Aec3Optimization, sampleRateHz int,
 	numCaptureChannels int) {
 	_ = sampleRateHz
@@ -254,7 +250,6 @@ func (s *SuppressionGain) init(config *EchoCanceller3Config, optimization Aec3Op
 	}
 }
 
-// channelStates returns the state of every capture channel.
 func (s SuppressionGain) channelStates() []sgChannel {
 	var more []sgChannel
 	if s.more != nil {
@@ -263,7 +258,7 @@ func (s SuppressionGain) channelStates() []sgChannel {
 	return channelState(&s.channels, s.numCaptureChannels, more)
 }
 
-// smootherMemory returns the memory of the nearend smoother of a channel.
+// smootherMemory returns the memory of the nearend smoother of channel ch.
 func (s SuppressionGain) smootherMemory(ch int) []float32 {
 	n := s.nearendMemorySize
 	if s.more != nil {
@@ -272,7 +267,7 @@ func (s SuppressionGain) smootherMemory(ch int) []float32 {
 	return s.nearendMemory[ch][:n]
 }
 
-// IsDominantNearend returns whether the nearend detector is in the nearend
+// IsDominantNearend reports whether the nearend detector is in the nearend
 // state.
 func (s SuppressionGain) IsDominantNearend() bool {
 	if s.subbandNearendDetector != nil {
@@ -281,7 +276,7 @@ func (s SuppressionGain) IsDominantNearend() bool {
 	return s.dominantNearendDetector.IsNearendState()
 }
 
-// SetInitialState toggles the usage of the initial state.
+// SetInitialState sets whether the initial state is in use.
 func (s SuppressionGain) SetInitialState(state bool) {
 	s.initialState = state
 	if state {
@@ -291,39 +286,35 @@ func (s SuppressionGain) SetInitialState(state bool) {
 	}
 }
 
-// GetGain computes the low band gain (amplitude domain) and the gain for the
-// bands above the first band.
+// GetGain computes the gain of the first band in the amplitude domain and
+// the gain of the bands above it.
 func (s SuppressionGain) GetGain(nearendSpectrum, echoSpectrum, residualEchoSpectrum,
 	residualEchoSpectrumUnbounded, comfortNoiseSpectrum [][FftLengthBy2Plus1]float32,
 	renderSignalAnalyzer *RenderSignalAnalyzer, aecState *AecState, render *Block, clockDrift bool,
 	highBandsGain *float32, lowBandGain *[FftLengthBy2Plus1]float32) {
-	// Choose residual echo spectrum for dominant nearend detection.
+	// The residual echo spectrum for the nearend detection.
 	echo := residualEchoSpectrum
 	if s.useUnboundedEchoSpectrum {
 		echo = residualEchoSpectrumUnbounded
 	}
 
-	// Update the nearend state selection.
 	if s.subbandNearendDetector != nil {
 		s.subbandNearendDetector.Update(nearendSpectrum, echo, comfortNoiseSpectrum, s.initialState)
 	} else {
 		s.dominantNearendDetector.Update(nearendSpectrum, echo, comfortNoiseSpectrum, s.initialState)
 	}
 
-	// Compute gain for the lower band.
 	lowNoiseRender := s.lowRenderDetector.Detect(render)
 	s.LowerBandGain(lowNoiseRender, aecState, nearendSpectrum, residualEchoSpectrum, comfortNoiseSpectrum,
 		clockDrift, lowBandGain)
 
-	// Compute the gain for the upper bands.
 	narrowPeakBand, hasNarrowPeakBand := renderSignalAnalyzer.NarrowPeakBand()
 
 	*highBandsGain = s.UpperBandsGain(echoSpectrum, comfortNoiseSpectrum, narrowPeakBand, hasNarrowPeakBand,
 		aecState.SaturatedEcho(), render, lowBandGain)
 }
 
-// UpperBandsGain computes the gain to apply for the bands beyond the first
-// band.
+// UpperBandsGain computes the gain of the bands above the first.
 func (s SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][FftLengthBy2Plus1]float32,
 	narrowPeakBand int, hasNarrowPeakBand bool, saturatedEcho bool, render *Block,
 	lowBandGain *[FftLengthBy2Plus1]float32) float32 {
@@ -343,30 +334,27 @@ func (s SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][Ff
 		}
 	}
 
-	// Always attenuate the upper bands when there is saturated echo.
+	// Saturated echo always attenuates the upper bands.
 	if saturatedEcho {
 		return stdMin(0.001, gainBelow8Khz)
 	}
 
-	// Compute the upper and lower band energies.
 	lowBandEnergy, highBandEnergy := sgBandEnergies(render)
 
-	// If there is more power in the lower frequencies than the upper
-	// frequencies, or if the power in upper frequencies is low, do not bound
-	// the gain in the upper bands.
+	// The gain of the upper bands is not bound when the lower frequencies
+	// have more power than the upper ones or the upper ones have little.
 	hb := &s.config.Suppressor.HighBandsSuppression
 	var antiHowlingGain float32
 	activationThreshold := BlockSize * hb.AntiHowlingActivationThreshold
 	if highBandEnergy < stdMax(lowBandEnergy, activationThreshold) {
 		antiHowlingGain = 1
 	} else {
-		// In all other cases, bound the gain for upper frequencies.
 		antiHowlingGain = hb.AntiHowlingGain * float32(math.Sqrt(float64(lowBandEnergy/highBandEnergy)))
 	}
 
 	gainBound := float32(1)
 	if !s.IsDominantNearend() {
-		// Bound the upper gain during significant echo activity.
+		// Significant echo activity bounds the upper gain.
 		for ch := 0; ch < s.numCaptureChannels; ch++ {
 			echoSum := sgLowFrequencyEnergy(&echoSpectrum[ch])
 			noiseSum := sgLowFrequencyEnergy(&comfortNoiseSpectrum[ch])
@@ -377,7 +365,6 @@ func (s SuppressionGain) UpperBandsGain(echoSpectrum, comfortNoiseSpectrum [][Ff
 		}
 	}
 
-	// Choose the gain as the minimum of the lower and upper gains.
 	return stdMin(stdMin(gainBelow8Khz, antiHowlingGain), gainBound)
 }
 
@@ -388,15 +375,14 @@ func (s SuppressionGain) params() *sgGainParameters {
 	return &s.normalParams
 }
 
-// GainToNoAudibleEcho computes the gain to reduce the echo to a non audible
-// level.
+// GainToNoAudibleEcho computes the gain that makes the echo inaudible.
 func (s SuppressionGain) GainToNoAudibleEcho(nearend, echo, masker, gain *[FftLengthBy2Plus1]float32) {
 	p := s.params()
 	kernNoAudibleEcho(nearend, echo, masker, &p.enrTransparent, &p.enrSuppress, &p.emrTransparent, gain)
 }
 
-// GetMinGain computes the minimum gain as the attenuating gain to put the
-// signal just above the zero sample values.
+// GetMinGain computes the smallest gain: the one that leaves the signal just
+// above zero sample values.
 func (s SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho *[FftLengthBy2Plus1]float32,
 	lowNoiseRender, saturatedEcho bool, minGain *[FftLengthBy2Plus1]float32) {
 	if saturatedEcho {
@@ -413,8 +399,8 @@ func (s SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho 
 	if !s.initialState || sup.LfSmoothingDuringInitialPhase {
 		dec := s.params().maxDecFactorLf
 		for k := 0; k <= sup.LastLfSmoothingBand; k++ {
-			// Make sure the gains of the low frequencies do not decrease too
-			// quickly after strong nearend.
+			// The gains of the low frequencies must not fall too quickly
+			// after strong nearend.
 			if lastNearend[k] > lastEcho[k] || k <= sup.LastPermanentLfSmoothingBand {
 				minGain[k] = stdMax(minGain[k], s.lastGain[k]*dec)
 				minGain[k] = stdMin(minGain[k], 1)
@@ -423,8 +409,8 @@ func (s SuppressionGain) GetMinGain(weightedResidualEcho, lastNearend, lastEcho 
 	}
 }
 
-// GetMaxGain computes the maximum gain by limiting the gain increase from the
-// previous gain.
+// GetMaxGain computes the largest gain: the previous gain with a limited
+// increase.
 func (s SuppressionGain) GetMaxGain(maxGain *[FftLengthBy2Plus1]float32) {
 	inc := s.params().maxIncFactor
 	floor := s.config.Suppressor.FloorFirstIncrease
@@ -433,7 +419,7 @@ func (s SuppressionGain) GetMaxGain(maxGain *[FftLengthBy2Plus1]float32) {
 	kernClamp(maxGain[:], floor, 1)
 }
 
-// LowerBandGain computes the gain for the first band.
+// LowerBandGain computes the gain of the first band.
 func (s SuppressionGain) LowerBandGain(lowNoiseRender bool, aecState *AecState,
 	suppressorInput, residualEcho, comfortNoise [][FftLengthBy2Plus1]float32, clockDrift bool,
 	gain *[FftLengthBy2Plus1]float32) {
@@ -450,7 +436,6 @@ func (s SuppressionGain) LowerBandGain(lowNoiseRender bool, aecState *AecState,
 		var G, nearend, weightedResidualEcho, minGain [FftLengthBy2Plus1]float32
 		sc.nearendSmoother.average(s.smootherMemory(ch), suppressorInput[ch][:], nearend[:])
 
-		// Weight echo power in terms of audibility.
 		sgWeightEchoForAudibility(&s.config, &residualEcho[ch], &weightedResidualEcho)
 
 		s.GetMinGain(&weightedResidualEcho, &sc.lastNearend, &sc.lastEcho, lowNoiseRender, saturatedEcho,
@@ -458,26 +443,23 @@ func (s SuppressionGain) LowerBandGain(lowNoiseRender bool, aecState *AecState,
 
 		s.GainToNoAudibleEcho(&nearend, &weightedResidualEcho, &comfortNoise[0], &G)
 
-		// Clamp gains.
 		kernStdMin(G[:], maxGain[:], G[:])
 		kernStdMax(G[:], minGain[:], G[:])
 		kernStdMin(gain[:], G[:], gain[:])
 
-		// Store data required for the gain computation of the next block.
 		sc.lastNearend = nearend
 		sc.lastEcho = weightedResidualEcho
 	}
 
 	sgLimitLowFrequencyGains(gain)
-	// Use conservative high-frequency gains during clock-drift or when not in
+	// Conservative high-frequency gains during clock drift and outside
 	// dominant nearend.
 	if !s.IsDominantNearend() || clockDrift || s.config.Suppressor.ConservativeHfSuppression {
 		sgLimitHighFrequencyGains(s.config.Suppressor.ConservativeHfSuppression, gain)
 	}
 
-	// Store computed gains.
 	s.lastGain = *gain
 
-	// Transform gains to amplitude domain.
+	// To the amplitude domain.
 	NewVectorMath(s.optimization).Sqrt(gain[:])
 }

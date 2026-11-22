@@ -1,20 +1,22 @@
 package aec3
 
-// RenderBuffer is a read view over the render block, spectrum and FFT rings.
+// RenderBuffer reads the block, spectrum and FFT rings of the render signal
+// (render_buffer.h).
 type RenderBuffer struct {
 	blockBuffer    *BlockBuffer
 	spectrumBuffer *SpectrumBuffer
 	fftBuffer      *FftBuffer
 	renderActivity bool
-	// spectraMatchFfts: see SpectraMatchFfts. Set by the owner of the rings.
+	// spectraMatchFfts is set by the owner of the rings. See
+	// SpectraMatchFfts.
 	spectraMatchFfts bool
 }
 
 // SpectraMatchFfts reports whether every slot of the spectrum ring holds
-// FftData.Spectrum of the same slot of the FFT ring, with the two rings of
-// one size and read from the same position: the spectra SpectralSum adds
-// are then those of the FFTs the filters use. RenderDelayBuffer keeps its
-// rings that way; a RenderBuffer over other rings reports false.
+// FftData.Spectrum of the same slot of the FFT ring, and the two rings have
+// one size and one read position. The spectra SpectralSum adds are then
+// those of the FFTs the filters read. The rings of a RenderDelayBuffer are
+// kept that way.
 func (r *RenderBuffer) SpectraMatchFfts() bool {
 	return r.spectraMatchFfts && r.spectrumBuffer.Size == r.fftBuffer.Size &&
 		r.spectrumBuffer.Read == r.fftBuffer.Read
@@ -24,8 +26,7 @@ func NewRenderBuffer(blockBuffer *BlockBuffer, spectrumBuffer *SpectrumBuffer, f
 	return &RenderBuffer{blockBuffer: blockBuffer, spectrumBuffer: spectrumBuffer, fftBuffer: fftBuffer}
 }
 
-// GetBlock returns a view of the block at the given offset from the read
-// position.
+// GetBlock returns the block bufferOffsetBlocks from the read position.
 func (r *RenderBuffer) GetBlock(bufferOffsetBlocks int) Block {
 	p := r.blockBuffer.OffsetIndex(r.blockBuffer.Read, bufferOffsetBlocks)
 	return r.blockBuffer.At(p)
@@ -40,8 +41,8 @@ func (r *RenderBuffer) GetFftBuffer() *FftBuffer { return r.fftBuffer }
 
 func (r *RenderBuffer) Position() int { return r.fftBuffer.Read }
 
-// SpectralSum sums numSpectra spectra (all channels) starting at the read
-// position.
+// SpectralSum sets X2 to the sum of the spectra of all channels of
+// numSpectra slots from the read position.
 func (r *RenderBuffer) SpectralSum(numSpectra int, X2 *[FftLengthBy2Plus1]float32) {
 	var rows [rbMaxRows]*[FftLengthBy2Plus1]float32
 	if n, ok := r.spectralRows(numSpectra, &rows); ok {
@@ -61,13 +62,13 @@ func (r *RenderBuffer) SpectralSum(numSpectra int, X2 *[FftLengthBy2Plus1]float3
 	}
 }
 
-// rbMaxRows bounds the spectra that SpectralSum(s) hand to kernSumRows from
-// a stack array; longer sums run the scalar loops.
+// rbMaxRows is the largest number of spectra SpectralSum and SpectralSums
+// hand to kernSumRows; longer sums run the scalar loops.
 const rbMaxRows = 64
 
-// spectralRows lists the spectra of numSpectra ring positions from the read
-// position (all channels, in summation order). ok is false when they do not
-// fit in rows.
+// spectralRows fills rows with the spectra of numSpectra slots from the read
+// position, all channels, in the order of the sum. ok is false when they do
+// not fit.
 func (r *RenderBuffer) spectralRows(numSpectra int, rows *[rbMaxRows]*[FftLengthBy2Plus1]float32) (int, bool) {
 	sb := r.spectrumBuffer
 	if numSpectra*len(sb.At(0)) > rbMaxRows {
@@ -86,9 +87,8 @@ func (r *RenderBuffer) spectralRows(numSpectra int, rows *[rbMaxRows]*[FftLength
 	return n, true
 }
 
-// SpectralSums computes the sums over the first numShorter and numLonger
-// spectra. Each running sum is the same per-bin sequence of additions as
-// the C++ (the longer sum continues from the shorter one).
+// SpectralSums computes the sums of the first numShorter and numLonger
+// spectra. The longer sum continues from the shorter one, as in the C++.
 func (r *RenderBuffer) SpectralSums(numShorter, numLonger int, X2Shorter, X2Longer *[FftLengthBy2Plus1]float32) {
 	var rows [rbMaxRows]*[FftLengthBy2Plus1]float32
 	if n, ok := r.spectralRows(numLonger, &rows); ok {

@@ -1,12 +1,12 @@
-// Package aec3 is a Go port of WebRTC's AEC3 echo canceller
-// (modules/audio_processing/aec3, WebRTC m141, branch-heads/7390).
+// Package aec3 is a Go port of the AEC3 echo canceller of WebRTC m141
+// (modules/audio_processing/aec3, branch-heads/7390), bit-exact with the C++
+// in every lane.
 //
-// Naming mirrors the C++ sources: each C++ class keeps its name as a Go type,
-// constructors are NewX, methods keep their C++ names, and kFoo constants drop
-// the k prefix. All signal-domain storage and arithmetic is float32 to match
-// the C++ float build, and products that the C++ build rounds separately are
-// wrapped in float32(...) so the Go compiler never contracts them into FMA
-// (libwebrtc is built with -ffp-contract=off).
+// A C++ class keeps its name as a Go type, its constructor is NewX, methods
+// keep their names and kFoo constants drop the k. Signal arithmetic is
+// float32. libwebrtc is built with -ffp-contract=off, so a product that
+// feeds a sum is wrapped in float32(...), which keeps the compiler from
+// fusing the two.
 package aec3
 
 import (
@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 )
 
-// Aec3Optimization selects the kernel family, as in aec3_common.h.
+// Aec3Optimization selects the lane of the kernels, as in aec3_common.h.
 type Aec3Optimization int
 
 const (
@@ -62,10 +62,9 @@ func GetRenderDelayBufferSize(downSamplingFactor, numMatchedFilters, filterLengt
 		filterLengthBlocks + 1
 }
 
-// DetectOptimization mirrors aec3_common.cc: AVX2, else SSE2 on amd64; NEON
-// on arm64 (libwebrtc's arm64 build always has NEON); OptNone elsewhere. The
-// purego build always reports OptNone (the scalar C reference lane). A lane
-// set with SetForcedLaneForTesting replaces the detected one.
+// DetectOptimization returns the lane libwebrtc selects: AVX2 or SSE2 on
+// amd64, NEON on arm64, none elsewhere and in the purego build. A lane set
+// with SetForcedLaneForTesting replaces it.
 func DetectOptimization() Aec3Optimization {
 	if purego {
 		return OptNone
@@ -84,16 +83,12 @@ func DetectOptimization() Aec3Optimization {
 	return OptNone
 }
 
-// forcedLane is the lane SetForcedLaneForTesting set, plus one; zero means
-// none.
+// forcedLane is the lane SetForcedLaneForTesting set, plus one, or zero.
 var forcedLane atomic.Int32
 
-// SetForcedLaneForTesting makes DetectOptimization return opt instead of
-// the detected lane, for tests that run a lane the CPU detection does not
-// select (for example the AVX2 lane under Rosetta 2, which hides AVX and
-// BMI2 from CPUID). It reports false and changes nothing when the
-// architecture cannot run opt. The purego build ignores the forced lane.
-// The package is internal, so only this module's tests reach it.
+// SetForcedLaneForTesting makes DetectOptimization return opt. It reports
+// false and does nothing if the architecture cannot run opt. The purego
+// build ignores the forced lane.
 func SetForcedLaneForTesting(opt Aec3Optimization) bool {
 	switch {
 	case opt == OptNone, opt == OptSse2 && isAMD64, opt == OptAvx2 && isAMD64, opt == OptNeon && isARM64:
@@ -106,7 +101,7 @@ func SetForcedLaneForTesting(opt Aec3Optimization) bool {
 // ClearForcedLaneForTesting restores the detected lane.
 func ClearForcedLaneForTesting() { forcedLane.Store(0) }
 
-// FastApproxLog2f reinterprets the float bits as an integer and rescales.
+// FastApproxLog2f approximates log2(in) from the bits of in.
 func FastApproxLog2f(in float32) float32 {
 	out := float32(math.Float32bits(in))
 	out = float32(out * 1.1920929e-7) // 1/2^23
@@ -114,23 +109,21 @@ func FastApproxLog2f(in float32) float32 {
 	return out
 }
 
-// Log2TodB converts a log2 value to dB (the C++ promotes through double).
+// Log2TodB converts a log2 value to dB. The product is computed in double,
+// as in the C++.
 func Log2TodB(inLog2 float32) float32 {
 	return float32(3.0102999566398121 * float64(inLog2))
 }
 
-// Float minimum, maximum, clamp and absolute value with the exact semantics
-// of the C++ expressions they port. Go's builtin min/max return NaN when any
-// argument is NaN and order the zeros (min(-0, +0) = -0, max(-0, +0) = +0).
-// std::min and std::max are single comparisons that return the first
-// argument unless the second one compares smaller (larger): a NaN second
-// argument is dropped, a NaN first argument is kept, and equal arguments
-// (-0 and +0) give the first. The SIMD lanes have their own semantics: NEON
-// vminq_f32/vmaxq_f32 are Go's builtin min/max (NaN propagates; they differ
-// from Go only in which NaN payload they return), and SSE2/AVX2
-// _mm_max_ps(a, b) is sseMax.
+// Float minimum, maximum, clamp and absolute value as the C++ expressions
+// compute them. std::min and std::max are one comparison and return the
+// first argument unless the second is smaller (larger): they drop a NaN
+// second argument, keep a NaN first argument, and return the first of -0 and
+// +0. Go's min and max return NaN for a NaN argument and order the zeros; so
+// do NEON vminq_f32 and vmaxq_f32, up to the payload of the NaN. _mm_max_ps
+// is sseMax.
 
-// stdMin is std::min(a, b) on floats: b < a ? b : a.
+// stdMin is std::min(a, b): b < a ? b : a.
 func stdMin(a, b float32) float32 {
 	if b < a {
 		return b
@@ -138,7 +131,7 @@ func stdMin(a, b float32) float32 {
 	return a
 }
 
-// stdMax is std::max(a, b) on floats: a < b ? b : a.
+// stdMax is std::max(a, b): a < b ? b : a.
 func stdMax(a, b float32) float32 {
 	if a < b {
 		return b
@@ -146,8 +139,7 @@ func stdMax(a, b float32) float32 {
 	return a
 }
 
-// stSafeClamp is webrtc::SafeClamp on floats:
-// x <= lo ? lo : x >= hi ? hi : x.
+// stSafeClamp is webrtc::SafeClamp: x <= lo ? lo : x >= hi ? hi : x.
 func stSafeClamp(x, lo, hi float32) float32 {
 	if x <= lo {
 		return lo
@@ -158,8 +150,8 @@ func stSafeClamp(x, lo, hi float32) float32 {
 	return x
 }
 
-// sseMax is _mm_max_ps(a, b) and _mm256_max_ps(a, b) per lane:
-// a > b ? a : b, which gives b when either is NaN or both are zero.
+// sseMax is _mm_max_ps(a, b) per lane: a > b ? a : b. It returns b when
+// either is NaN or both are zero.
 func sseMax(a, b float32) float32 {
 	if a > b {
 		return a
@@ -167,15 +159,15 @@ func sseMax(a, b float32) float32 {
 	return b
 }
 
-// fabsf is fabsf and std::fabs: x with the sign bit cleared.
+// fabsf returns x with the sign bit cleared.
 func fabsf(x float32) float32 {
 	return math.Float32frombits(math.Float32bits(x) &^ (1 << 31))
 }
 
-// stdMinmaxElement returns the values at the iterators std::minmax_element
-// returns for x (len(x) > 0), with the pairwise algorithm of libc++. Without
-// NaN that is the first minimum and the last maximum; with NaN the result
-// depends on the pairing, which this follows comparison for comparison.
+// stdMinmaxElement returns the values std::minmax_element of libc++ points
+// at for a non-empty x. Without a NaN they are the first minimum and the
+// last maximum; with one they depend on the pairing of the comparisons,
+// which this follows.
 func stdMinmaxElement(x []float32) (mn, mx float32) {
 	mn, mx = x[0], x[0]
 	if len(x) == 1 {

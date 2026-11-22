@@ -1,13 +1,13 @@
 package aec3
 
-// LinearFilterQuality is a std::optional<float>: Value is meaningful only
-// when Ok is set.
+// LinearFilterQuality is a std::optional<float>: Value is valid when Ok is
+// set.
 type LinearFilterQuality struct {
 	Value float32
 	Ok    bool
 }
 
-// stAccumulate is std::accumulate(..., 0.f): a sequential float sum.
+// stAccumulate is std::accumulate(..., 0.f): a sum in element order.
 func stAccumulate(x []float32) float32 {
 	var acc float32
 	for _, v := range x {
@@ -23,9 +23,8 @@ func stBoolToFloat(b bool) float32 {
 	return 0
 }
 
-// stMul, stSub and stDiv evaluate float constants with float rounding (as
-// C++ constexpr float arithmetic does) rather than Go's exact constant
-// arithmetic.
+// stMul, stSub and stDiv evaluate float constants with float rounding, as
+// C++ constexpr float arithmetic does. Go constant arithmetic is exact.
 func stMul(a, b float32) float32 { return a * b }
 func stSub(a, b float32) float32 { return a - b }
 func stDiv(a, b float32) float32 { return a / b }
@@ -57,8 +56,8 @@ func (s *stInitialState) Update(activeRender, saturatedCapture bool) {
 	s.transitionTriggered = !s.initialState && prevInitialState
 }
 
-// stFilterDelay mirrors AecState::FilterDelay. The per-channel delays
-// (filterDelaysBlocks) live with the AecState.
+// stFilterDelay mirrors AecState::FilterDelay. The AecState holds its
+// per-channel delays (filterDelaysBlocks).
 type stFilterDelay struct {
 	delayHeadroomBlocks   int
 	externalDelayReported bool
@@ -89,9 +88,8 @@ func (f *stFilterDelay) Update(filterDelaysBlocks, analyzerFilterDelayEstimatesB
 	f.minFilterDelay = m
 }
 
-// stFilteringQualityAnalyzer mirrors AecState::FilteringQualityAnalyzer.
-// The per-channel flags (usableLinearFilterEstimates) live with the
-// AecState.
+// stFilteringQualityAnalyzer mirrors AecState::FilteringQualityAnalyzer. The
+// AecState holds its per-channel flags (usableLinearFilterEstimates).
 type stFilteringQualityAnalyzer struct {
 	useLinearFilter              bool
 	overallUsableLinearEstimates bool
@@ -211,12 +209,8 @@ func (t *stTransparentState) Update(filterDelayBlocks int, anyFilterConsistent, 
 	}
 }
 
-// AecState mirrors aec_state.h: the state and the conditions for the echo
-// removal functionality. Field trials are at their defaults.
-//
-// An AecState is the view of an aecStateState, which holds the estimators
-// and analyzers and the per-channel state of up to inlineChannels capture
-// channels; the view holds the views of those that have pointers.
+// AecState handles the state and the conditions of the echo removal
+// (aec_state.h). Field trials are at their defaults.
 type AecState struct {
 	*aecStateState
 	more                     *aecMore // with more than inlineChannels channels
@@ -226,7 +220,7 @@ type AecState struct {
 	erleEstimator            ErleEstimator
 }
 
-// aecStateState is the state of an AecState but its pointers.
+// aecStateState is the state of an AecState except its pointers.
 type aecStateState struct {
 	subtractorOutputAnalyzer subtractorOutputAnalyzerState
 	filterAnalyzer           filterAnalyzerState
@@ -250,17 +244,15 @@ type aecStateState struct {
 	echoAudibility                              EchoAudibility
 	avgRenderReverb                             ReverbModel
 
-	// The per-channel state of delayState and filterQualityState for up to
-	// inlineChannels channels.
+	// The per-channel state of delayState and filterQualityState.
 	inline struct {
 		filterDelaysBlocks          [inlineChannels]int
 		usableLinearFilterEstimates [inlineChannels]bool
 	}
 }
 
-// aecMore is the per-channel state of the delayState and the
-// filterQualityState of an AecState with more than inlineChannels capture
-// channels.
+// aecMore is the per-channel state of an AecState with more than
+// inlineChannels capture channels.
 type aecMore struct {
 	filterDelaysBlocks          []int
 	usableLinearFilterEstimates []bool
@@ -284,7 +276,6 @@ func (a *AecState) usableLinearFilterEstimates() []bool {
 	return a.inline.usableLinearFilterEstimates[:a.numCaptureChannels:a.numCaptureChannels]
 }
 
-// bind makes a the view of st.
 func (a *AecState) bind(st *aecStateState, b *binder) {
 	a.aecStateState = st
 	if b != nil {
@@ -296,16 +287,13 @@ func (a *AecState) bind(st *aecStateState, b *binder) {
 	a.erleEstimator.bind(&st.erleEstimator, b)
 }
 
-// aecStorageSize returns the number of samples an AecState keeps for config:
-// those of its FilterAnalyzer and of its ReverbModelEstimator.
+// aecStorageSize returns the number of samples an AecState keeps for config.
 func aecStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
 	return faStorageSize(config, numCaptureChannels) + rmStorageSize(config, numCaptureChannels)
 }
 
-// NewAecState builds an AecState with the transparent mode classifier of
-// CreateTransparentMode. The estimators and analyzers are part of its
-// state, which is one heap object; the buffers whose size depends on the
-// filter length are another.
+// NewAecState returns an AecState with the transparent mode classifier of
+// CreateTransparentMode.
 func NewAecState(config *EchoCanceller3Config, numCaptureChannels int) *AecState {
 	a := &AecState{}
 	a.bind(&aecStateState{}, bindAlone)
@@ -313,8 +301,8 @@ func NewAecState(config *EchoCanceller3Config, numCaptureChannels int) *AecState
 	return a
 }
 
-// initDefault sets up a in place as NewAecState does, over storage, which
-// holds aecStorageSize zeros.
+// initDefault sets up a in place as NewAecState does. storage holds
+// aecStorageSize zeros.
 func (a *AecState) initDefault(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
 	a.init(config, numCaptureChannels, storage)
 	if !config.EpStrength.BoundedErl {
@@ -323,10 +311,10 @@ func (a *AecState) initDefault(config *EchoCanceller3Config, numCaptureChannels 
 	}
 }
 
-// NewAecStateWithTransparentMode builds an AecState with an explicit
-// transparent mode classifier (nil disables it), which is what the C++
-// selects through field trials. The AecState continues from a copy of tm,
-// which is a *LegacyTransparentMode or a *TransparentModeHmm.
+// NewAecStateWithTransparentMode returns an AecState that continues from a
+// copy of the classifier tm, a *LegacyTransparentMode or a
+// *TransparentModeHmm, or has none if tm is nil. The C++ selects the
+// classifier through field trials.
 func NewAecStateWithTransparentMode(config *EchoCanceller3Config, numCaptureChannels int, tm TransparentMode) *AecState {
 	a := &AecState{}
 	a.bind(&aecStateState{}, bindAlone)
@@ -349,8 +337,8 @@ func NewAecStateWithTransparentMode(config *EchoCanceller3Config, numCaptureChan
 	return a
 }
 
-// init sets up a in place, without a transparent mode classifier, over
-// storage, which holds aecStorageSize zeros.
+// init sets up a in place without a transparent mode classifier. storage
+// holds aecStorageSize zeros.
 func (a *AecState) init(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
 	st := a.aecStateState
 	*st = aecStateState{
@@ -395,23 +383,23 @@ func (a *AecState) init(config *EchoCanceller3Config, numCaptureChannels int, st
 	a.subtractorOutputAnalyzer.init(numCaptureChannels)
 }
 
-// UsableLinearEstimate reports whether the echo subtractor can be used to
+// UsableLinearEstimate reports whether the output of the echo subtractor can
 // determine the residual echo.
 func (a *AecState) UsableLinearEstimate() bool {
 	return a.filterQualityState.overallUsableLinearEstimates && a.config.Filter.UseLinearFilter
 }
 
-// UseLinearFilterOutput reports whether the echo subtractor output should be
-// used as output.
+// UseLinearFilterOutput reports whether the output of the echo subtractor is
+// the output to use.
 func (a *AecState) UseLinearFilterOutput() bool {
 	return a.filterQualityState.overallUsableLinearEstimates && a.config.Filter.UseLinearFilter
 }
 
-// ActiveRender reports whether the render signal is currently active.
+// ActiveRender reports whether the render signal is active.
 func (a *AecState) ActiveRender() bool { return a.blocksWithActiveRender > 200 }
 
-// GetResidualEchoScaling returns the residual echo scaling matching the
-// audibility.
+// GetResidualEchoScaling sets residualScaling to the scaling of the residual
+// echo that matches the audibility.
 func (a *AecState) GetResidualEchoScaling(residualScaling []float32) {
 	var filterHasHadTimeToConverge bool
 	if a.config.Filter.ConservativeInitialPhase {
@@ -432,12 +420,12 @@ func (a *AecState) Erle(onsetCompensated bool) [][FftLengthBy2Plus1]float32 {
 	return a.erleEstimator.Erle(onsetCompensated)
 }
 
-// ErleUnbounded returns the non-capped ERLE.
+// ErleUnbounded returns the ERLE without its cap.
 func (a *AecState) ErleUnbounded() [][FftLengthBy2Plus1]float32 {
 	return a.erleEstimator.ErleUnbounded()
 }
 
-// FullBandErleLog2 returns the fullband ERLE estimate in log2 units.
+// FullBandErleLog2 returns the fullband ERLE in log2 units.
 func (a *AecState) FullBandErleLog2() float32 { return a.erleEstimator.FullbandErleLog2() }
 
 // Erl returns the ERL.
@@ -446,8 +434,7 @@ func (a *AecState) Erl() *[FftLengthBy2Plus1]float32 { return a.erlEstimator.Erl
 // ErlTimeDomain returns the time-domain ERL.
 func (a *AecState) ErlTimeDomain() float32 { return a.erlEstimator.ErlTimeDomain() }
 
-// MinDirectPathFilterDelay returns the delay estimate based on the linear
-// filter.
+// MinDirectPathFilterDelay returns the delay estimate of the linear filter.
 func (a *AecState) MinDirectPathFilterDelay() int { return a.delayState.minFilterDelay }
 
 // SaturatedCapture reports whether the capture signal is saturated.
@@ -456,7 +443,7 @@ func (a *AecState) SaturatedCapture() bool { return a.captureSignalSaturation }
 // SaturatedEcho reports whether the echo signal is saturated.
 func (a *AecState) SaturatedEcho() bool { return a.saturationDetector.saturatedEcho }
 
-// UpdateCaptureSaturation updates the capture signal saturation.
+// UpdateCaptureSaturation sets the saturation of the capture signal.
 func (a *AecState) UpdateCaptureSaturation(captureSignalSaturation bool) {
 	a.captureSignalSaturation = captureSignalSaturation
 }
@@ -466,7 +453,7 @@ func (a *AecState) TransparentModeActive() bool {
 	return a.transparentState.Active()
 }
 
-// ReverbDecay returns the decay factor for the echo reverberation.
+// ReverbDecay returns the decay factor of the echo reverberation.
 func (a *AecState) ReverbDecay(mild bool) float32 { return a.reverbModelEstimator.ReverbDecay(mild) }
 
 // GetReverbFrequencyResponse returns the frequency response of the
@@ -476,13 +463,13 @@ func (a *AecState) GetReverbFrequencyResponse() *[FftLengthBy2Plus1]float32 {
 }
 
 // TransitionTriggered reports whether the transition out of the initial
-// state has been triggered.
+// state is triggered.
 func (a *AecState) TransitionTriggered() bool { return a.initialState.transitionTriggered }
 
 // FilterLengthBlocks returns the filter length in blocks.
 func (a *AecState) FilterLengthBlocks() int { return a.filterAnalyzer.FilterLengthBlocks() }
 
-// HandleEchoPathChange takes action at an echo path change.
+// HandleEchoPathChange resets what the echo path change invalidates.
 func (a *AecState) HandleEchoPathChange(echoPathVariability EchoPathVariability) {
 	if a.fullResetAtEchoPathChange && echoPathVariability.DelayChange != DelayAdjustmentNone {
 		a.filterAnalyzer.Reset()
@@ -532,8 +519,8 @@ func stComputeAvgRenderReverb(spectrumBuffer *SpectrumBuffer, delayBlocks int, r
 	kernAdd(X2[:], reverbPower[:], reverbPowerSpectrum[:])
 }
 
-// Update updates the AEC state. externalDelay is nil when no external delay
-// estimate is available.
+// Update updates the state with the results of one block. externalDelay is
+// nil without an external delay estimate.
 func (a *AecState) Update(externalDelay *DelayEstimate, adaptiveFilterFrequencyResponses [][][FftLengthBy2Plus1]float32,
 	adaptiveFilterImpulseResponses [][]float32, renderBuffer *RenderBuffer, E2Refined, Y2 [][FftLengthBy2Plus1]float32,
 	subtractorOutput []SubtractorOutput) {

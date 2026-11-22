@@ -17,8 +17,8 @@ func subPredictionErrorPair(fft *aec3FftPair, S0, S1 *FftData, y []float32, tmp0
 	kernSub(y[:BlockSize], s1[:], e1[:])
 }
 
-// subScaleFilterOutput scales the filter output s by factor and recomputes
-// the error e = y - s.
+// subScaleFilterOutput scales the filter output s by factor and sets e = y -
+// s.
 func subScaleFilterOutput(y []float32, factor float32, e, s []float32) {
 	for k := range y {
 		s[k] = float32(s[k] * factor) // rounded before the subtraction (no FMA)
@@ -26,7 +26,8 @@ func subScaleFilterOutput(y []float32, factor float32, e, s []float32) {
 	}
 }
 
-// subFilterMisadjustmentEstimator is Subtractor::FilterMisadjustmentEstimator.
+// subFilterMisadjustmentEstimator mirrors
+// Subtractor::FilterMisadjustmentEstimator.
 type subFilterMisadjustmentEstimator struct {
 	nBlocksAcum      int
 	e2Acum           float32
@@ -37,7 +38,7 @@ type subFilterMisadjustmentEstimator struct {
 
 const subMisadjustmentNBlocks = 4
 
-// Update updates the misadjustment estimator.
+// Update takes the output of one block.
 func (m *subFilterMisadjustmentEstimator) Update(output *SubtractorOutput) {
 	m.e2Acum += output.E2RefinedSum
 	m.y2Acum += output.Y2
@@ -62,14 +63,14 @@ func (m *subFilterMisadjustmentEstimator) Update(output *SubtractorOutput) {
 	}
 }
 
-// GetMisadjustment returns the recommended filter scale (half of the
-// estimated mismatch).
+// GetMisadjustment returns the scale to apply to the filter: half the
+// estimated mismatch.
 func (m *subFilterMisadjustmentEstimator) GetMisadjustment() float32 {
 	return 2 / float32(math.Sqrt(float64(m.invMisadjustment)))
 }
 
-// IsAdjustmentNeeded reports whether the prediction error energy is
-// significantly larger than the microphone signal energy.
+// IsAdjustmentNeeded reports whether the energy of the prediction error far
+// exceeds that of the microphone signal.
 func (m *subFilterMisadjustmentEstimator) IsAdjustmentNeeded() bool {
 	return m.invMisadjustment > 10
 }
@@ -82,12 +83,11 @@ func (m *subFilterMisadjustmentEstimator) Reset() {
 	m.overhang = 0
 }
 
-// Subtractor performs the linear echo cancellation with a refined and a
-// coarse adaptive filter per capture channel.
+// Subtractor cancels the echo linearly with a refined and a coarse adaptive
+// filter per capture channel (subtractor.h).
 //
-// The filters, gains and counters of up to inlineChannels capture channels
-// are part of the Subtractor. The filter coefficients of all channels share
-// one array, as do the frequency responses and the impulse responses.
+// The coefficients of all filters share one array, as do the frequency
+// responses and the impulse responses.
 type Subtractor struct {
 	*subtractorState
 	more                      *subMore                                     // with more than inlineChannels channels
@@ -96,12 +96,12 @@ type Subtractor struct {
 	channels                  [inlineChannels]subChannel
 }
 
-// subtractorState is the state of a Subtractor but its slices.
+// subtractorState is the state of a Subtractor except its slices.
 type subtractorState struct {
 	channels [inlineChannels]subChannelState
 	h2Spans  [inlineChannels]span
 	hSpans   [inlineChannels]span
-	// The lengths of the responses, which follow the filter size: a view
+	// The lengths of the responses, which follow the filter size. A view
 	// bound for a call takes them from here, and Process stores them.
 	h2Lens [inlineChannels]int32
 	hLens  [inlineChannels]int32
@@ -112,7 +112,7 @@ type subtractorState struct {
 	numCaptureChannels           int
 	useCoarseFilterResetHangover bool
 
-	// Per-block scratch.
+	// Scratch of one block.
 	x2Refined      [FftLengthBy2Plus1]float32
 	x2CoarseData   [FftLengthBy2Plus1]float32
 	eCoarseFft     FftData
@@ -130,7 +130,8 @@ type subChannel struct {
 	coarseFilter  AdaptiveFirFilter
 }
 
-// subChannelState is the state of a subChannel but the filter coefficients.
+// subChannelState is the state of a subChannel except the filter
+// coefficients.
 type subChannelState struct {
 	refinedFilter                afirState
 	coarseFilter                 afirState
@@ -150,7 +151,6 @@ type subMore struct {
 	states                    []subChannelState
 }
 
-// bind makes s the view of st.
 func (s *Subtractor) bind(st *subtractorState, b *binder) {
 	s.subtractorState = st
 	if b != nil {
@@ -172,15 +172,14 @@ func (s *Subtractor) bind(st *subtractorState, b *binder) {
 	}
 }
 
-// bind makes sc the view of st.
 func (sc *subChannel) bind(st *subChannelState, b *binder) {
 	sc.subChannelState = st
 	sc.refinedFilter.bind(&st.refinedFilter, b)
 	sc.coarseFilter.bind(&st.coarseFilter, b)
 }
 
-// NewSubtractor creates a Subtractor. Field trials are fixed at their
-// defaults, so the coarse filter reset hangover is in use.
+// NewSubtractor mirrors the C++ constructor with field trials at their
+// defaults: the reset hangover of the coarse filter is in use.
 func NewSubtractor(config *EchoCanceller3Config, numRenderChannels, numCaptureChannels int, optimization Aec3Optimization) *Subtractor {
 	s := &Subtractor{}
 	s.bind(&subtractorState{}, bindAlone)
@@ -188,7 +187,6 @@ func NewSubtractor(config *EchoCanceller3Config, numRenderChannels, numCaptureCh
 	return s
 }
 
-// init sets up s in place.
 func (s *Subtractor) init(config *EchoCanceller3Config, numRenderChannels, numCaptureChannels int, optimization Aec3Optimization) {
 	st := s.subtractorState
 	*st = subtractorState{}
@@ -239,8 +237,8 @@ func (s *Subtractor) init(config *EchoCanceller3Config, numRenderChannels, numCa
 	}
 }
 
-// ZeroGainSkipsForTesting returns the number of filter adaptations skipped
-// because the gain was zero, over all filters.
+// ZeroGainSkipsForTesting returns the number of adaptations the zero-gain
+// skip left out, over all filters.
 func (s *Subtractor) ZeroGainSkipsForTesting() uint64 {
 	var n uint64
 	channels := s.channelStates()
@@ -258,7 +256,7 @@ func (s *Subtractor) channelStates() []subChannel {
 	return s.channels[:s.numCaptureChannels:s.numCaptureChannels]
 }
 
-// HandleEchoPathChange handles echo path changes.
+// HandleEchoPathChange resets what the echo path change invalidates.
 func (s *Subtractor) HandleEchoPathChange(echoPathVariability EchoPathVariability) {
 	c := &s.config
 	channels := s.channelStates()
@@ -283,7 +281,7 @@ func (s *Subtractor) HandleEchoPathChange(echoPathVariability EchoPathVariabilit
 	}
 }
 
-// ExitInitialState switches the filters and gains to the normal configs.
+// ExitInitialState switches the filters and gains to their normal configs.
 func (s *Subtractor) ExitInitialState() {
 	c := &s.config
 	channels := s.channelStates()
@@ -296,8 +294,8 @@ func (s *Subtractor) ExitInitialState() {
 	}
 }
 
-// FilterFrequencyResponses returns the block-wise frequency responses of the
-// refined adaptive filters ([channel][partition]).
+// FilterFrequencyResponses returns the frequency responses of the refined
+// filters, [channel][partition].
 func (s *Subtractor) FilterFrequencyResponses() [][][FftLengthBy2Plus1]float32 {
 	if s.more != nil {
 		return s.more.refinedFrequencyResponses
@@ -305,8 +303,8 @@ func (s *Subtractor) FilterFrequencyResponses() [][][FftLengthBy2Plus1]float32 {
 	return s.refinedFrequencyResponses[:s.numCaptureChannels:s.numCaptureChannels]
 }
 
-// FilterImpulseResponses returns the impulse response estimates of the
-// refined adaptive filters ([channel][sample]).
+// FilterImpulseResponses returns the impulse responses of the refined
+// filters, one per channel.
 func (s *Subtractor) FilterImpulseResponses() [][]float32 {
 	if s.more != nil {
 		return s.more.refinedImpulseResponses
@@ -314,11 +312,11 @@ func (s *Subtractor) FilterImpulseResponses() [][]float32 {
 	return s.refinedImpulseResponses[:s.numCaptureChannels:s.numCaptureChannels]
 }
 
-// Process performs the echo subtraction. outputs has one entry per capture
-// channel.
+// Process subtracts the echo of one block. outputs has one element per
+// capture channel.
 func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderSignalAnalyzer *RenderSignalAnalyzer,
 	aecState *AecState, outputs []SubtractorOutput) {
-	// Compute the render powers.
+	// The render powers.
 	channels := s.channelStates()
 	frequencyResponses := s.FilterFrequencyResponses()
 	impulseResponses := s.FilterImpulseResponses()
@@ -338,7 +336,6 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 
 	saturatedCapture := aecState.SaturatedCapture()
 
-	// Process all capture channels.
 	for ch := range channels {
 		sc := &channels[ch]
 		output := &outputs[ch]
@@ -351,17 +348,15 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 		S := &s.s
 		G := S
 
-		// Form the outputs of the refined and coarse filters; the two
-		// inverse transforms run as a pair.
+		// The outputs of the refined and the coarse filter. The two inverse
+		// transforms run as a pair.
 		sc.refinedFilter.Filter(renderBuffer, S)
 		sc.coarseFilter.Filter(renderBuffer, &s.sCoarse)
 		subPredictionErrorPair(&s.fft, S, &s.sCoarse, y, &s.predictionTmp, &s.predictionTmp2,
 			eRefined, &output.SRefined, eCoarse, &output.SCoarse)
 
-		// Compute the signal powers in the subtractor output.
 		output.ComputeMetrics(y)
 
-		// Adjust the filter if needed.
 		refinedFiltersAdjusted := false
 		est := &sc.filterMisadjustmentEstimator
 		est.Update(output)
@@ -377,18 +372,14 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 			refinedFiltersAdjusted = true
 		}
 
-		// Compute the FFTs of the refined and coarse filter outputs.
 		s.fft.ZeroPaddedFft(eRefined[:], eCoarse[:], ERefined, ECoarse)
 
-		// Compute spectra for future use.
 		ECoarse.Spectrum(s.optimization, output.E2Coarse[:])
 		ERefined.Spectrum(s.optimization, output.E2Refined[:])
 
-		// Update the refined filter.
 		if !refinedFiltersAdjusted {
-			// Do not allow the performance of the coarse filter to affect the
-			// adaptation speed of the refined filter just after the coarse
-			// filter has been reset.
+			// A coarse filter that was just reset must not slow the
+			// adaptation of the refined filter.
 			disallowLeakageDiverged := sc.coarseFilterResetHangover > 0 && s.useCoarseFilterResetHangover
 
 			ComputeErl(s.optimization, frequencyResponses[ch], s.erl[:])
@@ -397,17 +388,14 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 		} else {
 			G.Clear()
 		}
-		// The C++ constrains the refined filter right here
-		// (Adapt(render_buffer, G, &impulse_response)) and then computes its
-		// frequency response. Both only concern the refined filter, and the
-		// coarse filter update below reads the refined filter only where it
-		// copies it, so the constraint waits for the coarse filter's and
-		// the transforms of the two run as pairs; the frequency response
-		// follows them.
+		// The C++ constrains the refined filter here and then computes its
+		// frequency response. The update of the coarse filter below reads
+		// the refined filter only where it copies it, so the constraint
+		// waits and its transforms run as pairs with those of the coarse
+		// filter. The frequency response follows them.
 		sc.refinedFilter.adaptAndUpdateSizeKnownRender(renderBuffer, G, X2Refined, refinedSize)
 		refinedConstrained := false
 
-		// Update the coarse filter.
 		if output.E2RefinedSum < output.E2CoarseSum {
 			sc.poorCoarseFilterCounter++
 		} else {
@@ -436,7 +424,7 @@ func (s *Subtractor) Process(renderBuffer *RenderBuffer, capture *Block, renderS
 		}
 		sc.refinedFilter.updateFrequencyResponse(&frequencyResponses[ch])
 
-		// SafeClamp(a, -32768.f, 32767.f); see kernClamp.
+		// SafeClamp(a, -32768.f, 32767.f). See kernClampGeneric.
 		kernClamp(eRefined[:], -32768, 32767)
 	}
 	if s.more == nil {

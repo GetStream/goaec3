@@ -4,15 +4,13 @@ package aec3
 
 import "simd/archsimd"
 
-// 128-bit archsimd kernels for the kern_bins.go helpers, shared by arm64
-// (NEON) and amd64 (VEX-encoded SSE operations, which need AVX; without it
-// they run the references). Every lane is one IEEE operation, or a compare
-// and a select, per element, as in the reference.
+// 128-bit archsimd kernels of the kern_bins.go helpers, for arm64 and for
+// amd64 CPUs with AVX. A lane performs the operations of the reference.
 
 type f32x4 = archsimd.Float32x4
 
-// vStdMin is std::min(a, b) per lane: b < a ? b : a. FMIN differs from it
-// on NaN and on equal zeros, so it is a compare and a select.
+// vStdMin is std::min(a, b) per lane: b < a ? b : a. FMIN and MINPS differ
+// from it on NaN and on equal zeros.
 func vStdMin(a, b f32x4) f32x4 { return b.IfElse(b.Less(a), a) }
 
 // vStdMax is std::max(a, b) per lane: a < b ? b : a.
@@ -189,8 +187,7 @@ func kernSmooth(s, y []float32, c float32) {
 	}
 }
 
-// kernNoAudibleEcho evaluates both branches per lane and selects; Div is
-// IEEE division.
+// kernNoAudibleEcho evaluates both branches per lane and selects.
 func kernNoAudibleEcho(nearend, echo, masker, enrT, enrS, emrT, gain *[FftLengthBy2Plus1]float32) {
 	if !kernHas128 {
 		kernNoAudibleEchoGeneric(nearend, echo, masker, enrT, enrS, emrT, gain)
@@ -431,7 +428,6 @@ func kernReverb(r, p, s []float32, d float32) {
 	}
 }
 
-// kernStdMax selects with a compare, exactly like std::max.
 func kernStdMax(x, y, z []float32) {
 	if !kernHas128 {
 		kernStdMaxGeneric(x, y, z)
@@ -526,7 +522,6 @@ func kernRefinedHError(mu, X2, hError *[FftLengthBy2Plus1]float32) {
 	hError[k] -= float32(float32(float32(0.5*mu[k])*X2[k]) * hError[k])
 }
 
-// kernRefinedLeak selects the leakage per lane.
 func kernRefinedLeak(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []float32, disallowLeakageDiverged bool,
 	leakageConverged, leakageDiverged, errorFloor, errorCeil float32, hError *[FftLengthBy2Plus1]float32) {
 	if !kernHas128 {
@@ -627,8 +622,8 @@ func kernReverbScalar(r, p []float32, s, d float32) {
 }
 
 // kernErlUpdate evaluates the update and the release of every bin and
-// selects per lane. Bin 0 shares the first vector: its ERL is replaced by
-// the caller (erl[0] = erl[1]) and its hold counter is put back to zero.
+// selects per lane. Bin 0 shares the first vector: the caller replaces its
+// ERL, and its hold counter is set back to zero.
 func kernErlUpdate(X2, Y2, erl *[FftLengthBy2Plus1]float32, hold *[FftLengthBy2]int32) {
 	if !kernHas128 {
 		kernErlUpdateGeneric(X2, Y2, erl, hold)
@@ -669,11 +664,10 @@ func kernErlUpdate(X2, Y2, erl *[FftLengthBy2Plus1]float32, hold *[FftLengthBy2]
 	hold[0] = 0
 }
 
-// kernPeakBin keeps the first maximum of each lane and its bin, then picks
-// the lane with the largest maximum and, among equals, the lowest bin. A
-// later NaN never exceeds a lane maximum, as in the scalar search; a NaN in
-// the first vector makes a lane maximum NaN, and that case runs the scalar
-// search.
+// kernPeakBin keeps the first maximum of each lane and its bin, then takes
+// the lane with the largest maximum and, among equals, the lowest bin. A NaN
+// in the first vector, which would be a lane maximum, runs the reference; a
+// later NaN exceeds no maximum, as in the reference.
 func kernPeakBin(x *[FftLengthBy2Plus1]float32) int {
 	if !kernHas128 {
 		return kernPeakBinGeneric(x)
@@ -724,8 +718,8 @@ func kernPeakBin(x *[FftLengthBy2Plus1]float32) int {
 	return int(b[p])
 }
 
-// kernNarrowBands compares four bins at a time; the last step covers bins
-// 60 to 63 and overlaps the one before, which the OR allows.
+// kernNarrowBands compares four bins per step. The last step covers bins 60
+// to 63 and overlaps the one before, which the OR allows.
 func kernNarrowBands(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32) {
 	if !kernHas128 {
 		kernNarrowBandsGeneric(x, narrow)
@@ -734,7 +728,7 @@ func kernNarrowBands(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32)
 	three := kernSplat4(3)
 	f := func(k int) {
 		_ = three // a captured vector makes the compiler inline the closure
-		// Bins k+1 to k+4: x[k:k+4] and x[k+2:k+6] are their neighbours.
+		// Bins k+1 to k+4, with x[k:k+4] and x[k+2:k+6] as their neighbours.
 		lo := archsimd.LoadFloat32x4Array((*[4]float32)(x[k : k+4]))
 		mid := archsimd.LoadFloat32x4Array((*[4]float32)(x[k+1 : k+5]))
 		hi := archsimd.LoadFloat32x4Array((*[4]float32)(x[k+2 : k+6]))
@@ -758,8 +752,8 @@ func kernNarrowBands(x *[FftLengthBy2Plus1]float32, narrow *[FftLengthBy2]int32)
 	f(59)
 }
 
-// kernNoiseFloorUpdate evaluates the three outcomes of a bin and selects
-// per lane.
+// kernNoiseFloorUpdate evaluates the three outcomes of a bin and selects per
+// lane.
 func kernNoiseFloorUpdate(renderPower, noiseFloor *[FftLengthBy2Plus1]float32, counter *[FftLengthBy2Plus1]int32,
 	hold int32, minPower float32) {
 	if !kernHas128 {
@@ -819,12 +813,10 @@ func kernStdMinScalar(x []float32, a float32) {
 	}
 }
 
-// kernSumMaxSq keeps the sum as the serial chain of additions it is and
-// takes the maximum per lane. std::max(mx, x2) = (mx < x2 ? x2 : mx) keeps
-// mx on a NaN x2 and stays NaN on a NaN mx, and every other x2 is +0 or
-// positive, so the fold is the largest of mx and the non-NaN squares (or
-// NaN) in any order: the four lanes start from mx and fold together at the
-// end.
+// kernSumMaxSq keeps the sum as one chain and takes the maximum per lane.
+// std::max(mx, x2) keeps mx on a NaN x2 and stays NaN on a NaN mx, and any
+// other x2 is +0 or positive, so the fold has one result in any order: the
+// four lanes start from mx and fold together at the end.
 func kernSumMaxSq(x *[BlockSize]float32, sum, mx float32) (float32, float32) {
 	if !kernHas128 {
 		return kernSumMaxSqGeneric(x, sum, mx)

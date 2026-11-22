@@ -2,15 +2,15 @@ package aec3
 
 import "math"
 
-// supGetNoiseFloorFactor computes the noise floor value that matches a WGN
-// input of noiseFloorDbfs.
+// supGetNoiseFloorFactor returns the noise floor that matches white Gaussian
+// noise at noiseFloorDbfs.
 func supGetNoiseFloorFactor(noiseFloorDbfs float32) float32 {
-	// supDbfsNormalization = 20*log10(32768).
+	// supDbfsNormalization is 20*log10(32768).
 	const supDbfsNormalization float32 = 90.30899869919436
 	return 64 * Exp10f((supDbfsNormalization+noiseFloorDbfs)*0.1)
 }
 
-// supSqrt2Sin is the table of sqrt(2) * sin(2*pi*i/32).
+// supSqrt2Sin[i] is sqrt(2)*sin(2*pi*i/32).
 var supSqrt2Sin = [32]float32{
 	+0.0000000, +0.2758994, +0.5411961, +0.7856950, +1.0000000,
 	+1.1758756, +1.3065630, +1.3870398, +float32(math.Sqrt2), +1.3870398,
@@ -23,11 +23,10 @@ var supSqrt2Sin = [32]float32{
 
 func supGenerateComfortNoise(opt Aec3Optimization, N2 *[FftLengthBy2Plus1]float32,
 	seed *uint32, nLow, nHigh *FftData) {
-	// Compute square root spectrum.
 	N := *N2
 	NewVectorMath(opt).Sqrt(N[:])
 
-	// Compute the noise level for the upper bands.
+	// The noise level of the upper bands.
 	const oneByNumBands float32 = 1.0 / (FftLengthBy2Plus1/2 + 1)
 	const fftLengthBy2Plus1By2 = FftLengthBy2Plus1 / 2
 	var sum float32
@@ -36,28 +35,26 @@ func supGenerateComfortNoise(opt Aec3Optimization, N2 *[FftLengthBy2Plus1]float3
 	}
 	highBandNoiseLevel := sum * oneByNumBands
 
-	// The analysis and synthesis windowing cause loss of power when
-	// cross-fading the noise where frames are completely uncorrelated
-	// (generated with random phase), hence the factor sqrt(2).
+	// The factor sqrt(2) makes up for the power the analysis and synthesis
+	// windows lose when they cross-fade uncorrelated frames.
 	//
-	// Bin k in [1, FftLengthBy2) draws s = (s*69069 + 1) & (2^31 - 1), a
-	// 5-bit index i = s >> 26, x = sqrt(2)*sin(a) = supSqrt2Sin[i] and
-	// y = sqrt(2)*cos(a) = supSqrt2Sin[(i+8)&31], and sets
+	// Bin k in [1, FftLengthBy2) draws s = (s*69069 + 1) & (2^31 - 1) and
+	// the index i = s >> 26, takes x = supSqrt2Sin[i] and y =
+	// supSqrt2Sin[(i+8)&31], and sets
 	//
-	//	nLow.Re[k], nLow.Im[k] = N[k]*x, N[k]*y                           (spectral shaping)
-	//	nHigh.Re[k], nHigh.Im[k] = highBandNoiseLevel*x, highBandNoiseLevel*y  (levelling)
+	//	nLow.Re[k], nLow.Im[k] = N[k]*x, N[k]*y
+	//	nHigh.Re[k], nHigh.Im[k] = highBandNoiseLevel*x, highBandNoiseLevel*y
 	//
-	// The low 31 bits of s after n draws are those of s*69069^n + (69069^(n-1)
-	// + ... + 1) in 32-bit arithmetic, so four generators four draws apart
-	// produce the draws of bins 4j+1 .. 4j+4 without waiting for each other;
-	// the products then run over whole arrays.
+	// The low 31 bits of s after n draws are those of s*69069^n +
+	// (69069^(n-1) + ... + 1) in 32-bit arithmetic, so four generators four
+	// draws apart produce the draws of bins 4j+1..4j+4 independently.
 	const (
 		lcgA  = 69069
 		lcgA4 = lcgA * lcgA * lcgA * lcgA & 0xffffffff
 		lcgC4 = (lcgA*lcgA*lcgA + lcgA*lcgA + lcgA + 1) & 0xffffffff
 	)
-	// x[k] and y[k] belong to bin k; bin 0 keeps +0 and bin 64 is drawn but
-	// not used.
+	// x[k] and y[k] belong to bin k. Bin 0 keeps +0; bin 64 is drawn and not
+	// used.
 	var x, y [FftLengthBy2 + 4]float32
 	s1 := *seed*lcgA + 1
 	s2 := s1*lcgA + 1
@@ -82,13 +79,13 @@ func supGenerateComfortNoise(opt Aec3Optimization, N2 *[FftLengthBy2Plus1]float3
 	// s3 is the draw of bin FftLengthBy2 - 1.
 	*seed = s3 & (0x80000000 - 1)
 
-	// The products write bins [0, FftLengthBy2); the C++ leaves Im[0] as it
-	// is and sets Re[0] and Re[FftLengthBy2] to zero.
+	// The products write bins [0, FftLengthBy2). The C++ leaves Im[0] as it
+	// is and zeroes Re[0] and Re[FftLengthBy2].
 	lowIm0, highIm0 := nLow.Im[0], nHigh.Im[0]
 	vectorMultiply(N[:FftLengthBy2], x[:FftLengthBy2], nLow.Re[:FftLengthBy2])
 	vectorMultiply(N[:FftLengthBy2], y[:FftLengthBy2], nLow.Im[:FftLengthBy2])
-	// highBandNoiseLevel*x: one operand at most is NaN, so the order of the
-	// operands does not show.
+	// At most one operand of highBandNoiseLevel*x is NaN, so the order of
+	// the operands does not show.
 	kernScale(x[:FftLengthBy2], highBandNoiseLevel, nHigh.Re[:FftLengthBy2])
 	kernScale(y[:FftLengthBy2], highBandNoiseLevel, nHigh.Im[:FftLengthBy2])
 	nLow.Im[0], nHigh.Im[0] = lowIm0, highIm0
@@ -96,13 +93,14 @@ func supGenerateComfortNoise(opt Aec3Optimization, N2 *[FftLengthBy2Plus1]float3
 	nHigh.Re[0], nHigh.Re[FftLengthBy2] = 0, 0
 }
 
-// ComfortNoiseGenerator generates the comfort noise.
+// ComfortNoiseGenerator generates the comfort noise
+// (comfort_noise_generator.h).
 type ComfortNoiseGenerator struct {
 	*cngState
 	more *cngMore // with more than inlineChannels channels
 }
 
-// cngState is the state of a ComfortNoiseGenerator but its pointer.
+// cngState is the state of a ComfortNoiseGenerator except its pointer.
 type cngState struct {
 	optimization       Aec3Optimization
 	seed               uint32
@@ -123,7 +121,6 @@ type cngMore struct {
 	n2         [][FftLengthBy2Plus1]float32
 }
 
-// bind makes c the view of st.
 func (c *ComfortNoiseGenerator) bind(st *cngState, b *binder) {
 	c.cngState = st
 	if b != nil {
@@ -139,7 +136,6 @@ func NewComfortNoiseGenerator(config *EchoCanceller3Config, optimization Aec3Opt
 	return c
 }
 
-// init sets up c in place.
 func (c *ComfortNoiseGenerator) init(config *EchoCanceller3Config, optimization Aec3Optimization,
 	numCaptureChannels int) {
 	st := c.cngState
@@ -167,7 +163,7 @@ func (c *ComfortNoiseGenerator) init(config *EchoCanceller3Config, optimization 
 	}
 }
 
-// Compute computes the comfort noise.
+// Compute computes the comfort noise of the lower and the upper bands.
 func (c ComfortNoiseGenerator) Compute(saturatedCapture bool,
 	captureSpectrum [][FftLengthBy2Plus1]float32,
 	lowerBandNoise, upperBandNoise []FftData) {
@@ -183,14 +179,12 @@ func (c ComfortNoiseGenerator) Compute(saturatedCapture bool,
 	}
 
 	if !saturatedCapture {
-		// Smooth Y2.
 		y2Smoothed := channelState(&c.y2Smoothed, c.numCaptureChannels, more.y2Smoothed)
 		for ch := range y2Smoothed {
 			kernSmooth(y2Smoothed[ch][:], Y2[ch][:], 0.1)
 		}
 
 		if c.n2Counter > 50 {
-			// Update N2 from Y2_smoothed.
 			for ch := range n2 {
 				kernNoiseUpdate(&n2[ch], &y2Smoothed[ch])
 			}
@@ -204,7 +198,6 @@ func (c ComfortNoiseGenerator) Compute(saturatedCapture bool,
 					c.more.n2Initial = nil
 				}
 			} else {
-				// Compute the N2_initial from N2.
 				for ch := range n2 {
 					kernNoiseInitialUpdate(&n2[ch], &n2Initial[ch])
 				}
@@ -219,7 +212,6 @@ func (c ComfortNoiseGenerator) Compute(saturatedCapture bool,
 		}
 	}
 
-	// Choose N2 estimate to use.
 	N2 := n2
 	if c.hasN2Initial {
 		N2 = n2Initial

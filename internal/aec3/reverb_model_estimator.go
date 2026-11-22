@@ -1,38 +1,34 @@
 package aec3
 
-// ReverbModelEstimator mirrors reverb_model_estimator.h: estimates the model
-// parameters of the reverberant echo.
+// ReverbModelEstimator estimates the model parameters of the reverberant
+// echo (reverb_model_estimator.h).
 //
-// The samples of the decay estimators of all channels share one array
-// (storage), perChannel values each.
+// The decay estimators share storage, perChannel values per channel.
 type ReverbModelEstimator struct {
 	*reverbModelEstimatorState
 	more    *rmChannels // with more than inlineChannels channels
 	storage []float32
 }
 
-// reverbModelEstimatorState is the state of a ReverbModelEstimator but its
-// pointers.
+// reverbModelEstimatorState is the state of a ReverbModelEstimator except
+// its pointers.
 type reverbModelEstimatorState struct {
 	storageSpan        span
 	numCaptureChannels int
 	perChannel         int
 
-	// The per-channel estimators for up to inlineChannels channels.
 	inline struct {
 		reverbDecayEstimators    [inlineChannels]reverbDecayState
 		reverbFrequencyResponses [inlineChannels]ReverbFrequencyResponse
 	}
 }
 
-// rmChannels is the per-channel estimators of a ReverbModelEstimator.
+// rmChannels holds the per-channel estimators of a ReverbModelEstimator.
 type rmChannels struct {
 	reverbDecayEstimators    []reverbDecayState
 	reverbFrequencyResponses []ReverbFrequencyResponse
 }
 
-// channels returns the per-channel estimators: views of r for up to
-// inlineChannels channels.
 func (r ReverbModelEstimator) channels() rmChannels {
 	if r.more != nil {
 		return *r.more
@@ -44,7 +40,6 @@ func (r ReverbModelEstimator) channels() rmChannels {
 	}
 }
 
-// bind makes r the view of st.
 func (r *ReverbModelEstimator) bind(st *reverbModelEstimatorState, b *binder) {
 	r.reverbModelEstimatorState = st
 	b.f32(&r.storage, &st.storageSpan)
@@ -59,7 +54,7 @@ func rmStorageSize(config *EchoCanceller3Config, numCaptureChannels int) int {
 	return numCaptureChannels * stReverbDecayStorageSize(config)
 }
 
-// init sets up r in place over storage, which holds rmStorageSize zeros.
+// init sets up r in place. storage holds rmStorageSize zeros.
 func (r *ReverbModelEstimator) init(config *EchoCanceller3Config, numCaptureChannels int, storage []float32) {
 	st := r.reverbModelEstimatorState
 	*st = reverbModelEstimatorState{
@@ -82,7 +77,7 @@ func (r *ReverbModelEstimator) init(config *EchoCanceller3Config, numCaptureChan
 	}
 }
 
-// Update updates the estimates based on new data.
+// Update takes the filters of one block.
 func (r ReverbModelEstimator) Update(impulseResponses [][]float32, frequencyResponses [][][FftLengthBy2Plus1]float32,
 	linearFilterQualities []LinearFilterQuality, filterDelaysBlocks []int, usableLinearEstimates []bool,
 	stationaryBlock bool) {
@@ -96,14 +91,14 @@ func (r ReverbModelEstimator) Update(impulseResponses [][]float32, frequencyResp
 	}
 }
 
-// ReverbDecay returns the exponential decay of the reverberant echo (channel
-// 0); mild selects the milder decay.
+// ReverbDecay returns the exponential decay of the reverberant echo of
+// channel 0. mild selects the decay for nearend regions.
 func (r ReverbModelEstimator) ReverbDecay(mild bool) float32 {
 	return r.channels().reverbDecayEstimators[0].Decay(mild)
 }
 
 // GetReverbFrequencyResponse returns the frequency response of the
-// reverberant echo (channel 0).
+// reverberant echo of channel 0.
 func (r ReverbModelEstimator) GetReverbFrequencyResponse() *[FftLengthBy2Plus1]float32 {
 	return r.channels().reverbFrequencyResponses[0].FrequencyResponse()
 }

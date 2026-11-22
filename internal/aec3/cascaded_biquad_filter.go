@@ -6,29 +6,27 @@ type BiQuadCoefficients struct {
 	A [2]float32
 }
 
-// BiQuad mirrors CascadedBiQuadFilter::BiQuad: one direct form 1 section
-// with its state.
+// BiQuad is one direct form 1 section with its state
+// (CascadedBiQuadFilter::BiQuad).
 type BiQuad struct {
 	Coefficients BiQuadCoefficients
 	X            [2]float32
 	Y            [2]float32
 }
 
-// Reset clears the section state.
 func (b *BiQuad) Reset() {
 	b.X = [2]float32{}
 	b.Y = [2]float32{}
 }
 
-// CascadedBiQuadFilter applies a number of biquads in a cascaded manner
-// (modules/audio_processing/utility/cascaded_biquad_filter.h). The filter
-// implementation is direct form 1.
+// CascadedBiQuadFilter applies biquad sections in cascade
+// (modules/audio_processing/utility/cascaded_biquad_filter.h).
 type CascadedBiQuadFilter struct {
 	biquads []BiQuad
 }
 
-// NewCascadedBiQuadFilter returns a filter with one section per coefficient
-// set.
+// NewCascadedBiQuadFilter returns a filter with one section per element of
+// coefficients.
 func NewCascadedBiQuadFilter(coefficients []BiQuadCoefficients) *CascadedBiQuadFilter {
 	f := &CascadedBiQuadFilter{}
 	f.init(coefficients)
@@ -42,7 +40,7 @@ func (f *CascadedBiQuadFilter) init(coefficients []BiQuadCoefficients) {
 	}
 }
 
-// Process applies the biquads on x to form the output in y.
+// Process filters x into y.
 func (f *CascadedBiQuadFilter) Process(x, y []float32) {
 	if len(f.biquads) > 0 {
 		dlyApplyBiQuadCascade(x, y, f.biquads)
@@ -51,8 +49,7 @@ func (f *CascadedBiQuadFilter) Process(x, y []float32) {
 	}
 }
 
-// ProcessInPlace applies the biquads on y in place (the C++ Process(y)
-// overload).
+// ProcessInPlace filters y in place.
 func (f *CascadedBiQuadFilter) ProcessInPlace(y []float32) {
 	if len(f.biquads) > 0 {
 		dlyApplyBiQuadCascade(y, y, f.biquads)
@@ -85,12 +82,10 @@ func dlyApplyBiQuad(x, y []float32, biquad *BiQuad) {
 	biquad.Y[1] = mY1
 }
 
-// dlyApplyBiQuadCascade applies the sections in order, x to y for the first
-// and in place on y for the rest. Up to four sections run in one pass over
-// the samples: each section still receives the output of the previous one
-// sample by sample and performs the operations of dlyApplyBiQuad in the same
-// order, so the result is the same as applying the sections one after the
-// other.
+// dlyApplyBiQuadCascade applies the sections in order: the first from x to
+// y, the others on y in place. Up to four sections run in one pass over the
+// samples. A section still gets the output of the one before it sample by
+// sample and performs the operations of dlyApplyBiQuad in their order.
 func dlyApplyBiQuadCascade(x, y []float32, biquads []BiQuad) {
 	for len(biquads) > 0 {
 		switch len(biquads) {
@@ -110,8 +105,8 @@ func dlyApplyBiQuadCascade(x, y []float32, biquads []BiQuad) {
 	}
 }
 
-// The multi-section kernels keep the section states in locals and read the
-// coefficients from memory (holding them in registers as well spills).
+// The kernels of several sections keep the states in locals and read the
+// coefficients from memory: there are not enough registers for both.
 
 func dlyApplyBiQuad2(x, y []float32, b0, b1 *BiQuad) {
 	y = y[:len(x)]

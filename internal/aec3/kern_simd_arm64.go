@@ -4,15 +4,14 @@ package aec3
 
 import "simd/archsimd"
 
-// archsimd kernels for arm64. Each element is one IEEE operation (or the
-// unfused r*r + i*i), so they are bit-identical to the generic code in every
-// lane; the arm64 build of libwebrtc has no fused Spectrum variant.
+// archsimd kernels for arm64. An element is one IEEE operation, or the
+// unfused r*r + i*i: the arm64 build of libwebrtc has no fused Spectrum.
 
 func fftDataSpectrum(_ Aec3Optimization, re, im, out *[FftLengthBy2Plus1]float32) {
 	kernSpectrumNeon(re, im, out)
 }
 
-// kernSpectrumNeon computes re*re + im*im with separate Mul and Add.
+// kernSpectrumNeon sets out = re*re + im*im, unfused.
 func kernSpectrumNeon(re, im, out *[FftLengthBy2Plus1]float32) {
 	var zero f32x4
 	f := func(k int) {
@@ -73,7 +72,7 @@ func vectorAccumulate(x, z []float32) {
 	}
 }
 
-// kernVectorSqrt is VectorMath::Sqrt (vsqrtq_f32 on arm64 is IEEE sqrt).
+// kernVectorSqrt is VectorMath::Sqrt.
 func kernVectorSqrt(x []float32) {
 	if kernIs64(len(x)) {
 		if len(x) == 65 {
