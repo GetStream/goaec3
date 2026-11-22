@@ -369,6 +369,9 @@ func (e *EchoCanceller) ProcessCaptureWithLinearOutput(capture, linearOutput [][
 // estimator sizes a vector with length-9 < 0) and a subband nearend region
 // reaching bin 65 (read past the end of the 65-bin spectrum). Negative
 // Buffering fields have no C++ equivalent (size_t there) and are rejected.
+// The render buffer is sized for the refined filter; the filter loops of the
+// SIMD lanes wrap around it once, so a coarse filter with more blocks than
+// the buffer reads past its end.
 // With an external delay the filter delay is the delay headroom in blocks,
 // which indexes the frequency responses of the refined filter: a headroom of
 // the initial filter length or more is read past their end.
@@ -400,6 +403,9 @@ func ec3CheckConfig(cfg *Config) error {
 	case cfg.Delay.DelayHeadroomSamples/aec3.BlockSize >= cfg.Filter.RefinedInitial.LengthBlocks:
 		return fmt.Errorf("%w: Delay.DelayHeadroomSamples must be below %d samples, the initial refined filter length",
 			ErrConfig, cfg.Filter.RefinedInitial.LengthBlocks*aec3.BlockSize)
+	case cfg.Filter.Coarse.LengthBlocks > ec3RenderBufferBlocks(cfg):
+		return fmt.Errorf("%w: Filter.Coarse.LengthBlocks must be at most %d, the size of the render buffer",
+			ErrConfig, ec3RenderBufferBlocks(cfg))
 	case cfg.Buffering.ExcessRenderDetectionIntervalBlocks < 0 || cfg.Buffering.MaxAllowedExcessRenderBlocks < 0:
 		return fmt.Errorf("%w: Buffering fields must not be negative", ErrConfig)
 	case ec3RefinedStepUndefined(&cfg.Filter.Refined) || ec3RefinedStepUndefined(&cfg.Filter.RefinedInitial):
@@ -421,6 +427,13 @@ const minRefinedStepOperand = 1e-12
 func ec3RefinedStepUndefined(r *aec3.RefinedConfiguration) bool {
 	return r.ErrorFloor < minRefinedStepOperand || r.ErrorCeil < minRefinedStepOperand ||
 		r.NoiseGate < minRefinedStepOperand
+}
+
+// ec3RenderBufferBlocks returns the number of blocks of the render buffer,
+// which grows with Delay.NumFilters and Filter.Refined.LengthBlocks.
+func ec3RenderBufferBlocks(cfg *Config) int {
+	return aec3.GetRenderDelayBufferSize(cfg.Delay.DownSamplingFactor, cfg.Delay.NumFilters,
+		cfg.Filter.Refined.LengthBlocks)
 }
 
 // ec3CheckCompatible mirrors CompatibleConfigs in config_selector.cc: the
