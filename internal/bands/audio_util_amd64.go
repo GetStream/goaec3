@@ -5,6 +5,5 @@ package bands
 // saturates it to -32768.
 const bsNaNS16Vector int16 = -32768
 
-// bsIsAMD64 selects the forms of the pure-Go kernels written for the
-// sixteen float registers and the memory operands of amd64.
+// bsIsAMD64 selects the pure-Go kernels written for amd64.
 const bsIsAMD64 = true

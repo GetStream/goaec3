@@ -2,47 +2,18 @@
 
 package bands
 
-// Pure-Go ThreeBandFilterBank. The scalar C++ is elementwise in every output
-// sample: bsFilterCore forms out[k] as ((((0 + x0*h0) + x1*h1) + x2*h2) +
-// x3*h3) with xi = x[k - inShift - Stride*i], the banding adds each filter's
-// modulated output to the band in a fixed filter order, and the synthesis
-// modulation and upsampling do the same per sample. The loops below run
-// sample-major: every filter of one output sample is evaluated before the
-// next sample, in the reference filter order, so the band and output sums
-// stay in registers. Each value is computed by the same sequence of rounded
-// operations as in threeBandFilterBankRef.
+// The pure-Go ThreeBandFilterBank (see three_band_filter_bank.go).
 //
-// Each filter input is kept as a history buffer: MemorySize samples of state
-// followed by the SplitBandSize new samples, so bsFilterCore's three state /
-// input cases become one tap pattern.
+// A filter output starts as 0 + x0*h0 in the C++, which only turns an
+// output of -0 into +0. An output reaches the result as a term t, itself or
+// its product with a positive constant, that is added to or subtracted from
+// a sum which starts as 0 + t and so is never -0. A zero of either sign
+// leaves such a sum unchanged and 0 + t is +0 for both, so the output is
+// computed without the addition.
 //
-// The modulation by bsDctModulation is written out per filter. For finite
-// operands these rewrites are exact:
-//   - m*v for m in {1, -1} is v and -v; (-m)*v is -(m*v); a + (-b) is a - b.
-//   - Equal products are computed once.
-//   - A term 0*v is +-0, and adding it leaves a sum unchanged unless the sum
-//     is -0. The sums start as 0 + p (never -0) and a sum of two values is
-//     -0 only when both are -0, so the term is dropped.
-//
-// A filter output starts as 0 + x0*h0 in the C++. That addition changes
-// the output only when it is -0 (all four products -0), into +0. An output
-// reaches the result as a term t (itself, or its product with a positive
-// constant, of the same sign) that is added to or subtracted from a sum
-// which starts as 0 + t and so is never -0: a zero of either sign leaves
-// such a sum as it is, and 0 + t is +0 for both. So the output is computed
-// without the addition.
-//
-// The loops take one output sample per step on amd64, where a coefficient
-// is the memory operand of its multiplication. Elsewhere a step is two
-// samples: the coefficients of a filter are loaded once for both, and the
-// history values, which the two samples read from adjacent elements, are
-// loaded in pairs.
-//
-// With finite input and state every filter output is finite (the taps of a
-// filter sum to less than one in magnitude) and no NaN is created, so the
-// rewrites hold. A frame whose input or state holds a NaN or an infinity
-// runs the reference on the same state, which also reproduces the C++
-// operand order for NaN payloads.
+// A step is one output sample on amd64, where a coefficient is the memory
+// operand of its multiplication, and two elsewhere: the coefficients of a
+// filter are loaded once for both and the history in pairs.
 
 // ThreeBandFilterBank splits a 48 kHz frame into three 16 kHz bands and
 // merges them back. The prototype low-pass filter has half bandwidth, so a
@@ -144,9 +115,8 @@ func bsTap(w *[16]float32, inShift int, c *[FilterSize]float32) float32 {
 }
 
 // bsTapAt is bsTap on a window with one more sample, for the two output
-// samples of a step: the output at the window's first sample reads up to
-// w[15-inShift] and the next one up to w[16-inShift], which is top. The two
-// calls of a step inline, and the compiler loads the coefficients once.
+// samples of a step: top is 15-inShift for the first and 16-inShift for the
+// second. It returns one result so that it inlines.
 func bsTapAt(w *[17]float32, top int, c *[FilterSize]float32) float32 {
 	return float32(w[top]*c[0]) + float32(w[top-4]*c[1]) +
 		float32(w[top-8]*c[2]) + float32(w[top-12]*c[3])
