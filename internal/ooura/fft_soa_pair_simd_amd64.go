@@ -105,9 +105,7 @@ var (
 	signAll8         = [8]uint32{0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000}
 )
 
-// initPairTables runs once the negative zeros of the 128-bit tables are in
-// place (tables.go).
-func initPairTables() {
+func initSimdTables() {
 	initSoaTables()
 	dup := func(v [4]float32) [8]float32 {
 		return [8]float32{v[0], v[1], v[2], v[3], v[0], v[1], v[2], v[3]}

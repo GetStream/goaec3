@@ -13,11 +13,11 @@ package ooura
 // butterflies (ooura_fft_neon.cc), amd64 the SSE2 butterflies
 // (ooura_fft_sse2.cc), and purego or any other architecture the scalar C
 // path. Each lane is bit-exact with the matching C++ build.
-func Fft(a *[128]float32) { fft(a) }
+func Fft(a *[128]float32) { fftRef(a) }
 
 // InverseFft computes the unscaled inverse real FFT of a in place, in the
 // same lane as Fft.
-func InverseFft(a *[128]float32) { inverseFft(a) }
+func InverseFft(a *[128]float32) { inverseFftRef(a) }
 
 // FftSplit computes Fft(a) and stores it as aec3's
 // FftData::CopyFromPackedArray does: re[k] and im[k] are the real and

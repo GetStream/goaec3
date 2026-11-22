@@ -1,4 +1,4 @@
-//go:build !(goexperiment.simd && (amd64 || arm64) && !purego)
+//go:build !(goexperiment.simd && amd64 && !purego)
 
 package ooura
 
@@ -17,5 +17,3 @@ func inverseFftSplitPair(re0, im0, re1, im1 *[65]float32, a, b *[128]float32, s 
 	inverseFftSplit(re0, im0, a, s.single())
 	inverseFftSplit(re1, im1, b, s.single())
 }
-
-func initPairTables() {}

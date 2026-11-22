@@ -27,7 +27,7 @@ func TestSoaMatchesRef(t *testing.T) {
 }
 
 // With NaNs and infinities in the input the split-form transforms produce
-// the packed archsimd transforms, a NaN wherever those have one.
+// the lane reference, a NaN wherever it has one.
 func TestSoaNonFinite(t *testing.T) {
 	if !useSimd {
 		t.Skip("no AVX")
@@ -35,7 +35,7 @@ func TestSoaNonFinite(t *testing.T) {
 	for n, a := range nonFiniteInputs() {
 		var re, im, wre, wim [65]float32
 		x, y := a, a
-		fftSimd(&y)
+		fftRef(&y)
 		unpack(&y, &wre, &wim)
 		soaFftSplit(&x, &re, &im)
 		for i := range re {
@@ -48,17 +48,32 @@ func TestSoaNonFinite(t *testing.T) {
 		re[64] = a[1]
 		var want, got [128]float32
 		pack(&re, &im, &want)
-		inverseFftSimd(&want)
+		inverseFftRef(&want)
 		soaInverseFftSplit(&re, &im, &got)
 		checkSameNaN(t, "inv", n, &got, &want)
 	}
 }
 
-// The transposition of the cft1st passes.
+// The transposition of the cft1st passes and the lane helpers.
 func TestSoaShuffles(t *testing.T) {
 	if !useSimd {
 		t.Skip("no AVX")
 	}
+	check := func(name string, v vec, want [4]float32) {
+		t.Helper()
+		var got [4]float32
+		v.StoreArray(&got)
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+	x, y := ld(&[4]float32{0, 1, 2, 3}), ld(&[4]float32{4, 5, 6, 7})
+	check("rev4", rev4(x), [4]float32{3, 2, 1, 0})
+	check("ext3", ext3(x, y), [4]float32{3, 4, 5, 6})
+	check("even", even(x, y), [4]float32{0, 2, 4, 6})
+	check("odd", odd(x, y), [4]float32{1, 3, 5, 7})
+	check("zipLo", zipLo(x, y), [4]float32{0, 4, 1, 5})
+	check("zipHi", zipHi(x, y), [4]float32{2, 6, 3, 7})
 	var got [4][4]float32
 	r0, r1 := ld(&[4]float32{0, 1, 2, 3}), ld(&[4]float32{4, 5, 6, 7})
 	r2, r3 := ld(&[4]float32{8, 9, 10, 11}), ld(&[4]float32{12, 13, 14, 15})

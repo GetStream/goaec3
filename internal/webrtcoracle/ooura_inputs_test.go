@@ -66,25 +66,62 @@ func oouraInputs() [][128]float32 {
 	return out
 }
 
-// oouraCheck runs the Go FFT (the build's lane) and ref on every input and
-// requires bit-identical outputs.
+// oouraCheck requires the Go transforms of the build's lane to be
+// bit-identical to ref on every input: ooura.Fft and InverseFft, which are
+// the transcription of the lane, and the split transforms aec3 runs, single
+// and in pairs, against ref with the FftData copy.
 func oouraCheck(t *testing.T, ref func(a *[128]float32, inverse bool)) {
 	t.Helper()
-	for trial, a := range oouraInputs() {
-		for _, inv := range []bool{false, true} {
-			want, got := a, a
-			ref(&want, inv)
-			if inv {
-				ooura.InverseFft(&got)
-			} else {
-				ooura.Fft(&got)
-			}
-			for i := range got {
-				if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
-					t.Fatalf("input %d inv=%v idx %d: got %v (%#x) want %v (%#x)", trial, inv, i,
-						got[i], math.Float32bits(got[i]), want[i], math.Float32bits(want[i]))
-				}
+	same := func(what string, trial int, got, want []float32) {
+		t.Helper()
+		for i := range got {
+			if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
+				t.Fatalf("%s input %d idx %d: got %v (%#x) want %v (%#x)", what, trial, i,
+					got[i], math.Float32bits(got[i]), want[i], math.Float32bits(want[i]))
 			}
 		}
+	}
+	// unpack is FftData::CopyFromPackedArray.
+	unpack := func(v *[128]float32, re, im *[65]float32) {
+		*re, *im = [65]float32{}, [65]float32{}
+		re[0], re[64] = v[0], v[1]
+		for k := 1; k < 64; k++ {
+			re[k], im[k] = v[2*k], v[2*k+1]
+		}
+	}
+	var s ooura.Scratch
+	var ps ooura.PairScratch
+	in := oouraInputs()
+	for trial, a := range in {
+		// The second frame of a pair.
+		b := in[(trial*7+3)%len(in)]
+
+		want, got := a, a
+		ref(&want, false)
+		ooura.Fft(&got)
+		same("Fft", trial, got[:], want[:])
+		var wre, wim, re, im, re1, im1 [65]float32
+		unpack(&want, &wre, &wim)
+		x := a
+		ooura.FftSplit(&x, &re, &im, &s)
+		same("FftSplit re", trial, re[:], wre[:])
+		same("FftSplit im", trial, im[:], wim[:])
+		x, y := b, a
+		ooura.FftSplitPair(&x, &y, &re1, &im1, &re, &im, &ps)
+		same("FftSplitPair re", trial, re[:], wre[:])
+		same("FftSplitPair im", trial, im[:], wim[:])
+
+		// The inverse of the input taken as bins: CopyToPackedArray of the
+		// unpacked frame is the frame.
+		want, got = a, a
+		ref(&want, true)
+		ooura.InverseFft(&got)
+		same("InverseFft", trial, got[:], want[:])
+		unpack(&a, &re, &im)
+		unpack(&b, &re1, &im1)
+		ooura.InverseFftSplit(&re, &im, &got, &s)
+		same("InverseFftSplit", trial, got[:], want[:])
+		ooura.InverseFftSplitPair(&re1, &im1, &re, &im, &x, &got, &ps)
+		same("InverseFftSplitPair", trial, got[:], want[:])
 	}
 }

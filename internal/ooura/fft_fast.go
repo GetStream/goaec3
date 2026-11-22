@@ -21,38 +21,6 @@ package ooura
 // rev3 reverses three bits.
 var rev3 = [8]uint8{0, 4, 2, 6, 1, 5, 3, 7}
 
-func fftFastLane(a *[128]float32) {
-	var t [128]float32
-	cft1stFastLane(a, &t)
-	cftmdlFastLane(&t, a)
-	cftfsubTailFast(a)
-	rftfsubFast(a)
-	xi := a[0] - a[1]
-	a[0] += a[1]
-	a[1] = xi
-}
-
-func inverseFftFastLane(a *[128]float32) {
-	a[1] = float32(0.5 * (a[0] - a[1]))
-	a[0] -= a[1]
-	rftbsubFast(a)
-	var t [128]float32
-	cft1stFastLane(a, &t)
-	cftmdlFastLane(&t, a)
-	cftbsubTailFast(a)
-}
-
-func fftFastScalar(a *[128]float32) {
-	var t [128]float32
-	cft1stFastScalar(a, &t)
-	cftmdlFastScalar(&t, a)
-	cftfsubTailFast(a)
-	rftfsubFast(a)
-	xi := a[0] - a[1]
-	a[0] += a[1]
-	a[1] = xi
-}
-
 func inverseFftFastScalar(a *[128]float32) {
 	a[1] = float32(0.5 * (a[0] - a[1]))
 	a[0] -= a[1]
@@ -435,29 +403,6 @@ func cftmdlFastScalar(s, a *[128]float32) {
 	}
 }
 
-// cftfsubTailFast is cftfsubTail without bounds checks.
-func cftfsubTailFast(a *[128]float32) {
-	p0, p1, p2, p3 := (*[32]float32)(a[0:32]), (*[32]float32)(a[32:64]), (*[32]float32)(a[64:96]), (*[32]float32)(a[96:128])
-	for j := 0; j < 32; j += 2 {
-		x0r := p0[j] + p1[j]
-		x0i := p0[j+1] + p1[j+1]
-		x1r := p0[j] - p1[j]
-		x1i := p0[j+1] - p1[j+1]
-		x2r := p2[j] + p3[j]
-		x2i := p2[j+1] + p3[j+1]
-		x3r := p2[j] - p3[j]
-		x3i := p2[j+1] - p3[j+1]
-		p0[j] = x0r + x2r
-		p0[j+1] = x0i + x2i
-		p2[j] = x0r - x2r
-		p2[j+1] = x0i - x2i
-		p1[j] = x1r - x3i
-		p1[j+1] = x1i + x3r
-		p3[j] = x1r + x3i
-		p3[j+1] = x1i - x3r
-	}
-}
-
 // cftbsubTailFast is cftbsubTail without bounds checks.
 func cftbsubTailFast(a *[128]float32) {
 	p0, p1, p2, p3 := (*[32]float32)(a[0:32]), (*[32]float32)(a[32:64]), (*[32]float32)(a[64:96]), (*[32]float32)(a[96:128])
@@ -478,31 +423,6 @@ func cftbsubTailFast(a *[128]float32) {
 		p1[j+1] = x1i - x3r
 		p3[j] = x1r + x3i
 		p3[j+1] = x1i + x3r
-	}
-}
-
-// rftfsubFast is rftfsub_128: the scalar code, and element for element the
-// NEON and SSE2 code (their vectors hold four consecutive iterations).
-// Iteration j1 = 1+m works on a[2+2m], a[3+2m] and the mirrored a[126-2m],
-// a[127-2m].
-func rftfsubFast(a *[128]float32) {
-	lo := (*[62]float32)(a[2:64])
-	hi := (*[62]float32)(a[66:128])
-	c := (*[31]float32)(rdftW[33:64])
-	for m := 0; m < 31; m++ {
-		n := 30 - m
-		wkr := 0.5 - c[n]
-		wki := c[m]
-		l := (*[2]float32)(lo[2*m : 2*m+2])
-		h := (*[2]float32)(hi[2*n : 2*n+2])
-		xr := l[0] - h[0]
-		xi := l[1] + h[1]
-		yr := float32(wkr*xr) - float32(wki*xi)
-		yi := float32(wkr*xi) + float32(wki*xr)
-		l[0] -= yr
-		l[1] -= yi
-		h[0] += yr
-		h[1] -= yi
 	}
 }
 

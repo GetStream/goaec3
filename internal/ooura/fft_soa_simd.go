@@ -59,6 +59,15 @@ var soaS2 [2][12][4]float32
 // soaWk1[i] is cftmdlWk1r[i] in every lane (block 1 of cftmdl).
 var soaWk1 [4][4]float32
 
+type vec = archsimd.Float32x4
+
+func ld(p *[4]float32) vec { return archsimd.LoadFloat32x4Array(p) }
+
+// zipLo is {x0, y0, x1, y1}; zipHi is {x2, y2, x3, y3}.
+func zipLo(x, y vec) vec { return x.ToBits().InterleaveLo(y.ToBits()).BitsToFloat32() }
+
+func zipHi(x, y vec) vec { return x.ToBits().InterleaveHi(y.ToBits()).BitsToFloat32() }
+
 // Scratch is the work area of FftSplit and InverseFftSplit. It needs no
 // initialization and carries nothing from one call to the next; keeping it
 // with the caller saves clearing a frame on the stack per transform.

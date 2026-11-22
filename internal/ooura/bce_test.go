@@ -18,14 +18,11 @@ import (
 var boundsCheckFree = map[string][]string{
 	"": {
 		"cft1stFastLane", "cftmdlFastLane", "cft1stFastScalar", "cftmdlFastScalar",
-		"cftfsubTailFast", "cftbsubTailFast", "rftfsubFast", "rftbsubFast",
-		"fftFastLane", "inverseFftFastLane", "fftFastScalar", "inverseFftFastScalar",
+		"cftbsubTailFast", "rftbsubFast", "inverseFftFastScalar",
 		"tailSplitFast", "splitCft1stFastLane", "fftSplitFastLane", "inverseFftSplitFastLane",
 		"fftSplitFastScalar", "inverseFftSplitFastScalar",
 	},
 	"simd": {
-		"bitrv2Cft1stSimd", "cftmdlSimd", "cftfsubTailSimd", "cftbsubTailSimd",
-		"rftfsubSimd", "rftbsubSimd", "fftSimd", "inverseFftSimd",
 		"soaCft1stPacked", "soaCft1stSplit", "soaCftmdl", "soaCftfsubTail", "soaCftbsubTail",
 		"soaRftfsub", "soaRftbsub", "fftSplitSoa", "inverseFftSplitSoa",
 	},
