@@ -25,6 +25,8 @@ func TestConfigsTheCppCannotRunAreRejected(t *testing.T) {
 		"Refined.ErrorFloor=0":            func(c *Config) { c.Filter.Refined.ErrorFloor = 0 },
 		"RefinedInitial.ErrorFloor=0":     func(c *Config) { c.Filter.RefinedInitial.ErrorFloor = 0 },
 		"RefinedInitial.ErrorFloor=1e-45": func(c *Config) { c.Filter.RefinedInitial.ErrorFloor = 1e-45 },
+		"Refined.ErrorCeil=0":             func(c *Config) { c.Filter.Refined.ErrorCeil = 0 },
+		"RefinedInitial.ErrorCeil=1e-45":  func(c *Config) { c.Filter.RefinedInitial.ErrorCeil = 1e-45 },
 		"Refined.NoiseGate=0":             func(c *Config) { c.Filter.Refined.NoiseGate = 0 },
 		"RefinedInitial.NoiseGate=0":      func(c *Config) { c.Filter.RefinedInitial.NoiseGate = 0 },
 		"RefinedInitial.NoiseGate=9e-13":  func(c *Config) { c.Filter.RefinedInitial.NoiseGate = 9e-13 },
