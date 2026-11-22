@@ -88,8 +88,8 @@ func TestNewRejectsBadArguments(t *testing.T) {
 // TestExtremeAudioBufferDelays sets audio buffer delays across the whole
 // int range, in both delay modes, between and during render and capture.
 func TestExtremeAudioBufferDelays(t *testing.T) {
-	delays := []int{math.MinInt64, math.MinInt32, -1 << 20, -1000, -5, -1, 0, 1, 3, 4, 7, 100, 499, 1000, 5000,
-		1 << 20, math.MaxInt32, math.MaxInt32 + 1, math.MaxInt64}
+	delays := []int{math.MinInt, math.MinInt32, -1 << 20, -1000, -5, -1, 0, 1, 3, 4, 7, 100, 499, 1000, 5000,
+		1 << 20, math.MaxInt32, math.MaxInt/2 + 1, math.MaxInt}
 	for _, external := range []bool{false, true} {
 		for _, rate := range []int{16000, 48000} {
 			cfg := DefaultConfig()

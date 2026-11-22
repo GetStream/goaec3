@@ -24,7 +24,7 @@ func TestValidateIdempotent(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	specialF := []float32{0, -0.0, 1, -1, float32(math.NaN()), float32(math.Inf(1)), float32(math.Inf(-1)),
 		math.MaxFloat32, -math.MaxFloat32, math.SmallestNonzeroFloat32}
-	specialI := []int{0, 1, -1, 64, 65, 250, 5000, 5001, math.MaxInt32, math.MinInt32, math.MaxInt64, math.MinInt64}
+	specialI := []int{0, 1, -1, 64, 65, 250, 5000, 5001, math.MaxInt32, math.MinInt32, math.MaxInt, math.MinInt}
 	for iter := 0; iter < 20000; iter++ {
 		cfg := DefaultEchoCanceller3Config()
 		leaves := robustConfigLeaves(reflect.ValueOf(&cfg).Elem(), nil)
@@ -73,7 +73,7 @@ func robustNaNFree(cfg EchoCanceller3Config) EchoCanceller3Config {
 // index in the ring and any offset.
 func TestRingOffsetIndexRange(t *testing.T) {
 	rng := rand.New(rand.NewSource(2))
-	offsets := []int{0, 1, -1, math.MaxInt32, math.MinInt32, 1 << 40, -(1 << 40)}
+	offsets := []int{0, 1, -1, math.MaxInt32, math.MinInt32, math.MaxInt / 3, -(math.MaxInt / 3)}
 	for _, size := range []int{1, 2, 3, 17, 64, 250} {
 		r := ringIndex{Size: size}
 		for index := 0; index < size; index++ {
@@ -102,8 +102,8 @@ func TestRingOffsetIndexRange(t *testing.T) {
 func TestSetAudioBufferDelayIntRange(t *testing.T) {
 	cfg := DefaultEchoCanceller3Config()
 	cfg.Delay.UseExternalDelayEstimator = true
-	for _, ms := range []int{0, 3, 4, -3, -4, -5, math.MaxInt32, math.MinInt32, math.MaxInt32 + 1, math.MaxInt64,
-		math.MinInt64, 1<<32 + 8} {
+	for _, ms := range []int{0, 3, 4, -3, -4, -5, math.MaxInt32, math.MinInt32, math.MaxInt/2 + 1, math.MaxInt,
+		math.MinInt, math.MaxInt/4 + 8} {
 		b := NewRenderDelayBuffer(&cfg, 16000, 1)
 		b.SetAudioBufferDelay(ms)
 		if want := int(int32(ms) / 4); b.externalAudioBufferDelay != want {
