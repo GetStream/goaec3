@@ -368,6 +368,10 @@ func fzRenderDelayBufferSize(cfg *aec3.EchoCanceller3Config) int {
 //     once the capture signal is digital silence
 //     (refined_filter_update_gain.cc); TestEc3RefinedStepNaN has the C++ do
 //     it.
+//   - NoiseGate of Filter.Coarse or Filter.CoarseInitial below 1e-12: the
+//     step size of the coarse filter is infinite for a subnormal render
+//     power (coarse_filter_update_gain.cc); TestEc3CoarseStepNaN has the
+//     C++ do it.
 //
 // A further exclusion is a value the C++ config cannot hold:
 //   - Buffering.ExcessRenderDetectionIntervalBlocks and
@@ -383,6 +387,9 @@ func fzDefined(cfg *aec3.EchoCanceller3Config) bool {
 		return false
 	}
 	if cfg.Delay.DelayHeadroomSamples/aec3.BlockSize >= cfg.Filter.RefinedInitial.LengthBlocks {
+		return false
+	}
+	if cfg.Filter.Coarse.NoiseGate < 1e-12 || cfg.Filter.CoarseInitial.NoiseGate < 1e-12 {
 		return false
 	}
 	for _, r := range []*aec3.RefinedConfiguration{&cfg.Filter.Refined, &cfg.Filter.RefinedInitial} {
