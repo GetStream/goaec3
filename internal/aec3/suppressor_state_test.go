@@ -5,26 +5,6 @@ import (
 	"testing"
 )
 
-// suppressorPointerPath returns the path of the first field of t that the
-// garbage collector reads, or "" if t has none.
-func suppressorPointerPath(t reflect.Type, path string) string {
-	switch t.Kind() {
-	case reflect.Pointer, reflect.Slice, reflect.Map, reflect.Interface, reflect.String, reflect.Func,
-		reflect.Chan, reflect.UnsafePointer:
-		return path + " (" + t.String() + ")"
-	case reflect.Struct:
-		for i := 0; i < t.NumField(); i++ {
-			f := t.Field(i)
-			if p := suppressorPointerPath(f.Type, path+"."+f.Name); p != "" {
-				return p
-			}
-		}
-	case reflect.Array:
-		return suppressorPointerPath(t.Elem(), path+"[]")
-	}
-	return ""
-}
-
 // TestSuppressorStatesPointerFree checks that the states of the suppressor
 // components hold nothing the garbage collector reads.
 func TestSuppressorStatesPointerFree(t *testing.T) {
@@ -34,7 +14,7 @@ func TestSuppressorStatesPointerFree(t *testing.T) {
 		reflect.TypeOf(cngState{}),
 		reflect.TypeOf(suppressionFilterState{}),
 	} {
-		if p := suppressorPointerPath(typ, typ.Name()); p != "" {
+		if p := pointerPath(typ, typ.Name()); p != "" {
 			t.Errorf("%s holds a pointer: %s", typ.Name(), p)
 		}
 	}
