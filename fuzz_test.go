@@ -24,14 +24,27 @@ var robustSeeds = [][]byte{
 		robustOpRender, 2 * robustSigNaN, robustOpCapture, 2 * robustSigNaN, robustOpPairs, 0, 20},
 	// Eight channels each way.
 	{2, 207, 207, 0, 5, 10, 0, robustOpPairs, 0, 60},
+	// Malformed frames, aliased buffers, metrics and a concurrent render
+	// side, from the first call on.
+	{1, 1, 1, robustFlagLinearOutput, 6, 30, 0, robustOpMetrics, 0, robustOpBadShape, 0, robustOpAliased, 0,
+		robustOpConcurrent, 1, 30, robustOpPairs, 0, 40, robustOpBadShape, 0, robustOpAliased, 2 * robustSigInf,
+		robustOpConcurrent, 0, 39, robustOpMetrics, 0},
+	// An unvalidated config (Delay.DownSamplingFactor = 3): New rejects it.
+	{0, 0, 0, robustFlagRawConfig, 7, 10, 1, 3, 0, 4, 3, 0, 0, 0, robustOpPairs, 0, 10},
+	// Sixteen channels each way, without the resource caps.
+	{2, 247, 247, robustFlagLarge, 8, 10, 0, robustOpPairs, 0, 3},
+	// Seventeen render channels: New rejects them.
+	{0, 248, 0, 0, 9, 10, 0, robustOpPairs, 0, 3},
 }
 
 // FuzzEchoCanceller drives the public API with fuzzed configs (any field
-// over its full range, then Validate), rates, channel counts, call
+// over its full range, validated or as it is), rates, channel counts, call
 // sequences and audio, including silence, full scale, clipping, denormals,
-// ±Inf and NaN. It requires that nothing panics and that the output and the
-// metrics are finite until a NaN sample is fed (FloatToFloatS16 clamps ±Inf,
-// NaN propagates into the filter state, as in the C++).
+// ±Inf and NaN, malformed frames, aliased buffers and a concurrent render
+// side. It requires that nothing panics, that New accepts exactly the
+// documented configs and that the output and the metrics are finite until a
+// NaN sample is fed (FloatToFloatS16 clamps ±Inf, NaN propagates into the
+// filter state, as in the C++).
 func FuzzEchoCanceller(f *testing.F) {
 	for _, s := range robustSeeds {
 		f.Add(s)

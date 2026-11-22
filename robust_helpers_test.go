@@ -2,6 +2,7 @@ package goaec3
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -195,23 +196,38 @@ func robustLeaves(cfg *Config) []robustLeaf {
 	return out
 }
 
-// Resource caps on the config fields that size buffers or the per-block
-// work but that Validate only floor-limits (or limits to 5000 filters). The
-// caps keep a fuzz execution within memory and time; they exclude no
-// behavior the uncapped fields would exercise at a smaller scale.
+// Caps on the config fields that size buffers and the work per block, for
+// the fuzz executions that run many frames. The other executions cap them at
+// the limits of New.
 const (
 	robustMaxFilterBlocks = 40
 	robustMaxNumFilters   = 12
 )
 
-func robustCapResources(cfg *Config) {
+// robustCapResources lowers the filter lengths to maxBlocks and the number
+// of delay filters to maxFilters, and keeps the config valid.
+func robustCapResources(cfg *Config, maxBlocks, maxFilters int) {
 	f := &cfg.Filter
-	f.Refined.LengthBlocks = min(f.Refined.LengthBlocks, robustMaxFilterBlocks)
+	f.Refined.LengthBlocks = min(f.Refined.LengthBlocks, maxBlocks)
 	f.RefinedInitial.LengthBlocks = min(f.RefinedInitial.LengthBlocks, f.Refined.LengthBlocks)
-	f.Coarse.LengthBlocks = min(f.Coarse.LengthBlocks, robustMaxFilterBlocks)
+	f.Coarse.LengthBlocks = min(f.Coarse.LengthBlocks, maxBlocks)
 	f.CoarseInitial.LengthBlocks = min(f.CoarseInitial.LengthBlocks, f.Coarse.LengthBlocks)
 	cfg.Erle.NumSections = min(cfg.Erle.NumSections, f.Refined.LengthBlocks)
-	cfg.Delay.NumFilters = min(cfg.Delay.NumFilters, robustMaxNumFilters)
+	cfg.Delay.NumFilters = min(cfg.Delay.NumFilters, maxFilters)
+}
+
+// robustFrameBudget returns the number of frames a fuzz execution may run
+// with cfg: robustMaxFrames up to the cost of the capped configs, and fewer
+// in proportion above it.
+func robustFrameBudget(cfg *Config, numRender, numCapture int) int {
+	const capped = 8 * 8 * robustMaxFilterBlocks
+	blocks := min(max(cfg.Filter.Refined.LengthBlocks, cfg.Filter.Coarse.LengthBlocks, 1), MaxFilterLengthBlocks)
+	filters := min(max(cfg.Delay.NumFilters, 1), MaxDelayFilters)
+	cost := max(numRender*numCapture*blocks, capped*filters/robustMaxNumFilters)
+	if cost <= capped {
+		return robustMaxFrames
+	}
+	return max(4, robustMaxFrames*capped/cost)
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +323,21 @@ const (
 	robustOpSetDelay
 	robustOpOutputUsage
 	robustOpGainChange
+	robustOpMetrics
+	robustOpBadShape   // malformed frames: every call returns an error
+	robustOpAliased    // capture in the buffers of the render frame
+	robustOpConcurrent // AnalyzeRender on another goroutine during capture
 	robustNumOps
+)
+
+// Flags of a fuzz input.
+const (
+	robustFlagMultichannelDefaults = 1 << iota
+	robustFlagLinearOutput
+	robustFlagExternalDelay
+	robustFlagMultichannelConfig
+	robustFlagRawConfig // the mutated config goes to New without Validate
+	robustFlagLarge     // resources up to the limits of New, fewer frames
 )
 
 type robustOp struct {
@@ -332,18 +362,22 @@ func (p *robustProgram) String() string {
 }
 
 func robustChannels(b byte) int {
-	if b < 200 {
+	switch {
+	case b < 200:
 		return 1 + int(b%2)
+	case b < 240:
+		return 1 + int(b%8)
 	}
-	return 1 + int(b%8)
+	// 9 to MaxChannels+1: New rejects the last.
+	return 9 + int(b-240)%9
 }
 
 // robustMaxFrames bounds the frames of one fuzz execution.
 const robustMaxFrames = 800
 
 // robustDecode turns fuzz input into a program: rate, channel counts, a
-// config (mutated, validated and resource-capped), an optional agreeing
-// multichannel config and a call sequence.
+// config (mutated and, without robustFlagRawConfig, validated and capped),
+// an optional agreeing multichannel config and a call sequence.
 func robustDecode(data []byte) robustProgram {
 	r := &robustReader{b: data}
 	var p robustProgram
@@ -354,31 +388,43 @@ func robustDecode(data []byte) robustProgram {
 	p.seed = int64(r.u8())
 	p.delayMs = int(r.u8()) % 200
 	p.cfg = DefaultConfig()
-	if flags&1 != 0 {
+	if flags&robustFlagMultichannelDefaults != 0 {
 		p.cfg = MultichannelConfig()
 	}
-	p.cfg.Filter.ExportLinearAecOutput = flags&2 != 0
-	p.cfg.Delay.UseExternalDelayEstimator = flags&4 != 0
-	p.useMC = flags&8 != 0
+	p.cfg.Filter.ExportLinearAecOutput = flags&robustFlagLinearOutput != 0
+	p.cfg.Delay.UseExternalDelayEstimator = flags&robustFlagExternalDelay != 0
+	p.useMC = flags&robustFlagMultichannelConfig != 0
+	raw := flags&robustFlagRawConfig != 0
+	maxBlocks, maxFilters := robustMaxFilterBlocks, robustMaxNumFilters
+	if flags&robustFlagLarge != 0 {
+		// One past the limits: New rejects those.
+		maxBlocks, maxFilters = MaxFilterLengthBlocks+1, MaxDelayFilters+1
+	}
 	leaves := robustLeaves(&p.cfg)
 	for range int(r.u8() % 12) {
 		robustMutate(r, leaves)
 	}
-	p.cfg.Validate()
-	robustCapResources(&p.cfg)
+	if !raw {
+		p.cfg.Validate()
+		robustCapResources(&p.cfg, maxBlocks, maxFilters)
+	}
+	maxFrames := robustFrameBudget(&p.cfg, p.numRender, p.numCapture)
 	if p.useMC {
 		p.mc = MultichannelConfig()
 		mcLeaves := robustLeaves(&p.mc)
 		for range int(r.u8() % 6) {
 			robustMutate(r, mcLeaves)
 		}
-		p.mc.Validate()
-		robustCapResources(&p.mc)
+		if !raw {
+			p.mc.Validate()
+			robustCapResources(&p.mc, maxBlocks, maxFilters)
+		}
 		robustAgree(&p.mc, &p.cfg)
+		maxFrames = min(maxFrames, robustFrameBudget(&p.mc, p.numRender, p.numCapture))
 	}
 
 	frames := 0
-	for !r.empty() && frames < robustMaxFrames {
+	for !r.empty() && frames < maxFrames {
 		op := robustOp{kind: int(r.u8()) % robustNumOps}
 		b := r.u8()
 		op.sig = int(b>>1) % robustNumSignals
@@ -390,6 +436,10 @@ func robustDecode(data []byte) robustProgram {
 			op.n = 1 + int(r.u8())*2
 		case robustOpRenderBurst, robustOpCaptureBurst:
 			op.n = 1 + int(r.u8())%160
+		case robustOpConcurrent:
+			op.n = 1 + int(r.u8())%40
+		case robustOpAliased:
+			op.n = 1
 		case robustOpSetDelay:
 			switch s := r.u8(); s % 4 {
 			case 0:
@@ -404,9 +454,11 @@ func robustDecode(data []byte) robustProgram {
 			op.n = int(b & 1)
 		}
 		switch op.kind {
-		case robustOpRender, robustOpCapture, robustOpRenderBurst, robustOpCaptureBurst:
+		case robustOpRender, robustOpCapture, robustOpRenderBurst, robustOpCaptureBurst, robustOpAliased:
+			op.n = min(op.n, maxFrames)
 			frames += op.n
-		case robustOpPairs:
+		case robustOpPairs, robustOpConcurrent:
+			op.n = min(op.n, maxFrames)
 			frames += 2 * op.n
 		}
 		p.ops = append(p.ops, op)
@@ -425,9 +477,24 @@ func robustAgree(mc, cfg *Config) {
 	mc.MultiChannel = cfg.MultiChannel
 }
 
-// robustRun executes a program on the public API and checks that the
-// output stays in [-1, 1] and finite while no NaN has been fed, and that
-// the metrics stay free of NaN under the same condition.
+// robustAccepted reports whether New must accept the arguments of p: the
+// channel counts within the limit, and each config valid and outside
+// robustRejected.
+func robustAccepted(p *robustProgram) bool {
+	if p.numRender > MaxChannels || p.numCapture > MaxChannels {
+		return false
+	}
+	ok := func(cfg *Config) bool {
+		v := *cfg
+		return v.Validate() && !robustRejected(cfg)
+	}
+	return ok(&p.cfg) && (!p.useMC || ok(&p.mc))
+}
+
+// robustRun executes a program on the public API and checks that New
+// accepts exactly the documented arguments, that the output stays in
+// [-1, 1] and finite while no NaN has been fed, and that the metrics stay
+// free of NaN under the same condition.
 func robustRun(t testing.TB, p *robustProgram) {
 	t.Helper()
 	var e *EchoCanceller
@@ -437,8 +504,13 @@ func robustRun(t testing.TB, p *robustProgram) {
 	} else {
 		e, err = New(p.cfg, p.rate, p.numRender, p.numCapture)
 	}
+	if want := robustAccepted(p); (err == nil) != want {
+		t.Fatalf("New error = %v, accepted arguments: %v", err, want)
+	}
 	if err != nil {
-		// Rejecting a config is a valid outcome.
+		if !errors.Is(err, ErrConfig) && !errors.Is(err, ErrNumChannels) {
+			t.Fatalf("New error = %v", err)
+		}
 		return
 	}
 	n := e.FrameSize()
@@ -476,8 +548,71 @@ func robustRun(t testing.TB, p *robustProgram) {
 			}
 		}
 	}
+	var concurrentScene *robustScene
+	concurrentRender := robustFrame(p.numRender, n)
 	for _, op := range p.ops {
 		switch op.kind {
+		case robustOpMetrics:
+			m := e.Metrics()
+			if !sawNaN && (math.IsNaN(m.EchoReturnLoss) || math.IsNaN(m.EchoReturnLossEnhancement)) {
+				t.Fatalf("metrics %+v", m)
+			}
+		case robustOpBadShape:
+			short := robustFrame(p.numCapture, n-1)
+			for name, err := range map[string]error{
+				"AnalyzeRender(nil)":            e.AnalyzeRender(nil),
+				"AnalyzeRender(extra channel)":  e.AnalyzeRender(robustFrame(p.numRender+1, n)),
+				"ProcessCapture(nil)":           e.ProcessCapture(nil),
+				"ProcessCapture(short)":         e.ProcessCapture(short),
+				"ProcessCapture(nil channel)":   e.ProcessCapture(make([][]float32, p.numCapture)),
+				"linear output (short capture)": e.ProcessCaptureWithLinearOutput(short, linear),
+				"linear output (full rate)":     e.ProcessCaptureWithLinearOutput(capture, robustFrame(p.numCapture, n+1)),
+			} {
+				if err == nil {
+					t.Fatalf("%s: no error", name)
+				}
+			}
+		case robustOpAliased:
+			// The render frame is copied, so the capture call may reuse its
+			// buffers; with fewer render channels one buffer is several
+			// capture channels.
+			scene.render(render, op.sig)
+			sawNaN = sawNaN || robustHasNaN(render)
+			if err := e.AnalyzeRender(render); err != nil {
+				t.Fatal(err)
+			}
+			aliased := make([][]float32, p.numCapture)
+			for ch := range aliased {
+				aliased[ch] = render[ch%p.numRender]
+			}
+			if err := e.ProcessCapture(aliased); err != nil {
+				t.Fatal(err)
+			}
+			if !sawNaN {
+				robustCheckFinite(t, "aliased capture output", aliased)
+			}
+		case robustOpConcurrent:
+			if concurrentScene == nil {
+				concurrentScene = newRobustScene(p.seed+1, p.rate, p.delayMs)
+			}
+			done := make(chan error, 1)
+			go func() {
+				for range op.n {
+					concurrentScene.render(concurrentRender, robustSigEcho)
+					if err := e.AnalyzeRender(concurrentRender); err != nil {
+						done <- err
+						return
+					}
+				}
+				done <- nil
+			}()
+			for range op.n {
+				doCapture(robustSigEcho, op.lin)
+				e.NotifyEchoPathGainChange()
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
 		case robustOpRender:
 			doRender(op.sig)
 		case robustOpCapture:

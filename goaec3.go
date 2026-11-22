@@ -15,6 +15,24 @@
 //
 // AnalyzeRender and ProcessCapture allocate nothing in steady state; a render
 // burst deeper than any before grows the queue once.
+//
+// # Untrusted input
+//
+// No frame makes a method panic: a frame of the wrong shape is an error that
+// leaves the canceller unchanged, and every float32 value is accepted. A NaN
+// sample is not an error but breaks the canceller for good (see
+// [EchoCanceller.ProcessCapture]).
+//
+// New rejects every config it cannot run, and bounds the memory and the work
+// per frame of the ones it accepts: at most [MaxChannels] channels a side,
+// filters of at most [MaxFilterLengthBlocks] blocks and at most
+// [MaxDelayFilters] delay estimation filters, next to the ranges of
+// Config.Validate. The largest canceller New creates takes about 50 MB and,
+// in pure Go, tens of milliseconds per frame: a service that takes configs
+// from its users sets its own, lower limits.
+//
+// Breaking the concurrency contract of [EchoCanceller] is a data race. It is
+// not detected: the output is undefined and a method may panic.
 package goaec3
 
 import (
@@ -52,12 +70,30 @@ type Metrics struct {
 // AEC output: one 10 ms frame at 16 kHz, whatever the capture rate.
 const LinearOutputFrameSize = aec3.SplitBandSize
 
+// Limits on what New accepts. They bound the memory of a canceller and its
+// work per frame, both of which grow with the product of the channel counts
+// and the filter lengths, and are far above what an echo canceller uses.
+const (
+	// MaxChannels is the largest number of render and of capture channels.
+	// The defaults of libwebrtc are tuned for mono and stereo.
+	MaxChannels = 16
+	// MaxFilterLengthBlocks is the largest Filter.Refined.LengthBlocks and
+	// Filter.Coarse.LengthBlocks: an echo tail of one second. The default is
+	// 13 blocks. Config.Validate sets no upper limit.
+	MaxFilterLengthBlocks = 250
+	// MaxDelayFilters is the largest Delay.NumFilters: a delay search range
+	// of six seconds or more. The default is 5. Config.Validate allows 5000,
+	// which makes the render buffer hundreds of megabytes per channel.
+	MaxDelayFilters = 64
+)
+
 var (
 	// ErrSampleRate is returned by New for a sample rate other than 16000,
 	// 32000 or 48000 Hz.
 	ErrSampleRate = errors.New("goaec3: sample rate must be 16000, 32000 or 48000 Hz")
-	// ErrNumChannels is returned by New for a channel count below one.
-	ErrNumChannels = errors.New("goaec3: channel counts must be at least 1")
+	// ErrNumChannels is returned by New for a channel count below one or
+	// above MaxChannels.
+	ErrNumChannels = errors.New("goaec3: channel counts must be between 1 and 16")
 	// ErrChannelCount is returned when a frame has the wrong number of
 	// channels.
 	ErrChannelCount = errors.New("goaec3: frame has the wrong number of channels")
@@ -66,8 +102,9 @@ var (
 	ErrFrameLength = errors.New("goaec3: channel does not hold one 10 ms frame")
 	// ErrConfig is returned by New and NewWithMultichannelConfig for a config
 	// that is outside its legal ranges (Config.Validate would change it), that
-	// libwebrtc itself cannot run, or, for NewWithMultichannelConfig, a pair
-	// of configs that disagree on the settings both must share.
+	// libwebrtc itself cannot run, that exceeds MaxFilterLengthBlocks or
+	// MaxDelayFilters, or, for NewWithMultichannelConfig, a pair of configs
+	// that disagree on the settings both must share.
 	ErrConfig = errors.New("goaec3: invalid config")
 	// ErrLinearOutputDisabled is returned by ProcessCaptureWithLinearOutput
 	// when Filter.ExportLinearAecOutput is not set in the config.
@@ -169,11 +206,14 @@ func ec3CheckFrame(frame [][]float32, numChannels, frameLength int) error {
 }
 
 // EchoCanceller is an AEC3 echo canceller for one render stream and one
-// capture stream.
+// capture stream. Create one with New; the zero value is not usable.
 //
 // AnalyzeRender may be called concurrently with the capture-side methods
 // (ProcessCapture, ProcessCaptureWithLinearOutput, SetAudioBufferDelay,
-// SetCaptureOutputUsage, Metrics). Calls on each side must be serialized.
+// SetCaptureOutputUsage, Metrics). Calls on each side must be serialized;
+// NotifyEchoPathGainChange and the accessors may be called from any
+// goroutine. Two concurrent calls on one side are a data race: nothing
+// detects it, the output is undefined and a call may panic.
 //
 // An EchoCanceller is two heap objects: itself, whose pointer words come
 // first, and a pointer-free arena that holds its arrays.
@@ -193,8 +233,10 @@ type EchoCanceller struct {
 // New creates an echo canceller for sampleRateHz (16000, 32000 or 48000)
 // with the given number of render and capture channels. The config must be
 // valid: New returns ErrConfig if Config.Validate would change it (call
-// Validate first to clamp a config into its legal ranges) or if libwebrtc
-// cannot run it.
+// Validate first to clamp a config into its legal ranges), if libwebrtc
+// cannot run it, or if it exceeds MaxFilterLengthBlocks or MaxDelayFilters,
+// which Validate does not clamp to. New returns ErrNumChannels for more than
+// MaxChannels channels a side.
 func New(cfg Config, sampleRateHz, numRenderChannels, numCaptureChannels int) (*EchoCanceller, error) {
 	return newEchoCanceller(&cfg, nil, sampleRateHz, numRenderChannels, numCaptureChannels)
 }
@@ -214,7 +256,8 @@ func newEchoCanceller(cfg, multichannelCfg *Config, sampleRateHz, numRenderChann
 	if sampleRateHz != 16000 && sampleRateHz != 32000 && sampleRateHz != 48000 {
 		return nil, ErrSampleRate
 	}
-	if numRenderChannels < 1 || numCaptureChannels < 1 {
+	if numRenderChannels < 1 || numCaptureChannels < 1 ||
+		numRenderChannels > MaxChannels || numCaptureChannels > MaxChannels {
 		return nil, ErrNumChannels
 	}
 	if err := ec3CheckConfig(cfg); err != nil {
@@ -275,7 +318,8 @@ func (e *EchoCanceller) AnalyzeRender(render [][]float32) error {
 
 // ProcessCapture removes the echo from one 10 ms capture frame in place,
 // capture[channel][sample] with NumCaptureChannels channels of FrameSize
-// samples in [-1, 1].
+// samples in [-1, 1]. A call that returns an error has changed neither the
+// frame nor the canceller.
 //
 // A NaN sample poisons the canceller state permanently, as in libwebrtc:
 // every later output is NaN while the metrics can still look healthy.
@@ -322,6 +366,10 @@ func (e *EchoCanceller) ProcessCaptureWithLinearOutput(capture, linearOutput [][
 // estimator sizes a vector with length-9 < 0) and a subband nearend region
 // reaching bin 65 (read past the end of the 65-bin spectrum). Negative
 // Buffering fields have no C++ equivalent (size_t there) and are rejected.
+// It also rejects the configs over MaxFilterLengthBlocks and
+// MaxDelayFilters, the fields that size the buffers and that Validate
+// leaves unbounded or bounds too high. The initial filter lengths and
+// Erle.NumSections are at most the full lengths in a valid config.
 func ec3CheckConfig(cfg *Config) error {
 	v := *cfg
 	if !v.Validate() {
@@ -338,6 +386,10 @@ func ec3CheckConfig(cfg *Config) error {
 		return fmt.Errorf("%w: SubbandNearendDetection regions must end below bin %d", ErrConfig, aec3.FftLengthBy2Plus1)
 	case cfg.Buffering.ExcessRenderDetectionIntervalBlocks < 0 || cfg.Buffering.MaxAllowedExcessRenderBlocks < 0:
 		return fmt.Errorf("%w: Buffering fields must not be negative", ErrConfig)
+	case cfg.Filter.Refined.LengthBlocks > MaxFilterLengthBlocks || cfg.Filter.Coarse.LengthBlocks > MaxFilterLengthBlocks:
+		return fmt.Errorf("%w: filter LengthBlocks must be at most %d", ErrConfig, MaxFilterLengthBlocks)
+	case cfg.Delay.NumFilters > MaxDelayFilters:
+		return fmt.Errorf("%w: Delay.NumFilters must be at most %d", ErrConfig, MaxDelayFilters)
 	}
 	return nil
 }

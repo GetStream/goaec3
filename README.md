@@ -58,7 +58,9 @@ for {
 | `Config`, `DefaultConfig()`, `MultichannelConfig()` | The full `EchoCanceller3Config` |
 
 Errors are sentinel values (`ErrConfig`, `ErrSampleRate`, `ErrFrameLength`, …).
-`New` returns `ErrConfig` for any config libwebrtc would adjust or cannot run.
+`New` returns `ErrConfig` for any config libwebrtc would adjust or cannot run,
+and for one over the resource limits (`MaxFilterLengthBlocks`, `MaxDelayFilters`;
+at most `MaxChannels` channels a side).
 
 ## Performance
 
