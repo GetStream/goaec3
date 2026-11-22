@@ -1,4 +1,4 @@
-//go:build webrtc_oracle && !purego
+//go:build (webrtc_oracle || webrtc_src_oracle) && !purego
 
 package webrtcoracle
 
