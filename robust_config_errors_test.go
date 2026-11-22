@@ -132,13 +132,16 @@ func TestNotifyEchoPathGainChangeConcurrent(t *testing.T) {
 }
 
 // robustRejected is the documented set of validated configs New refuses:
-// configs libwebrtc cannot run, and negative Buffering fields (size_t in
-// C++, untouched by Validate).
+// configs libwebrtc cannot run, negative Buffering fields (size_t in C++,
+// untouched by Validate) and configs over the resource limits.
 func robustRejected(cfg *Config) bool {
 	sn := &cfg.Suppressor.SubbandNearendDetection
 	return cfg.Delay.NumFilters == 0 ||
 		cfg.Filter.Refined.LengthBlocks < 9 ||
 		(cfg.Suppressor.UseSubbandNearendDetection && (sn.Subband1.High > 64 || sn.Subband2.High > 64)) ||
 		cfg.Buffering.ExcessRenderDetectionIntervalBlocks < 0 ||
-		cfg.Buffering.MaxAllowedExcessRenderBlocks < 0
+		cfg.Buffering.MaxAllowedExcessRenderBlocks < 0 ||
+		cfg.Filter.Refined.LengthBlocks > MaxFilterLengthBlocks ||
+		cfg.Filter.Coarse.LengthBlocks > MaxFilterLengthBlocks ||
+		cfg.Delay.NumFilters > MaxDelayFilters
 }

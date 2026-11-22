@@ -106,7 +106,7 @@ func robustSweepFailures(t *testing.T, frames int, skip func(path string, cfg *C
 				l := robustLeaves(&cfg)[i]
 				l.v.Set(reflect.ValueOf(val).Convert(l.v.Type()))
 				cfg.Validate()
-				robustCapResources(&cfg)
+				robustCapResources(&cfg, MaxFilterLengthBlocks, MaxDelayFilters)
 				// Run each distinct validated config once (NaN fields never
 				// compare equal, so those always run).
 				if seen[cfg] {
