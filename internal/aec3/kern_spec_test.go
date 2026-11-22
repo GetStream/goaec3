@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// The references below that are not a plain element loop are checked against
-// the loop they stand for, in every build (without archsimd the kernels are
-// the references themselves, so the kernel tests do not cover them).
+// The references that are not a plain element loop are checked against the
+// loop they stand for. Without archsimd the kernels are the references, and
+// the kernel tests do not cover them.
 
 func kernSumRowsSpec(dst *[FftLengthBy2Plus1]float32, rows []*[FftLengthBy2Plus1]float32) {
 	*dst = [FftLengthBy2Plus1]float32{}
@@ -50,7 +50,7 @@ func kernFir3Spec(x []float32, h *[3]float32, out []float32, from, to int) {
 }
 
 // kernRefinedLeakSpec is the H_error leakage loop of
-// RefinedFilterUpdateGain::Compute as the C++ writes it.
+// RefinedFilterUpdateGain::Compute as in the C++.
 func kernRefinedLeakSpec(E2Refined, E2Coarse *[FftLengthBy2Plus1]float32, erl []float32, disallowLeakageDiverged bool,
 	leakageConverged, leakageDiverged, errorFloor, errorCeil float32, hError *[FftLengthBy2Plus1]float32) {
 	for k := range hError {
@@ -97,11 +97,9 @@ func kernSpectrumAvx2Spec(re, im, out *[FftLengthBy2Plus1]float32) {
 	out[FftLengthBy2] = float32(re[FftLengthBy2]*re[FftLengthBy2]) + float32(im[FftLengthBy2]*im[FftLengthBy2])
 }
 
-// TestKernSpectrumAvx2RefMatchesSpec drives kernSpectrumAvx2Ref through its
-// grouped fast path and its slow-path hand-off: plain values, rounding ties
-// ((1+2^-12)^2 = 1 + 2^-11 + 2^-24 is one), results below 2^-126, zeros,
-// Inf and NaN, at every position of a group, also with out aliasing re or
-// im.
+// TestKernSpectrumAvx2RefMatchesSpec checks kernSpectrumAvx2Ref on plain
+// values, rounding ties, results below 2^-126, zeros, Inf and NaN at every
+// position of a group, also with out aliasing re or im.
 func TestKernSpectrumAvx2RefMatchesSpec(t *testing.T) {
 	rng := rand.New(rand.NewSource(41))
 	tie := float32(4097.0 / 4096.0)
@@ -218,8 +216,8 @@ func TestKernReferencesMatchSpec(t *testing.T) {
 	}
 }
 
-// kernErlUpdateSpec transcribes the bin loops of ErlEstimator::Update with
-// the C++ layout of the hold counters (hold_counters_[k - 1] for bin k).
+// kernErlUpdateSpec is the bin loops of ErlEstimator::Update with the hold
+// counters laid out as in the C++: hold_counters_[k - 1] for bin k.
 func kernErlUpdateSpec(X2, Y2, erl *[FftLengthBy2Plus1]float32, holdCounters *[FftLengthBy2Minus1]int32) {
 	const x2Min float32 = 44015068.0
 	for k := 1; k < FftLengthBy2; k++ {
@@ -242,10 +240,10 @@ func kernErlUpdateSpec(X2, Y2, erl *[FftLengthBy2Plus1]float32, holdCounters *[F
 	}
 }
 
-// TestKernErlUpdate checks the kernel and its reference against the
-// transcription: every ERL bin but bin 0 (which the caller replaces) and
-// every hold counter, over render powers around the update threshold, hold
-// counters around the release and ERLs around their bounds.
+// TestKernErlUpdate checks the kernel and its reference against
+// kernErlUpdateSpec: every ERL bin but bin 0, which the caller replaces, and
+// every hold counter. The render powers lie around the update threshold, the
+// hold counters around the release and the ERLs around their bounds.
 func TestKernErlUpdate(t *testing.T) {
 	rng := rand.New(rand.NewSource(41))
 	updates, releases := 0, 0

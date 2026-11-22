@@ -15,16 +15,16 @@ func dlyGetDownSamplingBlockSizeLog2(downSamplingFactor int) int {
 	return 0
 }
 
-// dlyHistogramMax tracks the first maximum (std::max_element) of a lag
-// histogram whose bins change by one count at a time: a bin that grows can
-// only take over the maximum, and the histogram is rescanned only when the
-// maximum bin shrinks.
+// dlyHistogramMax tracks the first maximum of a lag histogram, as
+// std::max_element finds it, while bins change by one count: a bin that
+// grows can only take over the maximum, and only a maximum bin that shrinks
+// needs a scan.
 type dlyHistogramMax struct {
 	best int
 }
 
-// update records histogram[removed]-- (unless removed < 0) followed by
-// histogram[added]++, both already applied to histogram.
+// update records histogram[removed]--, unless removed < 0, and then
+// histogram[added]++. Both are already applied to histogram.
 func (m *dlyHistogramMax) update(histogram []int32, removed, added int) {
 	if removed == added {
 		return
@@ -38,7 +38,7 @@ func (m *dlyHistogramMax) update(histogram []int32, removed, added int) {
 	}
 }
 
-// dlyArgMax returns the index of the first maximum of v (std::max_element).
+// dlyArgMax returns the index of the first maximum of v.
 func dlyArgMax(v []int32) int {
 	best := 0
 	if len(v) == 0 {
@@ -58,7 +58,7 @@ type dlyPreEchoLagAggregator struct {
 	histogram []int32
 }
 
-// dlyPreEchoLagState is the state of a dlyPreEchoLagAggregator but its
+// dlyPreEchoLagState is the state of a dlyPreEchoLagAggregator except its
 // histogram.
 type dlyPreEchoLagState struct {
 	histogramSpan      span
@@ -76,8 +76,7 @@ func dlyPreEchoHistogramSize(maxFilterLag, downSamplingFactor int) int {
 	return ((maxFilterLag + 1) * downSamplingFactor) >> BlockSizeLog2
 }
 
-// init sets up the aggregator over histogram, which holds
-// dlyPreEchoHistogramSize zeros.
+// init sets up a. histogram holds dlyPreEchoHistogramSize zeros.
 func (a *dlyPreEchoLagAggregator) init(downSamplingFactor int, histogram []int32) {
 	if a.dlyPreEchoLagState == nil {
 		a.dlyPreEchoLagState = &dlyPreEchoLagState{}
@@ -102,8 +101,8 @@ func (a *dlyPreEchoLagAggregator) Reset() {
 func (a *dlyPreEchoLagAggregator) Aggregate(preEchoLag int) {
 	preEchoBlockSize := preEchoLag >> a.blockSizeLog2
 	preEchoBlockSize = min(max(preEchoBlockSize, 0), len(a.histogram)-1)
-	// Remove the oldest point from the histogram, it ignores the initial
-	// points where no updates have been done to the histogramData array.
+	// Remove the oldest point from the histogram, unless histogramData is
+	// not full yet.
 	removed := int(a.histogramData[a.histogramDataIndex])
 	if removed != dlyPreEchoHistogramDataNotUpdated {
 		a.histogram[removed]--
@@ -137,7 +136,7 @@ type dlyHighestPeakAggregator struct {
 	histogram []int32
 }
 
-// dlyHighestPeakState is the state of a dlyHighestPeakAggregator but its
+// dlyHighestPeakState is the state of a dlyHighestPeakAggregator except its
 // histogram.
 type dlyHighestPeakState struct {
 	histogramSpan      span
@@ -151,8 +150,7 @@ func (a *dlyHighestPeakAggregator) init(maxFilterLag int) {
 	a.initOver(make([]int32, maxFilterLag+1))
 }
 
-// initOver sets up the aggregator over histogram, which holds maxFilterLag+1
-// zeros.
+// initOver sets up a. histogram holds maxFilterLag+1 zeros.
 func (a *dlyHighestPeakAggregator) initOver(histogram []int32) {
 	if a.dlyHighestPeakState == nil {
 		a.dlyHighestPeakState = &dlyHighestPeakState{}
@@ -161,7 +159,7 @@ func (a *dlyHighestPeakAggregator) initOver(histogram []int32) {
 	*a.dlyHighestPeakState = dlyHighestPeakState{candidate: -1}
 }
 
-// Reset clears the histogram; the candidate keeps its value until the next
+// Reset clears the histogram. The candidate keeps its value until the next
 // Aggregate, as in the C++.
 func (a *dlyHighestPeakAggregator) Reset() {
 	clear(a.histogram)
@@ -180,16 +178,15 @@ func (a *dlyHighestPeakAggregator) Aggregate(lag int) {
 	a.candidate = a.histogramMax.best
 }
 
-// MatchedFilterLagAggregator aggregates lag estimates produced by the
-// MatchedFilter into a single reliable combined lag estimate
-// (matched_filter_lag_aggregator.h).
+// MatchedFilterLagAggregator combines the lag estimates of the MatchedFilter
+// into one reliable estimate (matched_filter_lag_aggregator.h).
 type MatchedFilterLagAggregator struct {
 	*lagAggregatorState
 	highestPeakAggregator dlyHighestPeakAggregator
 	preEchoLagAggregator  dlyPreEchoLagAggregator
 }
 
-// lagAggregatorState is the state of a MatchedFilterLagAggregator but its
+// lagAggregatorState is the state of a MatchedFilterLagAggregator except its
 // histograms.
 type lagAggregatorState struct {
 	significantCandidateFound bool
@@ -201,7 +198,6 @@ type lagAggregatorState struct {
 	preEchoLagAggregator      dlyPreEchoLagState
 }
 
-// bind makes a the view of st.
 func (a *MatchedFilterLagAggregator) bind(st *lagAggregatorState, b *binder) {
 	a.lagAggregatorState = st
 	a.highestPeakAggregator.dlyHighestPeakState = &st.highestPeakAggregator
@@ -240,7 +236,8 @@ func (a *MatchedFilterLagAggregator) init(maxFilterLag int, d *DelayConfig) {
 	}
 }
 
-// Reset resets the aggregator.
+// Reset clears the histograms. With hardReset it also forgets that a
+// significant candidate was found.
 func (a *MatchedFilterLagAggregator) Reset(hardReset bool) {
 	a.highestPeakAggregator.Reset()
 	if a.hasPreEchoLagAggregator {
@@ -251,7 +248,8 @@ func (a *MatchedFilterLagAggregator) Reset(hardReset bool) {
 	}
 }
 
-// Aggregate aggregates the provided lag estimate (present when ok is true).
+// Aggregate takes the lag estimate of one block, which is present if ok, and
+// returns the aggregated delay, if there is one.
 func (a *MatchedFilterLagAggregator) Aggregate(lagEstimate MatchedFilterLagEstimate, ok bool) (DelayEstimate, bool) {
 	if ok && a.hasPreEchoLagAggregator {
 		a.preEchoLagAggregator.Aggregate(max(0, lagEstimate.PreEchoLag-a.headroom))
@@ -278,11 +276,11 @@ func (a *MatchedFilterLagAggregator) Aggregate(lagEstimate MatchedFilterLagEstim
 	return DelayEstimate{}, false
 }
 
-// ReliableDelayFound returns whether a reliable delay estimate has been found.
+// ReliableDelayFound reports whether a reliable delay estimate was found.
 func (a *MatchedFilterLagAggregator) ReliableDelayFound() bool { return a.significantCandidateFound }
 
-// GetDelayAtHighestPeak returns the delay candidate computed from the highest
-// peak of the matched filters.
+// GetDelayAtHighestPeak returns the delay candidate at the highest peak of
+// the matched filters.
 func (a *MatchedFilterLagAggregator) GetDelayAtHighestPeak() int {
 	return a.highestPeakAggregator.candidate
 }

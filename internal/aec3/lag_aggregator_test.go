@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// The reference aggregators rescan the full histogram on every update, like
-// the C++ std::max_element calls.
+// The reference aggregators scan the whole histogram on every update, as the
+// std::max_element calls of the C++ do.
 
 func refArgMax(v []int) int {
 	best := 0
@@ -99,9 +99,9 @@ func (a *refPreEchoLagAggregator) Aggregate(preEchoLag int) {
 	a.preEchoCandidate = preEchoCandidateBlockSize << a.blockSizeLog2
 }
 
-// lagSequence draws lags that mostly jitter around a few peaks, with bursts
-// of uniformly random lags and peak moves, so that the maximum bin both
-// grows and shrinks and ties are frequent.
+// lagSequence draws lags that jitter around a few peaks, with bursts of
+// random lags and moves of the peaks, so that the maximum bin grows and
+// shrinks and ties are frequent.
 type lagSequence struct {
 	rng    *rand.Rand
 	maxLag int

@@ -17,9 +17,9 @@ func robustConfigLeaves(v reflect.Value, out []reflect.Value) []reflect.Value {
 	return append(out, v)
 }
 
-// TestValidateIdempotent sets random config leaves to random values over
-// their full ranges (NaN and ±Inf included): after Validate the config is
-// valid, so a second Validate reports true and changes nothing.
+// TestValidateIdempotent sets random leaves of the config to random values,
+// NaN and ±Inf included. After Validate the config is valid: a second
+// Validate reports true and changes nothing.
 func TestValidateIdempotent(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	specialF := []float32{0, -0.0, 1, -1, float32(math.NaN()), float32(math.Inf(1)), float32(math.Inf(-1)),
@@ -58,8 +58,8 @@ func TestValidateIdempotent(t *testing.T) {
 	}
 }
 
-// robustNaNFree replaces NaN leaves (which Validate leaves alone in the
-// unvalidated fields) so that DeepEqual compares the rest.
+// robustNaNFree replaces the NaN leaves, which Validate leaves alone in the
+// fields it does not check, so that DeepEqual compares the rest.
 func robustNaNFree(cfg EchoCanceller3Config) EchoCanceller3Config {
 	for _, l := range robustConfigLeaves(reflect.ValueOf(&cfg).Elem(), nil) {
 		if l.Kind() == reflect.Float32 && math.IsNaN(l.Float()) {
@@ -69,9 +69,8 @@ func robustNaNFree(cfg EchoCanceller3Config) EchoCanceller3Config {
 	return cfg
 }
 
-// TestRingOffsetIndexRange checks that OffsetIndex stays inside the ring
-// for any index in the ring and any offset, including offsets far beyond
-// the ring size in both directions.
+// TestRingOffsetIndexRange checks that OffsetIndex stays in the ring for any
+// index in the ring and any offset.
 func TestRingOffsetIndexRange(t *testing.T) {
 	rng := rand.New(rand.NewSource(2))
 	offsets := []int{0, 1, -1, math.MaxInt32, math.MinInt32, 1 << 40, -(1 << 40)}
@@ -87,8 +86,8 @@ func TestRingOffsetIndexRange(t *testing.T) {
 				if p < 0 || p >= size {
 					t.Fatalf("size %d: OffsetIndex(%d, %d) = %d", size, index, o, p)
 				}
-				// Within the range where the C++ int arithmetic is defined
-				// and non-negative, the result equals (size + index + offset) % size.
+				// Where the int arithmetic of the C++ is defined and not
+				// negative, the result is (size + index + offset) % size.
 				if size+index+o >= 0 && p != (size+index+o)%size {
 					t.Fatalf("size %d: OffsetIndex(%d, %d) = %d", size, index, o, p)
 				}
@@ -97,9 +96,9 @@ func TestRingOffsetIndexRange(t *testing.T) {
 	}
 }
 
-// TestSetAudioBufferDelayIntRange checks the int to C int conversion of the
-// external delay: the C++ takes an int, so values outside int32 wrap before
-// the conversion to blocks (rounded toward zero).
+// TestSetAudioBufferDelayIntRange checks the conversion of the external
+// delay to a C int: values outside int32 wrap before the conversion to
+// blocks, which rounds toward zero.
 func TestSetAudioBufferDelayIntRange(t *testing.T) {
 	cfg := DefaultEchoCanceller3Config()
 	cfg.Delay.UseExternalDelayEstimator = true

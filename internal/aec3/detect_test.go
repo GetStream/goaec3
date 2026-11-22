@@ -2,9 +2,9 @@ package aec3
 
 import "testing"
 
-// TestDetectOptimizationForcedLane checks SetForcedLaneForTesting, that a
-// lane the architecture cannot run is refused, and that clearing it
-// restores the detected lane.
+// TestDetectOptimizationForcedLane checks that SetForcedLaneForTesting
+// forces a lane, refuses one the architecture cannot run, and that
+// ClearForcedLaneForTesting restores the detected lane.
 func TestDetectOptimizationForcedLane(t *testing.T) {
 	t.Cleanup(ClearForcedLaneForTesting)
 	native := DetectOptimization()

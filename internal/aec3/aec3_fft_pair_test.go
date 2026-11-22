@@ -11,7 +11,8 @@ func fftPairTestSignal(rng *rand.Rand, v []float32) {
 	}
 }
 
-// The pair transforms are bit-identical to two calls of Aec3Fft.
+// TestAec3FftPairMatchesSingle checks the pair transforms against two calls
+// of Aec3Fft.
 func TestAec3FftPairMatchesSingle(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	var single Aec3Fft
@@ -59,7 +60,8 @@ func TestAec3FftPairMatchesSingle(t *testing.T) {
 	}
 }
 
-// subPredictionErrorPair is two subPredictionError calls.
+// TestSubPredictionErrorPair checks subPredictionErrorPair against two calls
+// of subPredictionError.
 func TestSubPredictionErrorPair(t *testing.T) {
 	rng := rand.New(rand.NewSource(12))
 	var single Aec3Fft
@@ -82,8 +84,8 @@ func TestSubPredictionErrorPair(t *testing.T) {
 	}
 }
 
-// BenchmarkAec3Fft times two transforms with their FftData conversion: two
-// single calls against one pair call.
+// BenchmarkAec3Fft times two transforms with their FftData conversion as two
+// single calls and as one pair call.
 func BenchmarkAec3Fft(b *testing.B) {
 	rng := rand.New(rand.NewSource(14))
 	var x0, x1 [FftLength]float32
@@ -119,10 +121,10 @@ func BenchmarkAec3Fft(b *testing.B) {
 	})
 }
 
-// afirConstrainPair leaves both filters, their constraint positions and the
-// impulse response exactly as the refined filter's
-// constrainAndUpdateImpulseResponse followed by the coarse filter's
-// constrain do, over several rounds and filter sizes.
+// TestAfirConstrainPair checks afirConstrainPair against
+// constrainAndUpdateImpulseResponse of the refined filter followed by
+// constrain of the coarse filter: the filters, their constraint positions
+// and the impulse response agree over several rounds and filter sizes.
 func TestAfirConstrainPair(t *testing.T) {
 	rng := rand.New(rand.NewSource(13))
 	var pair aec3FftPair
@@ -159,13 +161,11 @@ func TestAfirConstrainPair(t *testing.T) {
 	}
 }
 
-// subPredictionError computes the prediction error e = y - s and the scaled
-// filter output s from the frequency-domain filter output S.
+// subPredictionError computes the scaled time-domain filter output s from S
+// and the prediction error e = y - s.
 func subPredictionError(fft *Aec3Fft, S *FftData, y []float32, tmp *[FftLength]float32, e, s *[BlockSize]float32) {
 	fft.Ifft(S, tmp)
 	const scale float32 = 1.0 / FftLengthBy2
-	// e = y - float32(tmp*scale) and s = scale*tmp: the scaled output is
-	// rounded once and shared.
 	var scaled [BlockSize]float32
 	if s == nil {
 		s = &scaled

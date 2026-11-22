@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// statePointers lists the fields of t that hold a pointer of any kind, by
-// path. Fields whose type is in skip are not looked into.
+// statePointers appends to found the paths of the fields of t that hold a
+// pointer of any kind. It does not look into fields whose type is in skip.
 func statePointers(t reflect.Type, path string, skip map[reflect.Type]bool, found *[]string) {
 	if skip[t] {
 		return
@@ -29,8 +29,8 @@ func statePointers(t reflect.Type, path string, skip map[reflect.Type]bool, foun
 
 // TestRenderStatesPointerFree checks that the states of the render delay
 // buffer, its rings and the alignment mixer hold no pointer, and those of
-// the delay controller and its estimator none outside the matched filter
-// and the lag aggregator.
+// the delay controller and its estimator none outside the matched filter and
+// the lag aggregator.
 func TestRenderStatesPointerFree(t *testing.T) {
 	for _, tc := range []struct {
 		state any
@@ -59,8 +59,7 @@ func TestRenderStatesPointerFree(t *testing.T) {
 }
 
 // TestRenderDelayBufferRingsDisjoint checks that the slices a
-// RenderDelayBuffer registers with a binder do not overlap: the binder moves
-// each to its own part of an arena.
+// RenderDelayBuffer registers with a binder do not overlap.
 func TestRenderDelayBufferRingsDisjoint(t *testing.T) {
 	cfg := DefaultEchoCanceller3Config()
 	r := NewRenderDelayBuffer(&cfg, 48000, 2)

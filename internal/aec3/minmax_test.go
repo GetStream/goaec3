@@ -15,7 +15,7 @@ var (
 
 func mmBits(v float32) uint32 { return math.Float32bits(v) }
 
-// TestStdMinMaxSemantics pins the helpers to the C++ expressions:
+// TestStdMinMaxSemantics checks the helpers against the C++ expressions:
 // std::min(a, b) = b < a ? b : a, std::max(a, b) = a < b ? b : a,
 // _mm_max_ps(a, b) = a > b ? a : b, SafeClamp and fabsf.
 func TestStdMinMaxSemantics(t *testing.T) {
@@ -57,8 +57,8 @@ func TestStdMinMaxSemantics(t *testing.T) {
 			t.Errorf("kernClampGeneric idx %d = %v (%#x), want %v", i, x[i], mmBits(x[i]), want)
 		}
 	}
-	// std::max(0.f, NaN) is 0: a NaN tmp in the audibility weighting
-	// zeroes the weighted echo instead of propagating.
+	// std::max(0.f, NaN) is 0: a NaN tmp in the audibility weighting zeroes
+	// the weighted echo.
 	e := []float32{1}
 	w := []float32{-1}
 	kernWeighGeneric(2, mmNaN, e, w)
@@ -67,9 +67,8 @@ func TestStdMinMaxSemantics(t *testing.T) {
 	}
 }
 
-// TestStdMinmaxElement checks the pairwise libc++ std::minmax_element: the
-// first minimum and the last maximum without NaN, and the pairing-dependent
-// result with NaN.
+// TestStdMinmaxElement checks stdMinmaxElement: the first minimum and the
+// last maximum without a NaN, the result of the pairing with one.
 func TestStdMinmaxElement(t *testing.T) {
 	type cs struct {
 		x      []float32
@@ -112,7 +111,7 @@ func TestStdMinmaxElement(t *testing.T) {
 		if mmBits(mn) != mmBits(wmn) || mmBits(mx) != mmBits(wmx) {
 			t.Fatalf("minmax_element(%v) = (%v, %v), want (%v, %v)", x, mn, mx, wmn, wmx)
 		}
-		// The arm64 fast path agrees whenever it answers.
+		// The fast path agrees whenever it answers.
 		if fmn, fmx, ok := kernMinMax(x); ok && (mmBits(fmn) != mmBits(mn) || mmBits(fmx) != mmBits(mx)) {
 			t.Fatalf("kernMinMax(%v) = (%v, %v), want (%v, %v)", x, fmn, fmx, mn, mx)
 		}
@@ -130,10 +129,9 @@ func mmEdgeFft(rng *rand.Rand, d *FftData) {
 	}
 }
 
-// TestAfirFreqRespLaneSemantics drives the 64-bin frequency-response block
-// of every lane (the archsimd kernel where the build has one) with NaN, Inf
-// and signed zeros against the lane references: vmaxq_f32 (NaN propagates),
-// _mm_max_ps/_mm256_max_ps (a > b ? a : b) and the scalar std::max.
+// TestAfirFreqRespLaneSemantics checks the frequency response block of every
+// lane, on NaN, Inf and signed zeros, against the lane references:
+// vmaxq_f32, which propagates a NaN, _mm_max_ps and std::max.
 func TestAfirFreqRespLaneSemantics(t *testing.T) {
 	rng := rand.New(rand.NewSource(21))
 	lanes := []struct {
@@ -191,8 +189,8 @@ func TestAfirFreqRespLaneSemantics(t *testing.T) {
 			kernCheckExact(t, "freqresp partition neon", got[:], want[:])
 		}
 	}
-	// The lane semantics themselves: a NaN in the stored maximum survives
-	// vmaxq_f32 and std::max, and _mm_max_ps replaces it.
+	// A NaN in the stored maximum survives vmaxq_f32 and std::max;
+	// _mm_max_ps replaces it.
 	var h FftData
 	h.Re[3] = 2
 	for _, l := range lanes {

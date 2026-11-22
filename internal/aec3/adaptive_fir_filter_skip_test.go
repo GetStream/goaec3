@@ -7,9 +7,8 @@ import (
 	"testing"
 )
 
-// The zero-gain skip of AdaptiveFirFilter (adaptAndUpdateSizeKnownRender)
-// and the partial frequency response (updateFrequencyResponse) against a
-// filter that always adapts and always computes every response.
+// The zero-gain skip of AdaptiveFirFilter and updateFrequencyResponse
+// against a filter that always adapts and computes every response.
 
 // afirSkipLanes lists the lanes this build can run.
 func afirSkipLanes() []Aec3Optimization {
@@ -26,8 +25,8 @@ func afirSkipLanes() []Aec3Optimization {
 	return lanes
 }
 
-// afirSkipRig drives two filters with the same operations: skip takes the
-// zero-gain skip, plain never does.
+// afirSkipRig drives two filters with the same operations. skip takes the
+// zero-gain skip; plain never does.
 type afirSkipRig struct {
 	opt         Aec3Optimization
 	rng         *rand.Rand
@@ -62,8 +61,7 @@ func newAfirSkipRig(opt Aec3Optimization, seed int64) *afirSkipRig {
 	r.fb = NewFftBuffer(r.size, r.nch)
 	r.sb = NewSpectrumBuffer(r.size, r.nch)
 	r.rb = NewRenderBuffer(NewBlockBuffer(r.size, 1, r.nch), r.sb, r.fb)
-	// The rig keeps the spectra in step with the FFTs, as RenderDelayBuffer
-	// does.
+	// The spectra stay in step with the FFTs, as in a RenderDelayBuffer.
 	r.rb.spectraMatchFfts = true
 	const maxSize = 13
 	initial := 6 + rng.Intn(maxSize-5)
@@ -81,7 +79,7 @@ func afirSkipZero(rng *rand.Rand) float32 {
 	return float32(math.Copysign(0, float64(rng.Intn(2))-0.5))
 }
 
-// insertRender moves the ring one slot and writes a render FFT and its
+// insertRender moves the ring by one slot and writes a render FFT and its
 // spectrum.
 func (r *afirSkipRig) insertRender() {
 	rng := r.rng
@@ -280,10 +278,10 @@ func afirSkipRun(opt Aec3Optimization, seed int64, steps int, tamper func(stage 
 	return "", st
 }
 
-// TestAfirZeroGainSkipStateMatchesNoSkip requires the coefficients, the
-// frequency responses and the impulse responses of the two filters to agree
-// bit for bit after every operation, in every lane, over runs that take the
-// skip with and without -0 coefficients, meet non-finite render values under
+// TestAfirZeroGainSkipStateMatchesNoSkip checks that the coefficients, the
+// frequency responses and the impulse responses of the two filters agree bit
+// for bit after every operation, in every lane. The runs take the skip with
+// and without -0 coefficients, meet render values that are not finite under
 // a zero gain, and update the frequency response in part.
 func TestAfirZeroGainSkipStateMatchesNoSkip(t *testing.T) {
 	steps := 3000
@@ -313,10 +311,9 @@ func TestAfirZeroGainSkipStateMatchesNoSkip(t *testing.T) {
 	}
 }
 
-// TestAfirZeroGainSkipMutationsAreDetected is the mutation check of the
-// test above: a skip that ignores one of the facts it rests on, or a
-// frequency response update that misses a write, makes the two filters
-// differ.
+// TestAfirZeroGainSkipMutationsAreDetected checks the test above: a skip
+// that ignores one of its conditions, or a frequency response update that
+// misses a write, makes the two filters differ.
 func TestAfirZeroGainSkipMutationsAreDetected(t *testing.T) {
 	mutations := []struct {
 		name   string
@@ -353,10 +350,10 @@ func TestAfirZeroGainSkipMutationsAreDetected(t *testing.T) {
 	}
 }
 
-// TestAfirZeroGainSkipNeedsMatchingSpectra checks the conditions under
-// which the skip is not taken: a render buffer whose spectra are not known
-// to match its FFTs, a sum over fewer partitions than the filter has, and a
-// filter beyond the tracked size.
+// TestAfirZeroGainSkipNeedsMatchingSpectra checks that the skip is not taken
+// with a render buffer whose spectra are not known to match its FFTs, with a
+// sum over fewer partitions than the filter has, and with a filter beyond
+// the tracked size.
 func TestAfirZeroGainSkipNeedsMatchingSpectra(t *testing.T) {
 	rng := rand.New(rand.NewSource(5))
 	rb := afirTestRenderBuffer(rng, 20, 1, 3)
@@ -450,9 +447,9 @@ func afirSkipProcessors(cfg *EchoCanceller3Config, opt Aec3Optimization, rate, n
 }
 
 // TestEc3ZeroGainSkipStateMatchesNoSkip runs two block processors that
-// differ only in the skip over far-end speech-like noise, digital silence,
-// quiet noise, a silent and a saturated capture, and requires the same
-// output and the same subtractor state after every block.
+// differ only in the skip and checks that the output and the subtractor
+// state agree after every block. The signal has speech-like noise, digital
+// silence, quiet noise, and a silent and a saturated capture.
 func TestEc3ZeroGainSkipStateMatchesNoSkip(t *testing.T) {
 	type segment struct {
 		blocks                   int

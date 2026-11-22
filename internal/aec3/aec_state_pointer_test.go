@@ -6,8 +6,7 @@ import (
 )
 
 // pointerPath returns the path of the first field of t that the garbage
-// collector reads (a pointer, slice, map, interface, string, func or chan),
-// and "" when t has none.
+// collector reads, or "" if t has none.
 func pointerPath(t reflect.Type, path string) string {
 	switch t.Kind() {
 	case reflect.Pointer, reflect.UnsafePointer, reflect.Slice, reflect.Map, reflect.Interface,
@@ -26,8 +25,8 @@ func pointerPath(t reflect.Type, path string) string {
 	return ""
 }
 
-// TestAecStatePointerFree checks that the state of an AecState and of its
-// estimators and analyzers holds nothing the garbage collector reads.
+// TestAecStatePointerFree checks that the state of an AecState holds nothing
+// the garbage collector reads.
 func TestAecStatePointerFree(t *testing.T) {
 	for _, typ := range []reflect.Type{
 		reflect.TypeOf(aecStateState{}),
@@ -45,8 +44,7 @@ func TestAecStatePointerFree(t *testing.T) {
 }
 
 // TestAecStateBoundView checks that an AecState bound to the arenas of a
-// canceller behaves as one that stands alone: the views of a core are bound
-// anew and compared with the state of the AecState that init set up.
+// canceller behaves as one that stands alone.
 func TestAecStateBoundView(t *testing.T) {
 	for _, numCh := range []int{1, 2, 3} {
 		for _, sections := range []int{1, 2} {
@@ -65,8 +63,7 @@ func TestAecStateBoundView(t *testing.T) {
 				t.Errorf("%d channels: reverb model storage of %d samples, want %d", numCh, got, want)
 			}
 			if n := len(a.filterAnalyzer.storage); n > 0 && len(a.reverbModelEstimator.storage) > 0 {
-				// The two storages are disjoint: a write to the end of one
-				// does not show in the other.
+				// The two storages are disjoint.
 				a.filterAnalyzer.storage[n-1] = 1
 				if a.reverbModelEstimator.storage[0] != 0 {
 					t.Errorf("%d channels: the storages of the analyzers overlap", numCh)
@@ -83,7 +80,7 @@ func TestAecStateBoundView(t *testing.T) {
 				t.Errorf("%d channels, %d sections: the pointers of the bound view differ from those of init", numCh, sections)
 			}
 			if !reflect.DeepEqual(*a.aecStateState, *alone.aecStateState) {
-				// The spans differ by construction; compare without them.
+				// The spans differ by construction.
 				x, y := *a.aecStateState, *alone.aecStateState
 				x.filterAnalyzer.storageSpan, y.filterAnalyzer.storageSpan = span{}, span{}
 				x.reverbModelEstimator.storageSpan, y.reverbModelEstimator.storageSpan = span{}, span{}

@@ -20,19 +20,19 @@ import (
 	"unicode/utf8"
 )
 
-// The tests of this file read the compiler's assembly listing of the amd64
-// GOEXPERIMENT=simd build of the signal-path packages (cross-compiled, so
-// they run on every host) and prove two properties of the machine code that
-// no test on an AVX2 machine can observe:
+// The tests of this file read the compiler listing of the amd64
+// GOEXPERIMENT=simd build of the signal-path packages and prove two
+// properties of the machine code. They are cross-compiled and run on every
+// host.
 //
-//   - TestSimdInstructionsGated: every vector instruction runs only when the
-//     CPU feature it needs was tested. A CPU with AVX but not AVX2 faults on
-//     an AVX2 instruction, and Go 1.27 saves only the low 128 bits of the Y
-//     registers at an asynchronous preemption on such a CPU, so 256-bit code
-//     there computes wrong values without faulting.
-//   - TestNoLegacySSEWithDirtyUpperState: no legacy-SSE (non-VEX) instruction
-//     and no call runs between a 256-bit instruction and VZEROUPPER, which
-//     costs a state transition per instruction on Intel.
+// TestSimdInstructionsGated: a vector instruction runs only after a test of
+// the CPU feature it needs. A CPU with AVX and no AVX2 faults on an AVX2
+// instruction, and Go 1.27 saves only the low halves of the Y registers at
+// an asynchronous preemption on such a CPU, so 256-bit code computes wrong
+// values there without faulting.
+//
+// TestNoLegacySSEWithDirtyUpperState: no legacy-SSE instruction and no call
+// runs between a 256-bit instruction and VZEROUPPER.
 
 // simdFeat is a set of CPU features.
 type simdFeat uint8
@@ -148,9 +148,9 @@ func parseAsmListing(out string) *asmListing {
 		}
 		if data != "" {
 			if m := asmRelRe.FindStringSubmatch(line); m != nil {
-				// An unexported method in a type's method table cannot be
-				// called through it: R_METHODOFF entries are reachable only
-				// by an interface (an R_ADDR in its itab) or by name.
+				// An unexported method in the method table of a type cannot
+				// be called through it: R_METHODOFF entries are reachable
+				// only by an interface or by name.
 				if m[1] == "R_METHODOFF" {
 					continue
 				}
@@ -180,9 +180,9 @@ func (f *asmFunc) at(pc int) int {
 	return sort.Search(len(f.insts), func(k int) bool { return f.insts[k].pc >= pc })
 }
 
-// each calls fn for every instruction j that may run after insts[i]: with
-// k = 0 for the target of a branch, k = 1 for the next instruction and
-// k = 2 for the targets of a jump table.
+// each calls fn for every instruction j that may run after insts[i], with k
+// = 0 for the target of a branch, k = 1 for the next instruction and k = 2
+// for the targets of a jump table.
 func (f *asmFunc) each(i int, fn func(k, j int)) error {
 	target, next, err := f.succ(i)
 	if err != nil {
@@ -202,12 +202,12 @@ func (f *asmFunc) each(i int, fn func(k, j int)) error {
 }
 
 // asmNoReturnRe matches the functions that do not return to their caller:
-// the runtime's panics, and the testing methods that end the test.
+// the panics of the runtime and the testing methods that end the test.
 var asmNoReturnRe = regexp.MustCompile(`^runtime\.(panic|goPanic|gopanic|throw|fatal)|` +
 	`^testing\.\(\*(common|T|B)\)\.(Skip|Skipf|SkipNow|Fatal|Fatalf|FailNow)$`)
 
-// callee returns the symbol an instruction calls (also as a tail call),
-// "?" for an indirect call and "" for other instructions.
+// callee returns the symbol an instruction calls or jumps to as a tail call,
+// "?" for an indirect call and "" for any other instruction.
 func (in *asmInst) callee() string {
 	if in.op != "CALL" && in.op != "JMP" {
 		return ""
@@ -225,8 +225,8 @@ func (in *asmInst) callee() string {
 }
 
 // succ returns the indices of the instructions that may run after insts[i]:
-// the branch target (-1 if none, -2 for the targets of the function's jump
-// tables) and the next instruction (-1 if none).
+// the branch target, -1 if none and -2 for the targets of the jump tables of
+// the function, and the next instruction, -1 if none.
 func (f *asmFunc) succ(i int) (target, next int, err error) {
 	in := &f.insts[i]
 	target, next = -1, i+1
@@ -264,9 +264,9 @@ func (f *asmFunc) succ(i int) (target, next int, err error) {
 	return -1, next, nil
 }
 
-// simdVexOps classifies the VEX mnemonics the kernels compile to by the
-// feature their 128-bit form needs. A mnemonic that is not listed fails the
-// test: classify it from the instruction reference before adding it.
+// simdVexOps maps the VEX mnemonics the kernels compile to onto the feature
+// their 128-bit form needs. A mnemonic that is not listed fails the test:
+// classify it from the instruction reference.
 var simdVexOps = map[string]simdFeat{
 	"VADDPS": featAVX, "VSUBPS": featAVX, "VMULPS": featAVX, "VDIVPS": featAVX,
 	"VSQRTPS": featAVX, "VMINPS": featAVX, "VMAXPS": featAVX, "VCMPPS": featAVX,
@@ -286,9 +286,9 @@ var simdVexOps = map[string]simdFeat{
 	"VFMADD213PS": featAVX | featFMA,
 }
 
-// needs returns the CPU features an instruction needs. Every instruction on
-// a Y register counts as AVX2, whatever its own requirement: without AVX2
-// the runtime does not preserve the upper halves across a preemption.
+// needs returns the CPU features an instruction needs. An instruction on a Y
+// register needs AVX2 whatever its own requirement: without AVX2 the runtime
+// does not preserve the upper halves across a preemption.
 func (in *asmInst) needs() (simdFeat, error) {
 	args := in.regs
 	wide := asmWideRe.FindString(args)
@@ -314,10 +314,9 @@ func (in *asmInst) needs() (simdFeat, error) {
 	return f, nil
 }
 
-// simdGates finds the package-level bool variables of the amd64 simd build
-// whose initializer is a conjunction of archsimd.X86 feature tests and of
-// other such variables, and returns the features each one implies, keyed by
-// symbol name.
+// simdGates returns the features implied by each package-level bool variable
+// of the amd64 simd build whose initializer is a conjunction of archsimd.X86
+// feature tests and of other such variables, by symbol name.
 func simdGates(t *testing.T, root, module string) map[string]simdFeat {
 	gates := map[string]simdFeat{}
 	tags := func(tag string) bool {
@@ -449,9 +448,9 @@ var simdGuard = sync.OnceValue(func() *simdGuardData {
 	return d
 })
 
-// simdGuardBuild returns the compiler's listing of the packages, with their
-// tests if tests is set: a test that calls a kernel directly is held to the
-// same rules as the code that dispatches to it.
+// simdGuardBuild returns the compiler listing of the packages, with their
+// tests if tests is set: a test that calls a kernel directly follows the
+// rules of the code that dispatches to it.
 func simdGuardBuild(root, tags string, tests bool) (string, error) {
 	args := []string{"build", "-tags", tags, "-gcflags=-S"}
 	if tests {
@@ -499,7 +498,7 @@ func (d *simdGuardData) short(sym string) string {
 
 // isRoot reports whether code outside the listing can call a function
 // without passing an instruction of the listing: exported functions and
-// methods, package initializers, and functions whose address is stored in
+// methods, package initializers and functions whose address is stored in
 // data. Closures are reached through their parent.
 func (d *simdGuardData) isRoot(name string) (bool, string) {
 	for _, from := range d.listing.dataRefs[name] {
@@ -532,18 +531,17 @@ func (d *simdGuardData) isRoot(name string) (bool, string) {
 	return false, ""
 }
 
-// TestSimdInstructionsGated proves that every vector instruction of the
-// amd64 simd build runs only after a test of the CPU feature it needs.
+// TestSimdInstructionsGated proves that a vector instruction of the amd64
+// simd build runs only after a test of the CPU feature it needs.
 //
-// The tests it recognizes are branches on the package-level variables that
-// simdGates derives from the sources (kernHasAVX2, dlyUseFma, ...): a
-// CMPB var(SB), $0 followed by a conditional jump has one edge on which the
-// variable is true. An instruction is gated for a feature when every path
-// from the function entry to it takes such an edge, that is, when it is
-// unreachable once those edges are removed. What a function still needs at
-// its entry moves to the instructions that call it or take its address, and
-// nothing may be left at a function that code outside the listing can reach.
-// Unrecognized patterns count as ungated, so the test fails closed.
+// A test is a branch on a package-level variable that simdGates finds
+// (kernHasAVX2, dlyUseFma, ...): a CMPB var(SB), $0 followed by a
+// conditional jump has one edge on which the variable is true. An
+// instruction is gated for a feature when it is unreachable from the entry
+// of its function once those edges are removed. What a function still needs
+// at its entry moves to the instructions that call it or take its address,
+// and a function that code outside the listing can reach must need nothing.
+// A pattern the test does not recognize counts as ungated.
 func TestSimdInstructionsGated(t *testing.T) {
 	d := simdGuardSetup(t)
 	l := d.listing
@@ -577,9 +575,9 @@ func TestSimdInstructionsGated(t *testing.T) {
 						continue
 					}
 					// A store to a feature variable outside the package
-					// initializer would make the analysis unsound.
-					// (Tests switch kernels off, and on where an emulator
-					// executes what it does not report.)
+					// initializer would make the analysis unsound. Tests
+					// store to them: they switch kernels off, and on where
+					// an emulator executes what it does not report.
 					if strings.HasSuffix(in.args, s[0]) && !strings.HasSuffix(name, ".init") &&
 						!strings.Contains(in.pos, "_test.go:") {
 						t.Errorf("%s: %s: store to a feature variable", d.short(name), in)
@@ -706,7 +704,7 @@ func TestSimdInstructionsGated(t *testing.T) {
 	t.Logf("%d functions, %d feature variables, %d feature branches, %d AVX2 instructions, %d functions that rely on their callers",
 		len(l.names), len(d.gates), nGateEdges, nWide, nKernels)
 
-	// The purego build of the experiment has no vector instructions at all.
+	// The purego build of the experiment has no vector instructions.
 	out, err := simdGuardBuild(d.root, "purego", false)
 	if err != nil {
 		t.Fatal(err)
@@ -728,16 +726,14 @@ func TestSimdInstructionsGated(t *testing.T) {
 // TestNoLegacySSEWithDirtyUpperState proves that the amd64 simd build runs
 // no legacy-SSE instruction while the upper halves of the Y registers are
 // dirty. Go's scalar float code, its stack zeroing and its moves through X
-// registers are legacy-SSE encoded (golang/go#80835), and each such
-// instruction pays a state transition on Intel when a 256-bit instruction
-// ran before it without a VZEROUPPER (archsimd.ClearAVXUpperBits) between.
+// registers are legacy-SSE encoded (golang/go#80835), which is slow on Intel
+// after a 256-bit instruction without a VZEROUPPER.
 //
 // The state is followed along every path of every function: an instruction
 // on a Y register makes it dirty, VZEROUPPER makes it clean. A call passes
-// its state to the callee and continues with the state the callee returns
-// in; a call out of the listing (the runtime, an indirect call) counts as
-// legacy code. Functions that code outside the listing can reach start
-// clean and must return clean.
+// its state to the callee and continues in the state the callee returns in.
+// A call out of the listing counts as legacy code. A function that code
+// outside the listing can reach starts clean and must return clean.
 func TestNoLegacySSEWithDirtyUpperState(t *testing.T) {
 	d := simdGuardSetup(t)
 	l := d.listing
@@ -798,7 +794,7 @@ func TestNoLegacySSEWithDirtyUpperState(t *testing.T) {
 					switch {
 					case strings.HasPrefix(callee, "runtime.morestack") || inst.noReturn:
 						// The stack check runs before any vector
-						// instruction; a failed bounds check does not
+						// instruction, and a failed bounds check does not
 						// return.
 					case known:
 						c := cs[s>>1]

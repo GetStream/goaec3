@@ -16,9 +16,9 @@ func dlyFillBlock(rng *rand.Rand, b *Block, amp float64) {
 	}
 }
 
-// TestDlyDelayPathAllocationFree locks the steady-state render/delay path
-// (RenderDelayBuffer, RenderDelayController and with them MatchedFilter,
-// EchoPathDelayEstimator and the decimators) to zero allocations.
+// TestDlyDelayPathAllocationFree checks that the render and delay path does
+// not allocate: RenderDelayBuffer, RenderDelayController and with them
+// MatchedFilter, EchoPathDelayEstimator and the decimators.
 func TestDlyDelayPathAllocationFree(t *testing.T) {
 	for _, preEcho := range []bool{false, true} {
 		cfg := DefaultEchoCanceller3Config()

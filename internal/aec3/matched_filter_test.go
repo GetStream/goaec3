@@ -27,9 +27,9 @@ func dlyRequireBits(t *testing.T, what string, got, want []float32) {
 	}
 }
 
-// dlyLiteralDot accumulates a*b lane by lane over len(a)/g groups, as the
-// lane with group size g does (fused for 16): the plain statement of what
-// the Dot (a = h, b = x) and Sq (a = b = x) kernels compute.
+// dlyLiteralDot accumulates a*b lane by lane over len(a)/g groups as the
+// lane with group size g does, fused for g = 16. It states what the Dot (a =
+// h, b = x) and the Sq (a = b = x) kernels compute.
 func dlyLiteralDot(g int, a, b []float32, acc []float32) {
 	for grp := 0; grp < len(a)/g; grp++ {
 		for l := 0; l < g; l++ {
@@ -51,14 +51,14 @@ func dlyRandAcc(rng *rand.Rand) [16]float32 {
 	return a
 }
 
-// TestDlyMatchedFilterKernelsMatchReference checks that the kernels the
-// build selects (archsimd or reference) are bit-identical to the pure-Go
-// lane references, and the references to the literal lane arithmetic.
+// TestDlyMatchedFilterKernelsMatchReference checks the kernels of the build
+// against the pure-Go lane references, and the references against the
+// literal lane arithmetic.
 func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(2))
 	for trial := 0; trial < 4000; trial++ {
-		// Every residue modulo the unroll widths, short lengths below one
-		// unrolled iteration, and x longer than h.
+		// Every residue modulo the unroll widths, lengths below one unrolled
+		// iteration, and an x longer than h.
 		n := rng.Intn(80)
 		if trial%3 == 0 {
 			n = rng.Intn(700)
@@ -78,8 +78,8 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 		y := float32(rng.NormFloat64() * 1000)
 		alpha := float32(rng.NormFloat64() * 1e-4)
 		if trial%9 == 1 {
-			// Sums of few bits below 2^-126: the software fma takes its
-			// per-element path from the first group on.
+			// Sums of few bits below 2^-126: the software fma leaves for
+			// fmaf in the first group.
 			for k := range x {
 				x[k] = float32(rng.Intn(9)-4) * 0x1p-70
 			}
@@ -364,11 +364,10 @@ func TestDlyMatchedFilterKernelsMatchReference(t *testing.T) {
 	}
 }
 
-// TestFmafTieMatchesFmaf checks the boundary test of the AVX2 lane
-// references: whenever fmafTie does not flag a sum, the rounded sum is
-// fmaf's result, on operands built to land on and next to float32 rounding
-// boundaries (normal and subnormal midpoints, the overflow threshold) and on
-// random ones.
+// TestFmafTieMatchesFmaf checks that the rounded sum is the result of fmaf
+// wherever fmafTie does not hold, on random operands and on operands at and
+// next to float32 rounding boundaries: normal and subnormal midpoints and
+// the overflow threshold.
 func TestFmafTieMatchesFmaf(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	check := func(a, b, c float32) {
@@ -380,9 +379,8 @@ func TestFmafTieMatchesFmaf(t *testing.T) {
 			t.Fatalf("fmafTie(%v, %v, %v) = %v unflagged, fmaf = %v", a, b, c, r, want)
 		}
 		if fmafHard(s) && !suspect {
-			// Unflagged sums that fmaf sends to its slow path are tiny sums
-			// that are not boundaries; the slow path agrees with the rounded
-			// sum there (checked above).
+			// A sum that only fmafHard flags is tiny and not a boundary:
+			// fmafSlow agrees with the rounded sum there.
 			if m := math.Abs(s); !(m > 0 && m < 0x1p-126) {
 				t.Fatalf("fmafTie(%v, %v, %v) misses a boundary pattern", a, b, c)
 			}
@@ -409,8 +407,8 @@ func TestFmafTieMatchesFmaf(t *testing.T) {
 		a, b, c := randF(), randF(), randF()
 		check(a, b, c)
 		if i%4 == 0 {
-			// a*b + c exactly on a midpoint between c and its neighbor, or
-			// off it by the last bits of the product.
+			// a*b + c on the midpoint between c and its neighbor, or off it
+			// by the last bits of the product.
 			u := math.Float32frombits(math.Float32bits(c)+1) - c
 			half := u / 2
 			if half != 0 && half == half {
@@ -431,9 +429,9 @@ func TestFmafTieMatchesFmaf(t *testing.T) {
 	}
 }
 
-// TestDlyMatchedFilterCoreLanesDiffer guards against lanes silently
-// collapsing into one another: the reduction orders must give different
-// results on generic data.
+// TestDlyMatchedFilterCoreLanesDiffer checks that the lanes have not
+// collapsed into one: their reduction orders give different results on
+// generic data.
 func TestDlyMatchedFilterCoreLanesDiffer(t *testing.T) {
 	rng := rand.New(rand.NewSource(3))
 	const hSize = 512
@@ -496,14 +494,15 @@ func BenchmarkMatchedFilterCore(b *testing.B) {
 	}
 }
 
-// TestDlyAvx2RefFlaggedSums runs the AVX2 lane references on data with
-// float32 rounding ties at random places, so that their loops leave for the
-// per-element functions from every lane and pass, after any number of
-// groups: (2^12+1)^2 = 2^24 + 2^13 + 1 has 25 significant bits, and so has
-// its sum with a multiple of 2^14 (an exact tie, which rounds to even); its
-// sum with 2^-40 lies above the tie, which is all its float64 rounding
-// keeps, and rounds up. The results are compared with the literal
-// per-element fmaf loops.
+// TestDlyAvx2RefFlaggedSums checks the AVX2 lane references against fmaf
+// loops on data with float32 rounding ties at random places, so that their
+// loops leave for the From functions in every lane and pass, after any
+// number of groups.
+//
+// (2^12+1)^2 = 2^24 + 2^13 + 1 has 25 significant bits, and so has its sum
+// with a multiple of 2^14: a tie, which rounds to even. Its sum with 2^-40
+// lies above the tie, which is all the float64 sum keeps of it, and rounds
+// up.
 func TestDlyAvx2RefFlaggedSums(t *testing.T) {
 	rng := rand.New(rand.NewSource(23))
 	const tie = 4097
@@ -546,8 +545,9 @@ func TestDlyAvx2RefFlaggedSums(t *testing.T) {
 				xa[k] = tie
 				h[k] = addend()
 			} else {
-				// A tie in the accumulation needs the lane's accumulator on
-				// the product's grid: zero the lane's earlier elements.
+				// A tie in the accumulation needs the accumulator of the
+				// lane on the grid of the product: zero the earlier elements
+				// of the lane.
 				for j := k % 16; j < k; j += 16 {
 					h[j] = 0
 				}
@@ -577,7 +577,7 @@ func TestDlyAvx2RefFlaggedSums(t *testing.T) {
 		dlyDotSAvx2Wide(h, xw, &got)
 		dlyRequireBits(t, "dot wide", got[:], want[:])
 
-		// Squares: ties at the tie elements when their lane's sum is on the
+		// Squares: a tie element is a tie when the sum of its lane is on the
 		// grid.
 		got, want = acc0, acc0
 		dlySqAvx2Ref(x, &got)
@@ -617,7 +617,7 @@ func TestDlyAvx2RefFlaggedSums(t *testing.T) {
 		dlyRequireBits(t, "axpyDot wide", got[:], want[:])
 
 		// Accumulated error, with and without the update: the error of a
-		// group is a tie when its sum is zero and y is the tie's root.
+		// group is a tie when its sum is zero and y is the root of the tie.
 		y := float32(rng.NormFloat64() * 1000)
 		if trial%3 == 0 {
 			y = tie
@@ -663,10 +663,10 @@ func TestDlyAvx2RefFlaggedSums(t *testing.T) {
 	}
 }
 
-// TestDlyMatchedFilterWideUpdateMatchesNarrow drives two AVX2-lane matched
-// filters side by side, one with room for the widened render samples and
-// one without, and compares their state after every block. The builds that
-// do not widen the samples run the same path twice.
+// TestDlyMatchedFilterWideUpdateMatchesNarrow checks that an AVX2-lane
+// MatchedFilter with work space for the widened render samples and one
+// without have the same state after every block. A build that does not widen
+// runs the same path twice.
 func TestDlyMatchedFilterWideUpdateMatchesNarrow(t *testing.T) {
 	numBlocks := 1500
 	if testing.Short() {

@@ -24,8 +24,8 @@ func kernEdgeVec(rng *rand.Rand, n int) []float32 {
 	return v
 }
 
-// kernCheckExact is kernCheck without the NaN exemption on signs: NaN
-// positions must agree, other elements bit for bit.
+// kernCheckExact is kernCheck with NaNs compared by position only and every
+// other element bit for bit.
 func kernCheckExact(t *testing.T, name string, got, want []float32) {
 	t.Helper()
 	kernCheck(t, name, got, want)
@@ -119,8 +119,8 @@ func TestKernBinsElementwise(t *testing.T) {
 			kernScale(got, a, got)
 			kernScaleGeneric(want, a, want)
 			kernCheckExact(t, "Scale in place", got, want)
-			// In place, as the call sites use the helpers: the result
-			// replaces the first, the second or the only operand.
+			// In place, as the callers use the helpers: the result replaces
+			// the first, the second or the only operand.
 			inPlace := func(name string, f, g func(v, w []float32)) {
 				copy(got, x)
 				copy(want, x)
@@ -428,10 +428,10 @@ func TestKernBinsSites(t *testing.T) {
 	}
 }
 
-// The largest magnitude taken from bit patterns against the comparisons it
-// replaces: std::minmax_element with fabs (RenderSignalAnalyzer) and the
-// max/min loops of SubtractorOutput::ComputeMetrics, on blocks with zeros of
-// both signs, equal magnitudes of both signs, infinities and NaN.
+// TestKernMaxAbs checks the largest magnitude taken from bit patterns
+// against the comparisons it replaces: std::minmax_element with fabs and the
+// loops of SubtractorOutput::ComputeMetrics. The blocks have zeros and equal
+// magnitudes of both signs, infinities and NaN.
 func TestKernMaxAbs(t *testing.T) {
 	rng := rand.New(rand.NewSource(91))
 	negZero := float32(math.Copysign(0, -1))
@@ -461,8 +461,8 @@ func TestKernMaxAbs(t *testing.T) {
 			x[rng.Intn(n)] = [4]float32{float32(math.NaN()), float32(math.Inf(1)), float32(math.Inf(-1)), negZero}[rng.Intn(4)]
 		}
 		if kernMinMaxFast {
-			// The build's kernMinMax has its own tests; here the pure-Go
-			// path runs through its parts.
+			// kernMinMax has its own tests. Here the pure-Go path runs
+			// through its parts.
 			m := kernMaxAbsBits(x)
 			if m <= kernInfBits {
 				if got, want := math.Float32frombits(m), afirMaxAbsMinMaxRef(x); math.Float32bits(got) != math.Float32bits(want) {

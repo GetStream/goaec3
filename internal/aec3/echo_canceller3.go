@@ -646,6 +646,7 @@ func (e *EchoCanceller3) ZeroGainSkipsForTesting() uint64 {
 	return e.blockProcessor.ZeroGainSkipsForTesting()
 }
 
+// SetBlockProcessorForTesting replaces the block processor of e.
 func (e *EchoCanceller3) SetBlockProcessorForTesting(blockProcessor *BlockProcessor) {
 	e.blockProcessorForTesting = blockProcessor
 }

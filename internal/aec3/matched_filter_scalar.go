@@ -2,39 +2,37 @@ package aec3
 
 // The scalar lane, several filters in step.
 //
-// MatchedFilterCore accumulates h*x of a capture sample in one chain: every
-// addition waits for the one before it, so a filter costs one floating-point
-// addition latency per coefficient however little else the CPU has to do.
-// The filters of a MatchedFilter share no state, so their chains can run
-// side by side. dlyCoreScalar runs the per-sample loop of MatchedFilterCore
-// for up to dlyScalarMax filters in step and computes the same values with
-// the work arranged differently:
+// MatchedFilterCore accumulates h*x of a capture sample in one chain, so a
+// filter costs the latency of an addition per coefficient. The filters of a
+// MatchedFilter share no state, and their chains run side by side:
+// dlyCoreScalar runs the sample loop of MatchedFilterCore for up to
+// dlyScalarMax filters in step. It computes the same values in another
+// arrangement.
 //
-//   - x*x and h*x are separate accumulations. The x*x sum of a sample is a
-//     chain over its window from +0, and the windows of consecutive samples
-//     differ by one element at each end: the chains of eight samples run
-//     side by side over one table of squares.
-//   - The filter update of a sample is deferred into the next sample's h*x
-//     accumulation (or a final pass), which updates each element of h right
-//     before reading it. Every element sees the same operations as with a
-//     separate update pass.
-//   - The accumulated error of the filter that computes it is the squared
-//     difference of y and the running h*x sum after every fourth
-//     coefficient. The h*x kernels record the running sum of their first
-//     filter, and a pass over the record adds the squares.
+// x*x and h*x are separate accumulations. The x*x sum of a sample is a chain
+// over its window from +0; the chains of eight samples run side by side over
+// one table of squares.
+//
+// The update of a sample is deferred into the h*x accumulation of the next
+// one, or a final pass, which updates each element of h right before reading
+// it. An element sees the operations of a separate update pass.
+//
+// The accumulated error is the squared difference of y and the running h*x
+// sum after every fourth coefficient. The h*x kernels record the running sum
+// of their first filter, and a pass over the record adds the squares.
 
 // dlyScalarMax is the number of filters dlyCoreScalar runs in step: three
-// chains with their loads and products fill the latency of an addition.
+// chains fill the latency of an addition.
 const dlyScalarMax = 3
 
-// dlyScalarFilter is one filter inside a dlyCoreScalar call.
+// dlyScalarFilter is one filter in a call of dlyCoreScalar.
 type dlyScalarFilter struct {
 	h        []float32
 	xStart   int // start index of the current sample
 	errorSum float32
 	updated  bool
-	// accErr, when not nil, receives the accumulated error
-	// (len(h)/4 values, zeroed by the caller).
+	// accErr receives the accumulated error, len(h)/4 values that the caller
+	// zeroed, or is nil.
 	accErr []float32
 
 	// The update of the previous sample, not yet applied.
@@ -49,9 +47,9 @@ type dlyScalarFilter struct {
 }
 
 // dlyScalarStream is the work of one filter in a kernel call: the stretch of
-// h, the render samples xb it is read against, the render samples xa of the
-// update with alpha that is applied first (the update kernels), and the
-// running h*x sum.
+// h, the render samples xb it is read against, the render samples xa and the
+// alpha of the update that an update kernel applies first, and the running
+// h*x sum.
 type dlyScalarStream struct {
 	h, xa, xb []float32
 	alpha, s  float32
@@ -81,14 +79,14 @@ func dlyScalarX2(sq []float32, n int, out *[8]float32) {
 	*out = [8]float32{q0, q1, q2, q3, q4, q5, q6, q7}
 }
 
-// dlyScalarX2Run stores in f.x2[j], for j < r, the x*x sum of the sample j
-// places after the current one: the squares of its window
-// x[(f.xStart-j+k) mod len(x)], k < len(f.h), added in order from +0.
-// len(sq) >= len(f.h)+dlyX2Run.
+// x2Run stores in f.x2[j], for j < r, the x*x sum of the sample j places
+// after the current one: the squares of its window x[(f.xStart-j+k) mod
+// len(x)], k < len(f.h), added in order from +0. len(sq) >=
+// len(f.h)+dlyX2Run.
 func (f *dlyScalarFilter) x2Run(x, sq []float32, r int) {
 	hSize, xSize := len(f.h), len(x)
 	// sq[i] is the square of the sample i places after the start of the last
-	// window; the window of sample j starts at sq[r-1-j].
+	// window. The window of sample j starts at sq[r-1-j].
 	lo := f.xStart - (r - 1)
 	if lo < 0 {
 		lo += xSize
@@ -114,7 +112,7 @@ func (f *dlyScalarFilter) x2Run(x, sq []float32, r int) {
 
 // dlyScalarDots computes the h*x sums of the current sample for the filters
 // fs[i] with sel[i] set, which all have a pending update (upd) or all have
-// none. The running sum of the first of them is recorded in pre.
+// none. It records the running sum of the first of them in pre.
 func dlyScalarDots(fs []dlyScalarFilter, sel *[dlyScalarMax]bool, upd bool, x, pre []float32) {
 	var st [dlyScalarMax]dlyScalarStream
 	var idx [dlyScalarMax]int
@@ -187,12 +185,14 @@ func dlyScalarDots(fs []dlyScalarFilter, sel *[dlyScalarMax]bool, upd bool, x, p
 	}
 }
 
-// dlyCoreScalar runs the per-sample loop of MatchedFilterCore for the
-// filters fs (at most dlyScalarMax, of the same length, which is at most
-// len(x)-dlyX2Run) in step. Only fs[0] may compute the accumulated error.
-// len(scratch) >= dlyScalarScratch(len(fs[0].h)). With skipIdle, a filter
-// without accumulated error does not compute the h*x sums and the error sum
-// of a run of samples none of which updates it (idleRuns counts them).
+// dlyCoreScalar runs the sample loop of MatchedFilterCore for the filters fs
+// in step. There are at most dlyScalarMax of them, of one length, which is
+// at most len(x)-dlyX2Run. Only fs[0] may compute the accumulated error.
+// len(scratch) >= dlyScalarScratch(len(fs[0].h)).
+//
+// With skipIdle, a filter without accumulated error computes neither the h*x
+// sums nor the error sum of a run of samples that do not update it. idleRuns
+// counts such runs.
 func dlyCoreScalar(fs []dlyScalarFilter, x2SumThreshold, smoothing float32, x, y, scratch []float32,
 	skipIdle bool) {
 	hSize, xSize := len(fs[0].h), len(x)
@@ -216,7 +216,7 @@ func dlyCoreScalar(fs []dlyScalarFilter, x2SumThreshold, smoothing float32, x, y
 		for j := 0; j < r; j++ {
 			yi := y[i0+j]
 			// The filters with a pending update and those without go to
-			// different kernels; the set of fs[0] runs last, so that pre
+			// different kernels. The set of fs[0] runs last, so that pre
 			// holds its running sum.
 			var with, without [dlyScalarMax]bool
 			for i := range fs {
@@ -274,11 +274,10 @@ func dlyCoreScalar(fs []dlyScalarFilter, x2SumThreshold, smoothing float32, x, y
 	}
 }
 
-// The kernels below run len(pre) coefficients of one, two or three filters:
-// the Dot kernels add h*xb to the running sum of each filter, the AxpyDot
-// kernels first apply h += alpha*xa (the product rounded before the add) to
-// the coefficient. Each stores the running sum of its first filter after
-// every coefficient in pre.
+// The kernels below run len(pre) coefficients of one, two or three filters.
+// The Dot kernels add h*xb to the running sum of each filter; the AxpyDot
+// kernels first apply h += alpha*xa, unfused. A kernel stores the running
+// sum of its first filter after every coefficient in pre.
 
 func dlyScalarDot1(pre []float32, st *[1]dlyScalarStream) {
 	n := len(pre)

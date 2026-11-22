@@ -11,18 +11,18 @@ import (
 	"testing"
 )
 
-// fmaAllowed lists functions whose compiled code may contain fused float32
-// multiply-adds: kernels that mirror an FMA in the C++ (AVX2 lanes), and
-// fusions that are exact by construction.
+// fmaAllowed lists the functions whose code may contain fused float32
+// multiply-adds: kernels that mirror an FMA of the C++, and fusions that are
+// exact.
 var fmaAllowed = map[string]string{
 	"internal/aec3.dlyAxpyFma":                        "AVX2 matched filter update (_mm256_fmadd_ps)",
 	"internal/aec3.(*reverbDecayState).estimateDecay": "2*tailGain is exact",
 }
 
 // TestNoUnintendedFMA compiles the signal-path packages for arm64 and fails
-// if a function contains a fused float32 multiply-add that is not allowed.
-// libwebrtc is built with -ffp-contract=off, so an accidental fusion breaks
-// bit-exactness, and tests only catch it when the operands make it visible.
+// on a fused float32 multiply-add outside fmaAllowed. libwebrtc is built
+// with -ffp-contract=off, and other tests catch a fusion only when the
+// operands make it visible.
 func TestNoUnintendedFMA(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compiles packages")

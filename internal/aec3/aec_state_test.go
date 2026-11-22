@@ -109,7 +109,7 @@ func TestAecStateUpdateAllocs(t *testing.T) {
 }
 
 func TestSignalDependentSectionBoundaries(t *testing.T) {
-	// Boundaries must cover [headroom, numBlocks) monotonically.
+	// The boundaries cover [headroom, numBlocks) in order.
 	for numBlocks := 2; numBlocks <= 40; numBlocks++ {
 		for sections := 1; sections <= numBlocks/2; sections++ {
 			b := stSetSectionsBoundaries(1, numBlocks, sections)

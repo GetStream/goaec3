@@ -6,8 +6,7 @@ import (
 	"testing"
 )
 
-// The specs below are the loops of the C++, as the port had them before the
-// kernels and the side-by-side folds.
+// The specs below are the loops of the C++.
 
 func sumOfSquaresSpec(x []float32) float32 {
 	var acc float32
@@ -165,18 +164,14 @@ func supGenerateComfortNoiseSpec(N *[FftLengthBy2Plus1]float32, highBandNoiseLev
 	s := *seed
 	for k := 1; k < FftLengthBy2; k++ {
 		const indexMask = 32 - 1
-		// Generate a random 31-bit integer.
 		s = (s*69069 + 1) & (0x80000000 - 1)
-		// Convert to a 5-bit index.
 		i := s >> 26
-		// y = sqrt(2) * sin(a)
+		// x = sqrt(2) * sin(a)
 		x := supSqrt2Sin[i]
-		// x = sqrt(2) * cos(a) = sqrt(2) * sin(a + pi/2)
+		// y = sqrt(2) * cos(a) = sqrt(2) * sin(a + pi/2)
 		y := supSqrt2Sin[(i+8)&indexMask]
-		// Form low-frequency noise via spectral shaping.
 		nLow.Re[k] = N[k] * x
 		nLow.Im[k] = N[k] * y
-		// Form the high-frequency noise via simple levelling.
 		nHigh.Re[k] = highBandNoiseLevel * x
 		nHigh.Im[k] = highBandNoiseLevel * y
 	}

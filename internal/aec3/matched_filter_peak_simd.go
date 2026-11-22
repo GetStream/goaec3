@@ -4,16 +4,16 @@ package aec3
 
 import "simd/archsimd"
 
-// dlyMaxSquarePeakIndex computes dlyMaxSquarePeakIndexRef with sixteen lanes.
+// dlyMaxSquarePeakIndex computes dlyMaxSquarePeakIndexRef with sixteen
+// lanes.
 //
-// The reference scans even and odd indices separately with strict
-// comparisons, starting from h[0]² and h[1]². When neither start is NaN, a
-// NaN square never wins and never becomes the maximum, so each scan returns
-// the earliest index of the largest non-NaN square. Lane l tracks the same
-// for the indices ≡ l (mod 16) with strict comparisons from a -1 sentinel
-// (squares are >= 0); the even and odd lanes then merge to the even and
-// odd results, taking the earlier index on ties, and the scalar tail
-// continues both scans. A NaN start falls back to the reference.
+// The reference scans the even and the odd indices separately with strict
+// comparisons from h[0]² and h[1]². Unless a start is NaN, a NaN square
+// never becomes the maximum, so a scan returns the earliest index of the
+// largest non-NaN square. Lane l tracks that for the indices ≡ l (mod 16)
+// from a sentinel of -1. The even and the odd lanes merge to the two
+// results, the earlier index winning a tie, and the scalar tail continues
+// both scans. A NaN start runs the reference.
 func dlyMaxSquarePeakIndex(h []float32) int {
 	if len(h) < 16 || !dlyPeakSimd || h[0]*h[0] != h[0]*h[0] || h[1]*h[1] != h[1]*h[1] {
 		return dlyMaxSquarePeakIndexRef(h)
@@ -60,8 +60,8 @@ func dlyMaxSquarePeakIndex(h []float32) int {
 	return lagEstimate1
 }
 
-// dlyPeakLanes128 sets mv[l] and iv[l] to the largest square, and its
-// earliest index, among p[k] with k = l (mod 16), from a -1 sentinel.
+// dlyPeakLanes128 sets mv[l] and iv[l] to the largest square and its
+// earliest index among the p[k] with k ≡ l (mod 16), from a sentinel of -1.
 func dlyPeakLanes128(p []float32, mv *[16]float32, iv *[16]int32) {
 	m0 := kernSplat4(-1)
 	m1, m2, m3 := m0, m0, m0

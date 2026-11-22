@@ -4,14 +4,13 @@ package aec3
 
 import "simd/archsimd"
 
-// NEON kernels for MatchedFilterCore_NEON. Mul followed by Add compiles to
-// separate FMUL/FADD, matching the unfused vmlaq_f32 of the C++. The SSE2 and
-// AVX2 lanes run their pure-Go references on arm64.
+// NEON kernels of MatchedFilterCore_NEON. Mul followed by Add is the unfused
+// vmlaq_f32 of the C++. The SSE2 and AVX2 lanes run their pure-Go
+// references.
 //
-// The loops index fixed-size array views of slices resliced to a common
-// length, so the compiler proves every load and store in bounds and the loop
-// carries a single induction variable. Unrolled iterations feed the same
-// accumulator registers in the same group order as the C++ loop.
+// The loops index array views of slices cut to one length, so the compiler
+// proves every access in bounds. Unrolled iterations feed the accumulators
+// in the group order of the C++ loop.
 
 func dlyLd4(p *[4]float32) archsimd.Float32x4 { return archsimd.LoadFloat32x4Array(p) }
 
@@ -36,9 +35,8 @@ func dlyDotSNeon(h, x []float32, acc *[4]float32) {
 	s.StoreArray(acc)
 }
 
-// dlyAxpyDotSNeon applies h += alpha*xa and then accumulates the updated h
-// against xb, group by group; it equals dlyAxpyRef(h, xa, alpha) followed by
-// dlyDotSNeonRef(h, xb, acc) for len(h) a multiple of 4.
+// dlyAxpyDotSNeon is dlyAxpyRef(h, xa, alpha) followed by dlyDotSNeonRef(h,
+// xb, acc), group by group. len(h) is a multiple of 4.
 func dlyAxpyDotSNeon(h, xa, xb []float32, alpha float32, acc *[4]float32) {
 	n := len(h) &^ 3
 	h = h[:n:n]
@@ -74,9 +72,9 @@ func dlyAxpyDotSNeon(h, xa, xb []float32, alpha float32, acc *[4]float32) {
 	s.StoreArray(acc)
 }
 
-// dlyDotS2Neon is dlyDotSNeon for two filters of the same length at once:
-// each filter's groups reach its own accumulator in order, and the two
-// accumulator chains run side by side.
+// dlyDotS2Neon is dlyDotSNeon for two filters of one length. The groups of a
+// filter reach its accumulator in order, and the two chains run side by
+// side.
 func dlyDotS2Neon(hA, xA []float32, accA *[4]float32, hB, xB []float32, accB *[4]float32) {
 	n := len(hA) &^ 3
 	hA, xA, hB, xB = hA[:n:n], xA[:n:n], hB[:n:n], xB[:n:n]
@@ -103,8 +101,7 @@ func dlyDotS2Neon(hA, xA []float32, accA *[4]float32, hB, xB []float32, accB *[4
 	sB.StoreArray(accB)
 }
 
-// dlyAxpyDotS2Neon is dlyAxpyDotSNeon for two filters of the same length at
-// once.
+// dlyAxpyDotS2Neon is dlyAxpyDotSNeon for two filters of one length.
 func dlyAxpyDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
 	hB, xaB, xbB []float32, alphaB float32, accB *[4]float32) {
 	n := len(hA) &^ 3
@@ -150,8 +147,8 @@ func dlyAxpyDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
 	sB.StoreArray(accB)
 }
 
-// dlyAxpyDotDotS2Neon is dlyAxpyDotSNeon on the filter A and dlyDotSNeon
-// on the filter B, of the same length, at once.
+// dlyAxpyDotDotS2Neon is dlyAxpyDotSNeon on the filter A and dlyDotSNeon on
+// the filter B, which have one length.
 func dlyAxpyDotDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float32,
 	hB, xB []float32, accB *[4]float32) {
 	n := len(hA) &^ 3
@@ -188,7 +185,7 @@ func dlyAxpyDotDotS2Neon(hA, xaA, xbA []float32, alphaA float32, accA *[4]float3
 	sB.StoreArray(accB)
 }
 
-// dlyPairNeon selects the two-filter kernels for the NEON lane.
+// dlyPairNeon reports whether the NEON lane has two-filter kernels.
 var dlyPairNeon = true
 
 func dlySqNeon(x []float32, acc *[4]float32) {
@@ -202,8 +199,8 @@ func dlySqNeon(x []float32, acc *[4]float32) {
 	q.StoreArray(acc)
 }
 
-// dlySq5Neon runs dlySqNeonRef on the five stretches x[offs[t]:offs[t]+n]
-// in one loop, so that their chains overlap in time; acc[t] holds the
+// dlySq5Neon runs dlySqNeonRef on the five stretches x[offs[t]:offs[t]+n] in
+// one loop, so that their chains run side by side. acc[t] holds the
 // accumulators of stretch t.
 func dlySq5Neon(x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32) {
 	n &^= 3
@@ -236,9 +233,8 @@ func dlySq5Neon(x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStream
 	q4.StoreArray((*[4]float32)(acc[4][0:4]))
 }
 
-// dlySqStreams is the number of stretches dlySqMulti accumulates at once:
-// five for the NEON lane, whose kernel it is; the other lanes run their
-// references.
+// dlySqStreams returns the number of stretches dlySqMulti accumulates at
+// once: five in the NEON lane. The other lanes run their references.
 func dlySqStreams(g int) int {
 	if g == 4 {
 		return 5
@@ -254,12 +250,12 @@ func dlySqMulti(g int, x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMa
 	dlySqMultiRef(g, x, n, offs, acc, 2)
 }
 
-// dlySqSlideNeon stores in out[a], for a < 16, the lane chain that starts
-// at x[a] (see dlyX2LanesRef), and in out[16:20] the four chains that start
-// at x[last:]. The chains of lanes 4t..4t+3 add the squares of the vectors
-// x[4m:4m+4] for m = t, t+1, ...: each vector is loaded and squared once and
-// then feeds the four accumulators in consecutive iterations. len(x) is at
-// least n+12 and last+n.
+// dlySqSlideNeon stores in out[a], for a < 16, the lane chain that starts at
+// x[a] (dlyX2LanesRef), and in out[16:20] the four chains that start at
+// x[last:]. The chains of lanes 4t..4t+3 add the squares of the vectors
+// x[4m:4m+4] for m = t, t+1, ...: a vector is loaded and squared once and
+// feeds the four accumulators in consecutive iterations. len(x) is at least
+// n+12 and last+n.
 func dlySqSlideNeon(x []float32, n, last int, out *[20]float32) {
 	n &^= 3
 	xs := x[: n+12 : n+12]
@@ -289,7 +285,7 @@ func dlySqSlideNeon(x []float32, n, last int, out *[20]float32) {
 	qa.StoreArray((*[4]float32)(out[16:20]))
 }
 
-// dlyX2Lanes is dlyX2LanesRef; the NEON lane computes five groups of four
+// dlyX2Lanes is dlyX2LanesRef. The NEON lane computes five groups of four
 // chains at a time.
 func dlyX2Lanes(g int, x []float32, n int, lanes []float32) {
 	if g != 4 {
@@ -307,7 +303,7 @@ func dlyX2Lanes(g int, x []float32, n int, lanes []float32) {
 	dlyX2LanesMulti(g, x, n, lanes)
 }
 
-// dlySqSlide2Neon is dlySqSlideNeon on two stretches at once.
+// dlySqSlide2Neon is dlySqSlideNeon on two stretches.
 func dlySqSlide2Neon(xA, xB []float32, n, last int, outA, outB *[20]float32) {
 	n &^= 3
 	xs := xA[: n+12 : n+12]
@@ -359,7 +355,7 @@ func dlySqSlide2Neon(xA, xB []float32, n, last int, outA, outB *[20]float32) {
 	ra.StoreArray((*[4]float32)(outB[16:20]))
 }
 
-// dlyX2Lanes2 is dlyX2Lanes2Ref; the NEON lane interleaves the chains of the
+// dlyX2Lanes2 is dlyX2Lanes2Ref. The NEON lane interleaves the chains of the
 // two stretches.
 func dlyX2Lanes2(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
 	last := len(lanesA) - 4
@@ -375,8 +371,8 @@ func dlyX2Lanes2(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
 	copy(lanesB[last:], outB[16:20])
 }
 
-// dlyX2Wrapped is dlyX2WrappedRef; the NEON lane accumulates five windows
-// at a time.
+// dlyX2Wrapped is dlyX2WrappedRef. The NEON lane accumulates five windows at
+// a time.
 func dlyX2Wrapped(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) {
 	if g != 4 {
 		dlyX2WrappedRef(g, x, hSize, lo, r, out)
@@ -385,10 +381,10 @@ func dlyX2Wrapped(g int, x []float32, hSize, lo, r int, out *[dlyX2Run]float32) 
 	dlyX2WrappedMulti(g, x, hSize, lo, r, out)
 }
 
-// dlyAccErrNeon keeps four groups per iteration: the SumAllElements
-// pairwise additions of the four products run in one tree of vpadds (each
-// group keeps its (p0+p1)+(p2+p3)), the running sum stays sequential, and
-// the four squared errors are added to accErr lane by lane.
+// dlyAccErrNeon runs four groups per iteration. The pairwise additions of
+// SumAllElements run as one tree of vpadds, in which a group keeps its
+// (p0+p1)+(p2+p3); the running sum stays sequential, and the four squared
+// errors are added to accErr lane by lane.
 func dlyAccErrNeon(h, x []float32, y float32, accErr []float32) float32 {
 	n := len(h) &^ 3
 	h = h[:n:n]
@@ -529,8 +525,6 @@ func dlyAxpyFma(h, x []float32, alpha float32) {
 	}
 }
 
-// The SSE2 and AVX2 lanes run their pure-Go references on arm64.
-
 func dlyDotSSse2(h, x []float32, acc *[8]float32) { dlyDotSSse2Ref(h, x, acc) }
 
 func dlyAxpyDotSSse2(h, xa, xb []float32, alpha float32, acc *[8]float32) {
@@ -580,17 +574,16 @@ const dlyPeakSimd = true
 // dlyZeroAcc clears the lane accumulators.
 func dlyZeroAcc(acc *[16]float32) { *acc = [16]float32{} }
 
-// dlyPeakLanes256 is the 256-bit dlyPeakLanes128 (NEON has no 256-bit
-// registers).
+// dlyPeakLanes256 reports false: NEON has no 256-bit vectors.
 func dlyPeakLanes256(p []float32, mv *[16]float32, iv *[16]int32) bool { return false }
 
-// dlyLanesPureGo selects what serves the pure-Go references and the
-// archsimd kernels have no use for (the tables of squares of the x*x sums).
+// dlyLanesPureGo reports whether the lanes run their pure-Go references,
+// which use the tables of squares for the x*x sums.
 const dlyLanesPureGo = false
 
 // dlyCoreLaneKernel runs the MatchedFilterCore loop of the lane with group
-// size g on one filter where the lane has its own core, and reports whether
-// it did; no lane of this build has one.
+// size g on one filter if the lane has a core of its own, and reports
+// whether it did.
 func dlyCoreLaneKernel(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32) bool {
 	return false

@@ -4,8 +4,8 @@ package aec3
 
 // Without archsimd every MatchedFilterCore lane runs its pure-Go reference.
 
-// dlyLanesPureGo selects what serves the pure-Go references and the
-// archsimd kernels have no use for (the tables of squares of the x*x sums).
+// dlyLanesPureGo reports whether the lanes run their pure-Go references,
+// which use the tables of squares for the x*x sums.
 const dlyLanesPureGo = true
 
 func dlyDotSNeon(h, x []float32, acc *[4]float32) { dlyDotSNeonRef(h, x, acc) }
@@ -46,9 +46,8 @@ func dlyAxpyFmaDotSSumAvx2(h, xa, xb []float32, alpha float32) float32 {
 
 func dlyX2Lanes(g int, x []float32, n int, lanes []float32) { dlyX2LanesRef(g, x, n, lanes) }
 
-// dlySqStreams is the number of stretches dlySqMulti accumulates at once.
-// Without archsimd the multi-stretch routines are not used; three stretches
-// keep them testable.
+// dlySqStreams returns the number of stretches dlySqMulti accumulates at
+// once. This build does not use dlySqMulti; three stretches keep it tested.
 func dlySqStreams(g int) int { return 3 }
 
 func dlySqMulti(g int, x []float32, n int, offs *[dlyMaxStreams]int, acc *[dlyMaxStreams][16]float32) {
@@ -91,8 +90,7 @@ func dlyAxpy(h, x []float32, alpha float32) { dlyAxpyRef(h, x, alpha) }
 
 func dlyAxpyFma(h, x []float32, alpha float32) { dlyAxpyFmaRef(h, x, alpha) }
 
-// dlyPairNeon selects the two-filter kernels for the NEON lane; they exist
-// as archsimd kernels only.
+// dlyPairNeon reports whether the NEON lane has two-filter kernels.
 var dlyPairNeon = false
 
 func dlyDotS2Neon(hA, xA []float32, accA *[4]float32, hB, xB []float32, accB *[4]float32) {
@@ -119,8 +117,8 @@ func dlyX2Lanes2(g int, xA, xB []float32, n int, lanesA, lanesB []float32) {
 }
 
 // dlyCoreLaneKernel runs the MatchedFilterCore loop of the lane with group
-// size g on one filter where the lane has its own core, and reports whether
-// it did; no lane of this build has one.
+// size g on one filter if the lane has a core of its own, and reports
+// whether it did.
 func dlyCoreLaneKernel(g int, xStartIndex int, x2SumThreshold, smoothing float32, x, y, h []float32,
 	filtersUpdated *bool, errorSum *float32) bool {
 	return false

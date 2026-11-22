@@ -148,7 +148,7 @@ func TestUpdateDbMetric(t *testing.T) {
 	}
 	s := [2]DbMetric{{0, 1000, 0}, {0, 1000, 0}}
 	UpdateDbMetric(&v, &s)
-	// Bands are [0, 32) and [32, 64); averages 15.5 and 47.5.
+	// The bands are [0, 32) and [32, 64), with the averages 15.5 and 47.5.
 	if s[0].SumValue != 15.5 || s[1].SumValue != 47.5 || s[0].FloorValue != 15.5 || s[1].CeilValue != 47.5 {
 		t.Fatalf("got %+v", s)
 	}
