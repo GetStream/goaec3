@@ -4,7 +4,8 @@ Pure-Go port of WebRTC's AEC3 echo canceller.
 
 - Bit-exact with libwebrtc m141.
 - Faster than libwebrtc on arm64 and amd64.
-- SIMD via `simd/archsimd`. No cgo, no `unsafe`, no assembly.
+- Memory-safe: no `unsafe`, no cgo, no assembly, enforced in CI.
+- SIMD via `simd/archsimd`.
 - Zero allocations per frame.
 
 > **Status: pre-v1.** The full AEC3 pipeline is ported and bit-exact; the API
