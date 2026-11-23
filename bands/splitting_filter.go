@@ -5,8 +5,9 @@ const (
 	bsTwoBandFilterSamplesPerFrame = 320
 )
 
-// TwoBandsStates holds the QMF filter states of one channel.
-type TwoBandsStates struct {
+// bsTwoBandsStates holds the QMF filter states of one channel
+// (TwoBandsStates in splitting_filter.h).
+type bsTwoBandsStates struct {
 	AnalysisState1  [6]int32
 	AnalysisState2  [6]int32
 	SynthesisState1 [6]int32
@@ -14,11 +15,14 @@ type TwoBandsStates struct {
 }
 
 // SplittingFilter splits a 32 kHz or 48 kHz signal into 2 or 3 bands of
-// 160 samples (modules/audio_processing/splitting_filter.cc). Data is laid
-// out as data[channel][sample] and bands[band][channel][sample].
+// 160 samples and merges them back
+// (modules/audio_processing/splitting_filter.cc). Data is FloatS16, laid
+// out as data[channel][sample] and bands[band][channel][sample]. The two-band
+// filter is the fixed-point QMF, which rounds and saturates its input to
+// int16; the three-band filter is a [ThreeBandFilterBank] per channel.
 type SplittingFilter struct {
 	numBands             int
-	twoBandsStates       []TwoBandsStates
+	twoBandsStates       []bsTwoBandsStates
 	threeBandFilterBanks []ThreeBandFilterBank
 
 	// Scratch.
@@ -26,6 +30,9 @@ type SplittingFilter struct {
 	fullBand16 [bsTwoBandFilterSamplesPerFrame]int16
 }
 
+// NewSplittingFilter returns a SplittingFilter for numChannels channels of
+// numBands bands, which is 2 or 3. The third argument is the frame length
+// of the C++ constructor, which follows from numBands.
 func NewSplittingFilter(numChannels, numBands, _ int) *SplittingFilter {
 	f := &SplittingFilter{}
 	f.Init(numChannels, numBands)
@@ -40,7 +47,7 @@ func (f *SplittingFilter) Init(numChannels, numBands int) {
 	}
 	*f = SplittingFilter{numBands: numBands}
 	if numBands == 2 {
-		f.twoBandsStates = make([]TwoBandsStates, numChannels)
+		f.twoBandsStates = make([]bsTwoBandsStates, numChannels)
 	} else {
 		f.threeBandFilterBanks = make([]ThreeBandFilterBank, numChannels)
 	}
@@ -50,9 +57,9 @@ func (f *SplittingFilter) Init(numChannels, numBands int) {
 func (f *SplittingFilter) Analysis(data [][]float32, bands [][][]float32) {
 	switch len(bands) {
 	case 2:
-		f.TwoBandsAnalysis(data, bands)
+		f.twoBandsAnalysis(data, bands)
 	case 3:
-		f.ThreeBandsAnalysis(data, bands)
+		f.threeBandsAnalysis(data, bands)
 	}
 }
 
@@ -60,9 +67,9 @@ func (f *SplittingFilter) Analysis(data [][]float32, bands [][][]float32) {
 func (f *SplittingFilter) Synthesis(bands [][][]float32, data [][]float32) {
 	switch len(bands) {
 	case 2:
-		f.TwoBandsSynthesis(bands, data)
+		f.twoBandsSynthesis(bands, data)
 	case 3:
-		f.ThreeBandsSynthesis(bands, data)
+		f.threeBandsSynthesis(bands, data)
 	}
 }
 
@@ -96,25 +103,29 @@ func (f *SplittingFilter) SynthesisChannel(ch int, b0, b1, b2, data []float32) {
 	f.threeBandFilterBanks[ch].Synthesis(&in, (*[FullBandSize]float32)(data))
 }
 
-func (f *SplittingFilter) TwoBandsAnalysis(data [][]float32, bands [][][]float32) {
+// twoBandsAnalysis is SplittingFilter::TwoBandsAnalysis.
+func (f *SplittingFilter) twoBandsAnalysis(data [][]float32, bands [][][]float32) {
 	for i := range f.twoBandsStates {
 		f.AnalysisChannel(i, data[i], bands[0][i], bands[1][i], nil)
 	}
 }
 
-func (f *SplittingFilter) TwoBandsSynthesis(bands [][][]float32, data [][]float32) {
+// twoBandsSynthesis is SplittingFilter::TwoBandsSynthesis.
+func (f *SplittingFilter) twoBandsSynthesis(bands [][][]float32, data [][]float32) {
 	for i := range data {
 		f.SynthesisChannel(i, bands[0][i], bands[1][i], nil, data[i])
 	}
 }
 
-func (f *SplittingFilter) ThreeBandsAnalysis(data [][]float32, bands [][][]float32) {
+// threeBandsAnalysis is SplittingFilter::ThreeBandsAnalysis.
+func (f *SplittingFilter) threeBandsAnalysis(data [][]float32, bands [][][]float32) {
 	for i := range f.threeBandFilterBanks {
 		f.AnalysisChannel(i, data[i], bands[0][i], bands[1][i], bands[2][i])
 	}
 }
 
-func (f *SplittingFilter) ThreeBandsSynthesis(bands [][][]float32, data [][]float32) {
+// threeBandsSynthesis is SplittingFilter::ThreeBandsSynthesis.
+func (f *SplittingFilter) threeBandsSynthesis(bands [][][]float32, data [][]float32) {
 	for i := range data {
 		f.SynthesisChannel(i, bands[0][i], bands[1][i], bands[2][i], data[i])
 	}
@@ -122,9 +133,10 @@ func (f *SplittingFilter) ThreeBandsSynthesis(bands [][][]float32, data [][]floa
 
 // ChannelSplitter is the splitting filter of one channel: a pointer-free
 // value whose zero value is ready, for callers that keep the channels in one
-// array.
+// array. A ChannelSplitter is used with one number of bands; its results are
+// those of a [SplittingFilter] channel.
 type ChannelSplitter struct {
-	two   TwoBandsStates
+	two   bsTwoBandsStates
 	three ThreeBandFilterBank
 
 	// Scratch.

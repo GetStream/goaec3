@@ -70,7 +70,7 @@ Toolchain: Go 1.27.4. `simd/archsimd` exists only with `GOEXPERIMENT=simd`.
 - 128-bit kernels run with AVX alone, but `BroadcastFloat32x4`,
   `BroadcastInt32x4`, `BroadcastUint32x4`, `Float32x4.Abs` and `Neg` compile
   to AVX2 instructions. Use `kernSplat4`/`kernSplatI4` (`bsSplat4`/`bsSplatU4`
-  in `internal/bands`) and masks made with them. A VEX mnemonic new to the
+  in `bands`) and masks made with them. A VEX mnemonic new to the
   kernels fails the test until it is classified in `simdVexOps`.
 - End every 256-bit section with `archsimd.ClearAVXUpperBits()`. Go's scalar
   float code is legacy-SSE encoded and pays a transition penalty per
@@ -162,7 +162,7 @@ Toolchain: Go 1.27.4. `simd/archsimd` exists only with `GOEXPERIMENT=simd`.
   constant window (`(*[32]float32)(a[64:96])`), then index it with a
   constant, a masked value or a counter with constant limits. Write windows
   as `x : x+c`; the compiler does not prove `x+c1 : x+c2`.
-- Check with `go build -gcflags=-d=ssa/check_bce ./internal/...`;
+- Check with `go build -gcflags=-d=ssa/check_bce ./internal/... ./bands`;
   `TestNoBoundsChecks` covers the FFT passes. Reinterpret bits with
   `math.Float32bits`/`Float32frombits` or archsimd's `ToBits`/`BitsToFloat32`.
 
@@ -259,7 +259,8 @@ The `Makefile` wraps every command; CI runs them (`.github/workflows`).
 ## Layout
 
 `internal/aec3` is the AEC3 core, one package like the C++ directory;
-`internal/bands` the band splitting and AudioBuffer's FloatS16 conversions;
+`bands` (public, for modules that port the rest of the audio processing
+module) the band splitting and AudioBuffer's FloatS16 conversions;
 `internal/ooura` the 128-point Ooura FFT; `internal/webrtcoracle` the cgo
 oracle (tags `webrtc_oracle`, `webrtc_src_oracle`, `ooura_sse2_oracle`,
-`webrtc_oracle_stock`); the root package `goaec3` the public API.
+`webrtc_oracle_stock`); the root package `goaec3` the public API of the canceller.

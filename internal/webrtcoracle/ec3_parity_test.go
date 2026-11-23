@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/GetStream/goaec3"
+	"github.com/GetStream/goaec3/bands"
 	"github.com/GetStream/goaec3/internal/aec3"
-	"github.com/GetStream/goaec3/internal/bands"
 )
 
 // ec3Scalar selects the C++ reference. With the prebuilt library it is the

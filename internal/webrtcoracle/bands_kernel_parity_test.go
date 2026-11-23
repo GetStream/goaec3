@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/GetStream/goaec3/internal/bands"
+	"github.com/GetStream/goaec3/bands"
 )
 
 // bandsNonFinite are inputs whose NaN payloads and infinities the band

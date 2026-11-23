@@ -37,9 +37,15 @@ func NewBandSplitter(sampleRateHz, numChannels int) *BandSplitter {
 	return s
 }
 
-func (s *BandSplitter) NumBands() int         { return s.numBands }
+// NumBands returns the number of bands: 1 at 16 kHz, 2 at 32 kHz and 3 at
+// 48 kHz.
+func (s *BandSplitter) NumBands() int { return s.numBands }
+
+// NumFramesPerBand returns the number of samples of a band in a frame, 160.
 func (s *BandSplitter) NumFramesPerBand() int { return s.numFramesPerBand }
-func (s *BandSplitter) NumChannels() int      { return s.numChannels }
+
+// NumChannels returns the number of channels.
+func (s *BandSplitter) NumChannels() int { return s.numChannels }
 
 // SplitIntoFrequencyBands splits data into bands.
 func (s *BandSplitter) SplitIntoFrequencyBands(data [][]float32, bands [][][]float32) {

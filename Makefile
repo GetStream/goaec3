@@ -47,7 +47,7 @@ vuln:
 FUZZTIME ?= 10m
 fuzz:
 	$(SIMD) $(GO) test -run '^$$' -fuzz FuzzEchoCanceller -fuzztime $(FUZZTIME) .
-	$(SIMD) $(GO) test -run '^$$' -fuzz FuzzBandSplitter -fuzztime $(FUZZTIME) ./internal/bands
+	$(SIMD) $(GO) test -run '^$$' -fuzz FuzzBandSplitter -fuzztime $(FUZZTIME) ./bands
 
 # Sparse checkout of the pinned WebRTC m141 sources and abseil-cpp into
 # tmp_check/webrtc-m141.

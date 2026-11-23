@@ -32,7 +32,7 @@ type bsCoeffs8 struct{ c0, c1, c2, c3 archsimd.Float32x8 }
 
 // bsBroadcastCoeffs8 fills c in place: a returned struct is zeroed with
 // 128-bit stores between the 256-bit broadcasts.
-func bsBroadcastCoeffs8(c *[NumNonZeroFilters]bsCoeffs8) {
+func bsBroadcastCoeffs8(c *[bsNumNonZeroFilters]bsCoeffs8) {
 	for i := range c {
 		f := &bsFilterCoeffs[i]
 		c[i].c0 = archsimd.BroadcastFloat32x8(f[0])
@@ -59,12 +59,12 @@ func bsAnalysisAVX2(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 	h0, h1, h2 := &hist[0], &hist[1], &hist[2]
 	for k := 0; k < SplitBandSize; k++ {
 		x := (*[3]float32)(in[3*k : 3*k+3])
-		h0[MemorySize+k] = x[2]
-		h1[MemorySize+k] = x[1]
-		h2[MemorySize+k] = x[0]
+		h0[bsMemorySize+k] = x[2]
+		h1[bsMemorySize+k] = x[1]
+		h2[bsMemorySize+k] = x[0]
 	}
 
-	var c [NumNonZeroFilters]bsCoeffs8
+	var c [bsNumNonZeroFilters]bsCoeffs8
 	bsBroadcastCoeffs8(&c)
 	two := archsimd.BroadcastFloat32x8(2)
 	sqrt3 := archsimd.BroadcastFloat32x8(bsSqrt3)
@@ -123,7 +123,7 @@ func bsAnalysisAVX2(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 	archsimd.ClearAVXUpperBits()
 
 	for d := range hist {
-		copy(hist[d][:MemorySize], hist[d][SplitBandSize:])
+		copy(hist[d][:bsMemorySize], hist[d][SplitBandSize:])
 	}
 }
 
@@ -148,7 +148,7 @@ func bsSynthesisAVX2(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 	}
 
 	for i := range hist {
-		copy(hist[i][:MemorySize], hist[i][SplitBandSize:])
+		copy(hist[i][:bsMemorySize], hist[i][SplitBandSize:])
 	}
 }
 
@@ -158,7 +158,7 @@ func bsSynthesisFilterAVX2(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 	in0, in1, in2 *[SplitBandSize]float32, t *[bsSubSampling][SplitBandSize]float32) {
 	// The coefficient array is zeroed with 128-bit stores, so it is set up
 	// before the first 256-bit operation.
-	var c [NumNonZeroFilters]bsCoeffs8
+	var c [bsNumNonZeroFilters]bsCoeffs8
 	bsBroadcastCoeffs8(&c)
 
 	// Modulate: the filter input is ((0 + m0*b0) + m1*b1) + m2*b2.
@@ -172,12 +172,12 @@ func bsSynthesisFilterAVX2(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 		b2 := archsimd.LoadFloat32x8Array((*[8]float32)(in2[k : k+8]))
 		p0, p1, p2 := two.Mul(b0), two.Mul(b1), two.Mul(b2)
 		q0, q2 := sqrt3.Mul(b0), sqrt3.Mul(b2)
-		zero.Add(p0).Add(p1).Add(p2).StoreArray((*[8]float32)(g0[MemorySize+k : MemorySize+k+8]))
-		zero.Sub(p0).Sub(p1).Sub(p2).StoreArray((*[8]float32)(g1[MemorySize+k : MemorySize+k+8]))
-		zero.Add(q0).Sub(q2).StoreArray((*[8]float32)(g2[MemorySize+k : MemorySize+k+8]))
-		zero.Sub(q0).Add(q2).StoreArray((*[8]float32)(g3[MemorySize+k : MemorySize+k+8]))
-		zero.Add(b0).Sub(p1).Add(b2).StoreArray((*[8]float32)(g4[MemorySize+k : MemorySize+k+8]))
-		zero.Sub(b0).Add(p1).Sub(b2).StoreArray((*[8]float32)(g5[MemorySize+k : MemorySize+k+8]))
+		zero.Add(p0).Add(p1).Add(p2).StoreArray((*[8]float32)(g0[bsMemorySize+k : bsMemorySize+k+8]))
+		zero.Sub(p0).Sub(p1).Sub(p2).StoreArray((*[8]float32)(g1[bsMemorySize+k : bsMemorySize+k+8]))
+		zero.Add(q0).Sub(q2).StoreArray((*[8]float32)(g2[bsMemorySize+k : bsMemorySize+k+8]))
+		zero.Sub(q0).Add(q2).StoreArray((*[8]float32)(g3[bsMemorySize+k : bsMemorySize+k+8]))
+		zero.Add(b0).Sub(p1).Add(b2).StoreArray((*[8]float32)(g4[bsMemorySize+k : bsMemorySize+k+8]))
+		zero.Sub(b0).Add(p1).Sub(b2).StoreArray((*[8]float32)(g5[bsMemorySize+k : bsMemorySize+k+8]))
 	}
 
 	// Filter, scale and upsample: phase d lands at out[d + bsSubSampling*k]

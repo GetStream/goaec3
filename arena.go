@@ -1,8 +1,8 @@
 package goaec3
 
 import (
+	"github.com/GetStream/goaec3/bands"
 	"github.com/GetStream/goaec3/internal/aec3"
-	"github.com/GetStream/goaec3/internal/bands"
 )
 
 // The sizes of a canceller's arrays (samples, filter coefficients, spectra,

@@ -44,7 +44,7 @@ func TestFilterBankFiniteChecks(t *testing.T) {
 		in[i] = old
 	}
 	for d := range ah {
-		for i := 0; i < MemorySize; i++ {
+		for i := 0; i < bsMemorySize; i++ {
 			old := ah[d][i]
 			ah[d][i] = bad[(d+i)%len(bad)]
 			if bsAnalysisFinite(&ah, &in) {
@@ -76,7 +76,7 @@ func TestFilterBankFiniteChecks(t *testing.T) {
 		}
 	}
 	for fi := range sh {
-		for i := 0; i < MemorySize; i++ {
+		for i := 0; i < bsMemorySize; i++ {
 			old := sh[fi][i]
 			sh[fi][i] = bad[(fi+i)%len(bad)]
 			if bsSynthesisFinite(&sh, &b[0], &b[1], &b[2]) {

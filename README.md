@@ -65,6 +65,10 @@ Errors are sentinel values (`ErrConfig`, `ErrSampleRate`, `ErrFrameLength`, …)
 and for one over the resource limits (`MaxFilterLengthBlocks`, `MaxDelayFilters`;
 at most `MaxChannels` channels a side).
 
+Package `bands` is the band splitting around the canceller (WebRTC's
+`SplittingFilter`, `ThreeBandFilterBank` and the FloatS16 conversions), for
+code that ports other parts of the audio processing module.
+
 ## Performance
 
 ![goaec3 time per 10 ms frame as a percentage of libwebrtc](docs/perf.svg)
