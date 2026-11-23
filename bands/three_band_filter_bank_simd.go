@@ -40,11 +40,11 @@ func (f *ThreeBandFilterBank) Analysis(in *[FullBandSize]float32, out *[NumBands
 // analysisRef runs the reference on the state held in analysisHist.
 func (f *ThreeBandFilterBank) analysisRef(in *[FullBandSize]float32, out *[NumBands][]float32) {
 	for _, e := range bsSchedule {
-		copy(f.ref.stateAnalysis[e.filter][:], f.analysisHist[e.phase][:MemorySize])
+		copy(f.ref.stateAnalysis[e.filter][:], f.analysisHist[e.phase][:bsMemorySize])
 	}
 	f.ref.analysis(in, out)
 	for _, e := range bsSchedule {
-		copy(f.analysisHist[e.phase][:MemorySize], f.ref.stateAnalysis[e.filter][:])
+		copy(f.analysisHist[e.phase][:bsMemorySize], f.ref.stateAnalysis[e.filter][:])
 	}
 }
 
@@ -64,12 +64,12 @@ func (f *ThreeBandFilterBank) Synthesis(in *[NumBands][]float32, out *[FullBandS
 // synthesisRef runs the reference on the state held in synthesisHist.
 func (f *ThreeBandFilterBank) synthesisRef(in *[NumBands][]float32, out *[FullBandSize]float32) {
 	for fi, i := range bsSynthesisInput {
-		copy(f.ref.stateSynthesis[fi][:], f.synthesisHist[i][:MemorySize])
+		copy(f.ref.stateSynthesis[fi][:], f.synthesisHist[i][:bsMemorySize])
 	}
 	f.ref.synthesis(in, out)
 	// Filters that share an input end with the same state.
 	for fi, i := range bsSynthesisInput {
-		copy(f.synthesisHist[i][:MemorySize], f.ref.stateSynthesis[fi][:])
+		copy(f.synthesisHist[i][:bsMemorySize], f.ref.stateSynthesis[fi][:])
 	}
 }
 
@@ -85,12 +85,12 @@ func bsFiniteResult(acc archsimd.Float32x4) bool {
 	return a[0] == a[0] && a[1] == a[1] && a[2] == a[2] && a[3] == a[3]
 }
 
-// bsFiniteState checks a MemorySize state: four overlapping vectors.
+// bsFiniteState checks a bsMemorySize state: four overlapping vectors.
 func bsFiniteState(acc archsimd.Float32x4, h *[bsHistSize]float32) archsimd.Float32x4 {
 	acc = bsFinite4(acc, (*[4]float32)(h[0:4]))
 	acc = bsFinite4(acc, (*[4]float32)(h[4:8]))
 	acc = bsFinite4(acc, (*[4]float32)(h[8:12]))
-	return bsFinite4(acc, (*[4]float32)(h[MemorySize-4:MemorySize]))
+	return bsFinite4(acc, (*[4]float32)(h[bsMemorySize-4:bsMemorySize]))
 }
 
 // bsAnalysisFinite reports whether the analysis input and state are finite.
@@ -167,12 +167,12 @@ func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 	h0, h1, h2 := &hist[0], &hist[1], &hist[2]
 	for k := 0; k < SplitBandSize; k++ {
 		x := (*[3]float32)(in[3*k : 3*k+3])
-		h0[MemorySize+k] = x[2]
-		h1[MemorySize+k] = x[1]
-		h2[MemorySize+k] = x[0]
+		h0[bsMemorySize+k] = x[2]
+		h1[bsMemorySize+k] = x[1]
+		h2[bsMemorySize+k] = x[0]
 	}
 
-	var c [NumNonZeroFilters]bsCoeffs
+	var c [bsNumNonZeroFilters]bsCoeffs
 	for i := range c {
 		c[i] = bsBroadcastCoeffs(i)
 	}
@@ -232,7 +232,7 @@ func bsAnalysisSIMD(hist *[bsSubSampling][bsHistSize]float32, in *[FullBandSize]
 	}
 
 	for d := range hist {
-		copy(hist[d][:MemorySize], hist[d][SplitBandSize:])
+		copy(hist[d][:bsMemorySize], hist[d][SplitBandSize:])
 	}
 }
 
@@ -249,18 +249,18 @@ func bsSynthesisSIMD(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 		b2 := archsimd.LoadFloat32x4Array((*[4]float32)(in2[k : k+4]))
 		p0, p1, p2 := two.Mul(b0), two.Mul(b1), two.Mul(b2)
 		q0, q2 := sqrt3.Mul(b0), sqrt3.Mul(b2)
-		zero.Add(p0).Add(p1).Add(p2).StoreArray((*[4]float32)(g0[MemorySize+k : MemorySize+k+4]))
-		zero.Sub(p0).Sub(p1).Sub(p2).StoreArray((*[4]float32)(g1[MemorySize+k : MemorySize+k+4]))
-		zero.Add(q0).Sub(q2).StoreArray((*[4]float32)(g2[MemorySize+k : MemorySize+k+4]))
-		zero.Sub(q0).Add(q2).StoreArray((*[4]float32)(g3[MemorySize+k : MemorySize+k+4]))
-		zero.Add(b0).Sub(p1).Add(b2).StoreArray((*[4]float32)(g4[MemorySize+k : MemorySize+k+4]))
-		zero.Sub(b0).Add(p1).Sub(b2).StoreArray((*[4]float32)(g5[MemorySize+k : MemorySize+k+4]))
+		zero.Add(p0).Add(p1).Add(p2).StoreArray((*[4]float32)(g0[bsMemorySize+k : bsMemorySize+k+4]))
+		zero.Sub(p0).Sub(p1).Sub(p2).StoreArray((*[4]float32)(g1[bsMemorySize+k : bsMemorySize+k+4]))
+		zero.Add(q0).Sub(q2).StoreArray((*[4]float32)(g2[bsMemorySize+k : bsMemorySize+k+4]))
+		zero.Sub(q0).Add(q2).StoreArray((*[4]float32)(g3[bsMemorySize+k : bsMemorySize+k+4]))
+		zero.Add(b0).Sub(p1).Add(b2).StoreArray((*[4]float32)(g4[bsMemorySize+k : bsMemorySize+k+4]))
+		zero.Sub(b0).Add(p1).Sub(b2).StoreArray((*[4]float32)(g5[bsMemorySize+k : bsMemorySize+k+4]))
 	}
 
 	// Filter, scale and upsample: phase d lands at out[d + bsSubSampling*k]
 	// as the sum of upsamplingScaling * v over the phase's filters in inShift
 	// order, starting from zero.
-	var c [NumNonZeroFilters]bsCoeffs
+	var c [bsNumNonZeroFilters]bsCoeffs
 	for i := range c {
 		c[i] = bsBroadcastCoeffs(i)
 	}
@@ -301,6 +301,6 @@ func bsSynthesisSIMD(hist *[bsNumSynthesisInputs][bsHistSize]float32,
 	}
 
 	for i := range hist {
-		copy(hist[i][:MemorySize], hist[i][SplitBandSize:])
+		copy(hist[i][:bsMemorySize], hist[i][SplitBandSize:])
 	}
 }

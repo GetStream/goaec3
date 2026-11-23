@@ -40,8 +40,8 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/GetStream/goaec3/bands"
 	"github.com/GetStream/goaec3/internal/aec3"
-	"github.com/GetStream/goaec3/internal/bands"
 )
 
 // Config is the AEC3 configuration (webrtc::EchoCanceller3Config). Fields

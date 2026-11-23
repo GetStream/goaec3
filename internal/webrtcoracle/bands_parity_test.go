@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/GetStream/goaec3/internal/bands"
+	"github.com/GetStream/goaec3/bands"
 )
 
 func bandsCheck(t *testing.T, what string, got, want []float32) {

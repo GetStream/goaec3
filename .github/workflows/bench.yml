@@ -128,13 +128,13 @@ jobs:
         run: |
           go test -c -o bench.test -tags webrtc_src_oracle ./internal/webrtcoracle/
           go test -c -o kern.test ./internal/aec3/
-          go test -c -o bandskern.test ./internal/bands/
+          go test -c -o bandskern.test ./bands/
           go test -c -o oourakern.test ./internal/ooura/
           if [ -n "$BASE" ]; then
             (cd "$RUNNER_TEMP/base" &&
               go test -c -o "$GITHUB_WORKSPACE/base.test" -tags webrtc_src_oracle ./internal/webrtcoracle/ &&
               go test -c -o "$GITHUB_WORKSPACE/basekern.test" ./internal/aec3/ &&
-              go test -c -o "$GITHUB_WORKSPACE/basebandskern.test" ./internal/bands/ &&
+              go test -c -o "$GITHUB_WORKSPACE/basebandskern.test" "$(if [ -d bands ]; then echo ./bands/; else echo ./internal/bands/; fi)" &&
               go test -c -o "$GITHUB_WORKSPACE/baseoourakern.test" ./internal/ooura/)
           fi
       # The numbers below count only if this lane is bit-exact on this
@@ -165,11 +165,11 @@ jobs:
           for _ in $(seq 3); do
             if [ -n "$BASE" ]; then
               (cd internal/aec3 && ../../basekern.test -test.run '^$' -test.bench "$kb" -test.count 1) | tee -a basekern.txt
-              (cd internal/bands && ../../basebandskern.test -test.run '^$' -test.bench 'ThreeBandFilterBank.*/dispatch' -test.count 1) | grep '^Benchmark' | tee -a basekern.txt
+              (cd bands && ../../basebandskern.test -test.run '^$' -test.bench 'ThreeBandFilterBank.*/dispatch' -test.count 1) | grep '^Benchmark' | tee -a basekern.txt
               (cd internal/ooura && ../../baseoourakern.test -test.run '^$' -test.bench "$ob" -test.count 1) | grep '^Benchmark' | tee -a basekern.txt
             fi
             (cd internal/aec3 && ../../kern.test -test.run '^$' -test.bench "$kb" -test.count 1) | tee -a kern.txt
-            (cd internal/bands && ../../bandskern.test -test.run '^$' -test.bench 'ThreeBandFilterBank.*/dispatch' -test.count 1) | grep '^Benchmark' | tee -a kern.txt
+            (cd bands && ../../bandskern.test -test.run '^$' -test.bench 'ThreeBandFilterBank.*/dispatch' -test.count 1) | grep '^Benchmark' | tee -a kern.txt
             (cd internal/ooura && ../../oourakern.test -test.run '^$' -test.bench "$ob" -test.count 1) | grep '^Benchmark' | tee -a kern.txt
           done
           if [ -n "$BASE" ]; then

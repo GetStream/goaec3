@@ -35,7 +35,7 @@ func (f *ThreeBandFilterBank) Analysis(in *[FullBandSize]float32, out *[NumBands
 	// x - x is +0 for finite x and NaN otherwise.
 	h0, h1, h2 := &f.analysisHist[0], &f.analysisHist[1], &f.analysisHist[2]
 	var n0, n1, n2 float32
-	for k := 0; k < MemorySize; k++ {
+	for k := 0; k < bsMemorySize; k++ {
 		n0 += h0[k] - h0[k]
 		n1 += h1[k] - h1[k]
 		n2 += h2[k] - h2[k]
@@ -43,9 +43,9 @@ func (f *ThreeBandFilterBank) Analysis(in *[FullBandSize]float32, out *[NumBands
 	for k := 0; k < SplitBandSize; k++ {
 		x := (*[3]float32)(in[3*k : 3*k+3])
 		x0, x1, x2 := x[0], x[1], x[2]
-		h0[MemorySize+k] = x2
-		h1[MemorySize+k] = x1
-		h2[MemorySize+k] = x0
+		h0[bsMemorySize+k] = x2
+		h1[bsMemorySize+k] = x1
+		h2[bsMemorySize+k] = x0
 		n0 += x0 - x0
 		n1 += x1 - x1
 		n2 += x2 - x2
@@ -61,11 +61,11 @@ func (f *ThreeBandFilterBank) Analysis(in *[FullBandSize]float32, out *[NumBands
 // analysisRef runs the reference on the state held in analysisHist.
 func (f *ThreeBandFilterBank) analysisRef(in *[FullBandSize]float32, out *[NumBands][]float32) {
 	for _, e := range bsSchedule {
-		copy(f.ref.stateAnalysis[e.filter][:], f.analysisHist[e.phase][:MemorySize])
+		copy(f.ref.stateAnalysis[e.filter][:], f.analysisHist[e.phase][:bsMemorySize])
 	}
 	f.ref.analysis(in, out)
 	for _, e := range bsSchedule {
-		copy(f.analysisHist[e.phase][:MemorySize], f.ref.stateAnalysis[e.filter][:])
+		copy(f.analysisHist[e.phase][:bsMemorySize], f.ref.stateAnalysis[e.filter][:])
 	}
 }
 
@@ -78,7 +78,7 @@ func (f *ThreeBandFilterBank) Synthesis(in *[NumBands][]float32, out *[FullBandS
 	var n0, n1, n2 float32
 	for i := range f.synthesisHist {
 		h := &f.synthesisHist[i]
-		for k := 0; k < MemorySize; k++ {
+		for k := 0; k < bsMemorySize; k++ {
 			n0 += h[k] - h[k]
 		}
 	}
@@ -97,19 +97,19 @@ func (f *ThreeBandFilterBank) Synthesis(in *[NumBands][]float32, out *[FullBandS
 // synthesisRef runs the reference on the state held in synthesisHist.
 func (f *ThreeBandFilterBank) synthesisRef(in *[NumBands][]float32, out *[FullBandSize]float32) {
 	for fi, i := range bsSynthesisInput {
-		copy(f.ref.stateSynthesis[fi][:], f.synthesisHist[i][:MemorySize])
+		copy(f.ref.stateSynthesis[fi][:], f.synthesisHist[i][:bsMemorySize])
 	}
 	f.ref.synthesis(in, out)
 	// Filters that share an input end with the same state.
 	for fi, i := range bsSynthesisInput {
-		copy(f.synthesisHist[i][:MemorySize], f.ref.stateSynthesis[fi][:])
+		copy(f.synthesisHist[i][:bsMemorySize], f.ref.stateSynthesis[fi][:])
 	}
 }
 
 // bsTap is bsFilterCore for one output sample, without its leading 0 +: w
 // is the history window that ends at the newest sample the unshifted filter
 // reads, c the coefficients.
-func bsTap(w *[16]float32, inShift int, c *[FilterSize]float32) float32 {
+func bsTap(w *[16]float32, inShift int, c *[bsFilterSize]float32) float32 {
 	return float32(w[15-inShift]*c[0]) + float32(w[11-inShift]*c[1]) +
 		float32(w[7-inShift]*c[2]) + float32(w[3-inShift]*c[3])
 }
@@ -117,7 +117,7 @@ func bsTap(w *[16]float32, inShift int, c *[FilterSize]float32) float32 {
 // bsTapAt is bsTap on a window with one more sample, for the two output
 // samples of a step: top is 15-inShift for the first and 16-inShift for the
 // second. It returns one result so that it inlines.
-func bsTapAt(w *[17]float32, top int, c *[FilterSize]float32) float32 {
+func bsTapAt(w *[17]float32, top int, c *[bsFilterSize]float32) float32 {
 	return float32(w[top]*c[0]) + float32(w[top-4]*c[1]) +
 		float32(w[top-8]*c[2]) + float32(w[top-12]*c[3])
 }
@@ -129,7 +129,7 @@ func bsAnalysisGo(hist *[bsSubSampling][bsHistSize]float32, out0, out1, out2 *[S
 		bsAnalysis2Go(hist, out0, out1, out2)
 	}
 	for d := range hist {
-		copy(hist[d][:MemorySize], hist[d][SplitBandSize:])
+		copy(hist[d][:bsMemorySize], hist[d][SplitBandSize:])
 	}
 }
 
@@ -273,12 +273,12 @@ func bsSynthesisGo(hist *[bsNumSynthesisInputs][bsHistSize]float32, in0, in1, in
 		b0, b1, b2 := in0[k], in1[k], in2[k]
 		p0, p1, p2 := float32(2*b0), float32(2*b1), float32(2*b2)
 		q0, q2 := float32(bsSqrt3*b0), float32(bsSqrt3*b2)
-		g0[MemorySize+k] = float32(0) + p0 + p1 + p2
-		g1[MemorySize+k] = float32(0) - p0 - p1 - p2
-		g2[MemorySize+k] = float32(0) + q0 - q2
-		g3[MemorySize+k] = float32(0) - q0 + q2
-		g4[MemorySize+k] = float32(0) + b0 - p1 + b2
-		g5[MemorySize+k] = float32(0) - b0 + p1 - b2
+		g0[bsMemorySize+k] = float32(0) + p0 + p1 + p2
+		g1[bsMemorySize+k] = float32(0) - p0 - p1 - p2
+		g2[bsMemorySize+k] = float32(0) + q0 - q2
+		g3[bsMemorySize+k] = float32(0) - q0 + q2
+		g4[bsMemorySize+k] = float32(0) + b0 - p1 + b2
+		g5[bsMemorySize+k] = float32(0) - b0 + p1 - b2
 	}
 
 	// Filter, scale and upsample: phase d lands at out[d + bsSubSampling*k]
@@ -291,7 +291,7 @@ func bsSynthesisGo(hist *[bsNumSynthesisInputs][bsHistSize]float32, in0, in1, in
 	}
 
 	for i := range hist {
-		copy(hist[i][:MemorySize], hist[i][SplitBandSize:])
+		copy(hist[i][:bsMemorySize], hist[i][SplitBandSize:])
 	}
 }
 

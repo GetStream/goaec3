@@ -14,8 +14,8 @@ var (
 	bsAllPassFilter2 = [3]uint16{21333, 49062, 63010}
 )
 
-// SatW32ToW16 mirrors WebRtcSpl_SatW32ToW16.
-func SatW32ToW16(value32 int32) int16 {
+// bsSatW32ToW16 mirrors WebRtcSpl_SatW32ToW16.
+func bsSatW32ToW16(value32 int32) int16 {
 	out16 := int16(value32)
 	if value32 > 32767 {
 		out16 = 32767
@@ -25,8 +25,8 @@ func SatW32ToW16(value32 int32) int16 {
 	return out16
 }
 
-// SubSatW32 mirrors WebRtcSpl_SubSatW32.
-func SubSatW32(a, b int32) int32 {
+// bsSubSatW32 mirrors WebRtcSpl_SubSatW32.
+func bsSubSatW32(a, b int32) int32 {
 	diff := int32(uint32(a) - uint32(b))
 	// a - b can't overflow if a and b have the same sign. If they have
 	// different signs, a - b has the same sign as a iff it didn't overflow.
@@ -54,30 +54,30 @@ func bsAllPassQMF(inData []int32, outData []int32, filterCoefficients *[3]uint16
 	outData = outData[:n]
 
 	// First all-pass cascade; filter from inData to outData.
-	diff := SubSatW32(inData[0], filterState[1])
+	diff := bsSubSatW32(inData[0], filterState[1])
 	outData[0] = bsScaleDiff32(filterCoefficients[0], diff, filterState[0])
 	for k := 1; k < n; k++ {
-		diff = SubSatW32(inData[k], outData[k-1])
+		diff = bsSubSatW32(inData[k], outData[k-1])
 		outData[k] = bsScaleDiff32(filterCoefficients[0], diff, inData[k-1])
 	}
 	filterState[0] = inData[n-1]
 	filterState[1] = outData[n-1]
 
 	// Second all-pass cascade; filter from outData to inData.
-	diff = SubSatW32(outData[0], filterState[3])
+	diff = bsSubSatW32(outData[0], filterState[3])
 	inData[0] = bsScaleDiff32(filterCoefficients[1], diff, filterState[2])
 	for k := 1; k < n; k++ {
-		diff = SubSatW32(outData[k], inData[k-1])
+		diff = bsSubSatW32(outData[k], inData[k-1])
 		inData[k] = bsScaleDiff32(filterCoefficients[1], diff, outData[k-1])
 	}
 	filterState[2] = outData[n-1]
 	filterState[3] = inData[n-1]
 
 	// Third all-pass cascade; filter from inData to outData.
-	diff = SubSatW32(inData[0], filterState[5])
+	diff = bsSubSatW32(inData[0], filterState[5])
 	outData[0] = bsScaleDiff32(filterCoefficients[2], diff, filterState[4])
 	for k := 1; k < n; k++ {
-		diff = SubSatW32(inData[k], outData[k-1])
+		diff = bsSubSatW32(inData[k], outData[k-1])
 		outData[k] = bsScaleDiff32(filterCoefficients[2], diff, inData[k-1])
 	}
 	filterState[4] = inData[n-1]
@@ -106,10 +106,10 @@ func analysisQMFRef(inData []int16, lowBand, highBand []int16, filterState1, fil
 	highBand = highBand[:bandLength]
 	for i := 0; i < bandLength; i++ {
 		tmp := (filter1[i] + filter2[i] + 1024) >> 11
-		lowBand[i] = SatW32ToW16(tmp)
+		lowBand[i] = bsSatW32ToW16(tmp)
 
 		tmp = (filter1[i] - filter2[i] + 1024) >> 11
-		highBand[i] = SatW32ToW16(tmp)
+		highBand[i] = bsSatW32ToW16(tmp)
 	}
 }
 
@@ -139,11 +139,11 @@ func synthesisQMFRef(lowBand, highBand []int16, outData []int16, filterState1, f
 	outData = outData[:2*bandLength]
 	for i, k := 0, 0; i < bandLength; i++ {
 		tmp := (filter2[i] + 512) >> 10
-		outData[k] = SatW32ToW16(tmp)
+		outData[k] = bsSatW32ToW16(tmp)
 		k++
 
 		tmp = (filter1[i] + 512) >> 10
-		outData[k] = SatW32ToW16(tmp)
+		outData[k] = bsSatW32ToW16(tmp)
 		k++
 	}
 }

@@ -87,7 +87,7 @@ jobs:
           name: fuzz-crashers
           path: |
             testdata/fuzz
-            internal/bands/testdata/fuzz
+            bands/testdata/fuzz
 
   test:
     name: test (${{ matrix.os }}, ${{ matrix.lane }})

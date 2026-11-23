@@ -2,21 +2,22 @@ package bands
 
 // Filter bank layout, as in three_band_filter_bank.h.
 const (
-	Sparsity       = 4
-	StrideLog2     = 2
-	Stride         = 1 << StrideLog2
-	NumZeroFilters = 2
-	FilterSize     = 4
-	MemorySize     = FilterSize*Stride - 1
+	bsSparsity       = 4
+	bsStrideLog2     = 2
+	bsStride         = 1 << bsStrideLog2
+	bsNumZeroFilters = 2
+	bsFilterSize     = 4
+	bsMemorySize     = bsFilterSize*bsStride - 1
 )
 
-// ThreeBandFilterBank class constants.
+// The frame sizes of a [ThreeBandFilterBank].
 const (
-	NumBands          = 3
-	FullBandSize      = 480
-	SplitBandSize     = FullBandSize / NumBands
-	NumNonZeroFilters = Sparsity*NumBands - NumZeroFilters
+	NumBands      = 3                       // bands of a 48 kHz signal
+	FullBandSize  = 480                     // samples of a 10 ms frame at 48 kHz
+	SplitBandSize = FullBandSize / NumBands // samples of a band in a frame
 )
+
+const bsNumNonZeroFilters = bsSparsity*NumBands - bsNumZeroFilters
 
 const (
 	bsSubSampling      = NumBands
@@ -30,7 +31,7 @@ const (
 //	N = kNumBands * kSparsity * kFilterSize - 1;
 //	h = fir1(N, 1 / (2 * kNumBands), kaiser(N + 1, 3.5));
 //	reshape(h, kNumBands * kSparsity, kFilterSize);
-var bsFilterCoeffs = [NumNonZeroFilters][FilterSize]float32{
+var bsFilterCoeffs = [bsNumNonZeroFilters][bsFilterSize]float32{
 	{-0.00047749, -0.00496888, +0.16547118, +0.00425496},
 	{-0.00173287, -0.01585778, +0.14989004, +0.00994113},
 	{-0.00304815, -0.02536082, +0.12154542, +0.01157993},
@@ -46,7 +47,7 @@ var bsFilterCoeffs = [NumNonZeroFilters][FilterSize]float32{
 // bsSqrt3 is std::numbers::sqrt3_v<float>.
 const bsSqrt3 float32 = 1.7320508075688772935274463415058723669428
 
-var bsDctModulation = [NumNonZeroFilters][bsDctSize]float32{
+var bsDctModulation = [bsNumNonZeroFilters][bsDctSize]float32{
 	{2, 2, 2},
 	{bsSqrt3, 0, -bsSqrt3},
 	{1, -2, 1},
@@ -63,10 +64,10 @@ var bsDctModulation = [NumNonZeroFilters][bsDctSize]float32{
 // three_band_filter_bank_nosimd.go) compute every output sample with the
 // operations of threeBandFilterBankRef in its order: bsFilterCore forms
 // out[k] as ((((0 + x0*h0) + x1*h1) + x2*h2) + x3*h3) with
-// xi = x[k - inShift - Stride*i], and the banding adds each filter's
+// xi = x[k - inShift - bsStride*i], and the banding adds each filter's
 // modulated output in a fixed filter order.
 //
-// Each filter input is a history buffer, MemorySize samples of state
+// Each filter input is a history buffer, bsMemorySize samples of state
 // followed by the SplitBandSize new samples, so the state and input cases
 // of bsFilterCore are one tap pattern. The loops run sample-major: every
 // filter of an output sample is evaluated before the next sample, and the
@@ -84,11 +85,11 @@ var bsDctModulation = [NumNonZeroFilters][bsDctSize]float32{
 // also keeps the C++ operand order for NaN payloads.
 
 // bsHistSize is the length of a history buffer.
-const bsHistSize = MemorySize + SplitBandSize
+const bsHistSize = bsMemorySize + SplitBandSize
 
 // bsSchedule lists the non-zero filters in the loop order of the reference:
 // by phase (the downsampling or upsampling index), then by inShift.
-var bsSchedule = [NumNonZeroFilters]struct{ phase, inShift, filter int }{
+var bsSchedule = [bsNumNonZeroFilters]struct{ phase, inShift, filter int }{
 	{0, 0, 0}, {0, 2, 5},
 	{1, 0, 1}, {1, 1, 3}, {1, 2, 6}, {1, 3, 8},
 	{2, 0, 2}, {2, 1, 4}, {2, 2, 7}, {2, 3, 9},
@@ -101,38 +102,38 @@ const bsNumSynthesisInputs = 6
 // bsSynthesisInput maps a filter to its modulated input:
 // 0: {2,2,2}  1: {-2,-2,-2}  2: {s,0,-s}  3: {-s,0,s}  4: {1,-2,1}
 // 5: {-1,2,-1}, with s = bsSqrt3.
-var bsSynthesisInput = [NumNonZeroFilters]int{0, 2, 4, 5, 3, 1, 3, 5, 4, 2}
+var bsSynthesisInput = [bsNumNonZeroFilters]int{0, 2, 4, 5, 3, 1, 3, 5, 4, 2}
 
 // bsFilterCore is FilterCore of three_band_filter_bank.cc: it filters in
 // with filter at a shift of inShift, continuing from state.
-func bsFilterCore(filter *[FilterSize]float32, in *[SplitBandSize]float32, inShift int,
-	out *[SplitBandSize]float32, state *[MemorySize]float32) {
+func bsFilterCore(filter *[bsFilterSize]float32, in *[SplitBandSize]float32, inShift int,
+	out *[SplitBandSize]float32, state *[bsMemorySize]float32) {
 	*out = [SplitBandSize]float32{}
 
 	for k := 0; k < inShift; k++ {
-		for i, j := 0, MemorySize+k-inShift; i < FilterSize; i, j = i+1, j-Stride {
+		for i, j := 0, bsMemorySize+k-inShift; i < bsFilterSize; i, j = i+1, j-bsStride {
 			out[k] += float32(state[j] * filter[i])
 		}
 	}
 
-	for k, shift := inShift, 0; k < FilterSize*Stride; k, shift = k+1, shift+1 {
-		loopLimit := min(FilterSize, 1+(shift>>StrideLog2))
-		for i, j := 0, shift; i < loopLimit; i, j = i+1, j-Stride {
+	for k, shift := inShift, 0; k < bsFilterSize*bsStride; k, shift = k+1, shift+1 {
+		loopLimit := min(bsFilterSize, 1+(shift>>bsStrideLog2))
+		for i, j := 0, shift; i < loopLimit; i, j = i+1, j-bsStride {
 			out[k] += float32(in[j] * filter[i])
 		}
-		for i, j := loopLimit, MemorySize+shift-loopLimit*Stride; i < FilterSize; i, j = i+1, j-Stride {
+		for i, j := loopLimit, bsMemorySize+shift-loopLimit*bsStride; i < bsFilterSize; i, j = i+1, j-bsStride {
 			out[k] += float32(state[j] * filter[i])
 		}
 	}
 
-	for k, shift := FilterSize*Stride, FilterSize*Stride-inShift; k < SplitBandSize; k, shift = k+1, shift+1 {
-		for i, j := 0, shift; i < FilterSize; i, j = i+1, j-Stride {
+	for k, shift := bsFilterSize*bsStride, bsFilterSize*bsStride-inShift; k < SplitBandSize; k, shift = k+1, shift+1 {
+		for i, j := 0, shift; i < bsFilterSize; i, j = i+1, j-bsStride {
 			out[k] += float32(in[j] * filter[i])
 		}
 	}
 
 	// Update current state.
-	copy(state[:], in[SplitBandSize-MemorySize:])
+	copy(state[:], in[SplitBandSize-bsMemorySize:])
 }
 
 func bsFilterIndex(index int) int {
@@ -149,14 +150,16 @@ func bsFilterIndex(index int) int {
 // for operation: the spec of the filter banks, and what runs a frame that
 // is not finite.
 type threeBandFilterBankRef struct {
-	stateAnalysis  [NumNonZeroFilters][MemorySize]float32
-	stateSynthesis [NumNonZeroFilters][MemorySize]float32
+	stateAnalysis  [bsNumNonZeroFilters][bsMemorySize]float32
+	stateSynthesis [bsNumNonZeroFilters][bsMemorySize]float32
 
 	// Scratch.
 	inSubsampled  [SplitBandSize]float32
 	outSubsampled [SplitBandSize]float32
 }
 
+// NewThreeBandFilterBank returns a filter bank with zero state. The zero
+// value of a ThreeBandFilterBank is one too.
 func NewThreeBandFilterBank() *ThreeBandFilterBank { return &ThreeBandFilterBank{} }
 
 // analysis is ThreeBandFilterBank::Analysis.
@@ -175,7 +178,7 @@ func (f *threeBandFilterBankRef) analysis(in *[FullBandSize]float32, out *[NumBa
 			inSubsampled[k] = in[(bsSubSampling-1)-downsamplingIndex+bsSubSampling*k]
 		}
 
-		for inShift := 0; inShift < Stride; inShift++ {
+		for inShift := 0; inShift < bsStride; inShift++ {
 			// Choose filter, skip zero filters.
 			index := downsamplingIndex + inShift*bsSubSampling
 			if index == bsZeroFilterIndex1 || index == bsZeroFilterIndex2 {
@@ -211,7 +214,7 @@ func (f *threeBandFilterBankRef) synthesis(in *[NumBands][]float32, out *[FullBa
 	inSubsampled := &f.inSubsampled
 	outSubsampled := &f.outSubsampled
 	for upsamplingIndex := 0; upsamplingIndex < bsSubSampling; upsamplingIndex++ {
-		for inShift := 0; inShift < Stride; inShift++ {
+		for inShift := 0; inShift < bsStride; inShift++ {
 			// Choose filter, skip zero filters.
 			index := upsamplingIndex + inShift*bsSubSampling
 			if index == bsZeroFilterIndex1 || index == bsZeroFilterIndex2 {

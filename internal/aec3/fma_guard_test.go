@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"sort"
@@ -34,12 +35,13 @@ func TestNoUnintendedFMA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	module := strings.TrimSuffix(reflect.TypeOf(FftData{}).PkgPath(), "/internal/aec3")
 	fused := regexp.MustCompile(`\bF(N)?M(ADD|SUB)S\b|\bVFML[AS]\b`)
 	fnRe := regexp.MustCompile(`^(\S+) STEXT`)
 	for _, exp := range []string{"", "simd"} {
 		for _, tags := range []string{"", "purego"} {
 			cmd := exec.Command("go", "build", "-tags", tags, "-gcflags=-S",
-				"./internal/aec3", "./internal/ooura", "./internal/bands")
+				"./internal/aec3", "./internal/ooura", "./bands")
 			cmd.Dir = root
 			cmd.Env = append(os.Environ(), "GOARCH=arm64", "GOOS=darwin", "GOEXPERIMENT="+exp)
 			out, err := cmd.CombinedOutput()
@@ -54,7 +56,7 @@ func TestNoUnintendedFMA(t *testing.T) {
 					continue
 				}
 				if fused.MatchString(line) {
-					short := fn[strings.Index(fn, "internal/"):]
+					short := strings.TrimPrefix(fn, module+"/")
 					if _, ok := fmaAllowed[short]; !ok {
 						bad[short] = true
 					}

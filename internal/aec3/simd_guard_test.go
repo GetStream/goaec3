@@ -423,7 +423,7 @@ func simdGates(t *testing.T, root, module string) map[string]simdFeat {
 	return gates
 }
 
-var simdGuardPackages = []string{"internal/aec3", "internal/ooura", "internal/bands"}
+var simdGuardPackages = []string{"internal/aec3", "internal/ooura", "bands"}
 
 type simdGuardData struct {
 	root, module string

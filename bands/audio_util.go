@@ -1,15 +1,25 @@
-// Package bands implements the band splitting WebRTC's AudioBuffer applies
-// around AEC3: the fixed-point two-band QMF for 32 kHz
+// Package bands implements the band splitting of WebRTC's audio processing
+// module: the fixed-point two-band QMF for 32 kHz
 // (common_audio/signal_processing/splitting_filter.c), the float three-band
 // filter bank for 48 kHz (modules/audio_processing/three_band_filter_bank.cc),
-// the SplittingFilter that dispatches to them, and the conversions to and
-// from FloatS16, a float32 in [-32768, 32768]. Every function is bit-exact
-// with its C++ counterpart.
+// the SplittingFilter that dispatches to them, AudioBuffer's split and merge
+// of a 10 ms frame, and the conversions to and from FloatS16, a float32 in
+// [-32768, 32768] (common_audio/include/audio_util.h).
+//
+// A 32 kHz frame splits into two bands and a 48 kHz frame into three, of
+// 160 samples each: band 0 is the 16 kHz signal the submodules process and
+// the others carry the content above 8 kHz. A [BandSplitter] does this for
+// the frame of every channel, a [SplittingFilter] for a set of channels, a
+// [ChannelSplitter] for one channel without an allocation.
+//
+// Every function is bit-exact with its counterpart in libwebrtc m141, in the
+// lane the build selects (see the goaec3 package). The types hold filter
+// state and are not safe for concurrent use. Processing does not allocate.
 package bands
 
 import "math"
 
-// S16ToFloat converts an int16 sample to [-1, 1].
+// S16ToFloat scales an int16 sample to [-1, 1).
 func S16ToFloat(v int16) float32 {
 	const scaling float32 = 1.0 / 32768
 	return float32(v) * scaling
