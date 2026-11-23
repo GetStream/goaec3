@@ -35,7 +35,8 @@ a config and input that reproduce the problem if you can.
 
 - **Breaking the concurrency contract.** `AnalyzeRender` may run next to the
   capture-side calls; two concurrent calls on the same side are a data race.
-  Nothing detects it. The output is garbage and the call may panic.
+  Nothing detects it. The output is garbage and the call may panic, and
+  Go's memory safety does not hold under a data race.
 - **Timing.** Processing time depends on the audio and the config. goaec3 is
   not constant time and makes no attempt to be.
 - **A zero `EchoCanceller`.** Create cancellers with `New`.
