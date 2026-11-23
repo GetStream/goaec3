@@ -72,7 +72,7 @@ Lower is faster; whole frame, band splitting included. M4 against prebuilt
 libwebrtc, others on GitHub runners ([bench.yml](.github/workflows/bench.yml)).
 
 - Quiet far end: 53–70% of libwebrtc's time.
-- Pure Go (no `GOEXPERIMENT=simd`): 1.4–2.3× libwebrtc's time.
+- Pure Go (no `GOEXPERIMENT=simd`): 1.4–2.0× libwebrtc's time.
 - GC: 2 pointer-free heap objects per canceller; ~0.15 ms per 1000 per cycle.
 
 ## Parity

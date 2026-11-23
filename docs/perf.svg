@@ -1,11 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 376" width="720" height="376" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="goaec3 frame time as a percentage of libwebrtc">
-<style>
-.bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.t3{fill:#7a7975}.grid{stroke:#e4e3df}.ref{stroke:#0b0b0b}
-.s0{fill:#2a78d6}.s1{fill:#eb6834}.s2{fill:#1baf7a}
-@media (prefers-color-scheme: dark){.bg{fill:#1a1a19}.t1{fill:#f0efec}.t2{fill:#c3c2b7}.t3{fill:#9a998f}.grid{stroke:#33332f}.ref{stroke:#f0efec}
-.s0{fill:#3987e5}.s1{fill:#d95926}.s2{fill:#199e70}}
-text{font-size:12px}
-</style>
+<style>.bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.t3{fill:#7a7975}.grid{stroke:#e4e3df}.ref{stroke:#0b0b0b}.s0{fill:#2a78d6}.s1{fill:#eb6834}.s2{fill:#1baf7a}@media (prefers-color-scheme: dark){.bg{fill:#1a1a19}.t1{fill:#f0efec}.t2{fill:#c3c2b7}.t3{fill:#9a998f}.grid{stroke:#33332f}.ref{stroke:#f0efec}.s0{fill:#3987e5}.s1{fill:#d95926}.s2{fill:#199e70}}text{font-size:12px}</style>
 <rect class="bg" width="720" height="376" rx="8"/>
 <text class="t1" x="24" y="30" style="font-size:15px;font-weight:600">goaec3 time per 10 ms frame, % of libwebrtc m141</text>
 <text class="t2" x="24" y="49">GOEXPERIMENT=simd · same output bit for bit · shorter is faster</text>
@@ -30,24 +24,24 @@ text{font-size:12px}
 <text class="t1" x="178" y="173.0" text-anchor="end">Neoverse-N2 · NEON</text>
 <path class="s0" d="M190,146 h372.0 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-372.0 z"><title>Neoverse-N2 · NEON, 16 kHz mono: 80% of libwebrtc</title></path>
 <text class="t2" x="571.0" y="157">80%</text>
-<path class="s1" d="M190,162 h376.7 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-376.7 z"><title>Neoverse-N2 · NEON, 48 kHz mono: 81% of libwebrtc</title></path>
-<text class="t2" x="575.7" y="173">81%</text>
+<path class="s1" d="M190,162 h372.0 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-372.0 z"><title>Neoverse-N2 · NEON, 48 kHz mono: 80% of libwebrtc</title></path>
+<text class="t2" x="571.0" y="173">80%</text>
 <path class="s2" d="M190,178 h376.7 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-376.7 z"><title>Neoverse-N2 · NEON, 48 kHz stereo: 81% of libwebrtc</title></path>
 <text class="t2" x="575.7" y="189">81%</text>
 <text class="t1" x="178" y="241.0" text-anchor="end">AMD EPYC Zen 4 · AVX2</text>
-<path class="s0" d="M190,214 h376.7 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-376.7 z"><title>AMD EPYC Zen 4 · AVX2, 16 kHz mono: 81% of libwebrtc</title></path>
-<text class="t2" x="575.7" y="225">81%</text>
-<path class="s1" d="M190,230 h362.6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-362.6 z"><title>AMD EPYC Zen 4 · AVX2, 48 kHz mono: 78% of libwebrtc</title></path>
-<text class="t2" x="561.6" y="241">78%</text>
-<path class="s2" d="M190,246 h339.1 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-339.1 z"><title>AMD EPYC Zen 4 · AVX2, 48 kHz stereo: 73% of libwebrtc</title></path>
-<text class="t2" x="538.1" y="257">73%</text>
+<path class="s0" d="M190,214 h348.5 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-348.5 z"><title>AMD EPYC Zen 4 · AVX2, 16 kHz mono: 75% of libwebrtc</title></path>
+<text class="t2" x="547.5" y="225">75%</text>
+<path class="s1" d="M190,230 h343.8 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-343.8 z"><title>AMD EPYC Zen 4 · AVX2, 48 kHz mono: 74% of libwebrtc</title></path>
+<text class="t2" x="542.8" y="241">74%</text>
+<path class="s2" d="M190,246 h329.7 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-329.7 z"><title>AMD EPYC Zen 4 · AVX2, 48 kHz stereo: 71% of libwebrtc</title></path>
+<text class="t2" x="528.7" y="257">71%</text>
 <text class="t1" x="178" y="309.0" text-anchor="end">AMD EPYC Zen 3 · SSE2</text>
-<path class="s0" d="M190,282 h357.9 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-357.9 z"><title>AMD EPYC Zen 3 · SSE2, 16 kHz mono: 77% of libwebrtc</title></path>
-<text class="t2" x="556.9" y="293">77%</text>
-<path class="s1" d="M190,298 h362.6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-362.6 z"><title>AMD EPYC Zen 3 · SSE2, 48 kHz mono: 78% of libwebrtc</title></path>
-<text class="t2" x="561.6" y="309">78%</text>
-<path class="s2" d="M190,314 h390.8 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-390.8 z"><title>AMD EPYC Zen 3 · SSE2, 48 kHz stereo: 84% of libwebrtc</title></path>
-<text class="t2" x="589.8" y="325">84%</text>
+<path class="s0" d="M190,282 h339.1 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-339.1 z"><title>AMD EPYC Zen 3 · SSE2, 16 kHz mono: 73% of libwebrtc</title></path>
+<text class="t2" x="538.1" y="293">73%</text>
+<path class="s1" d="M190,298 h339.1 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-339.1 z"><title>AMD EPYC Zen 3 · SSE2, 48 kHz mono: 73% of libwebrtc</title></path>
+<text class="t2" x="538.1" y="309">73%</text>
+<path class="s2" d="M190,314 h367.3 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-367.3 z"><title>AMD EPYC Zen 3 · SSE2, 48 kHz stereo: 79% of libwebrtc</title></path>
+<text class="t2" x="566.3" y="325">79%</text>
 <line class="ref" x1="660.0" y1="74" x2="660.0" y2="340" stroke-width="2" stroke-dasharray="4 3"/>
 <text class="t1" x="660.0" y="356" text-anchor="middle" style="font-weight:600">libwebrtc = 100%</text>
 </svg>
