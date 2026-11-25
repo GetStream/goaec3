@@ -24,7 +24,7 @@ env:
 
 jobs:
   macos:
-    runs-on: macos-15
+    runs-on: { group: scaleway-macos }
     env:
       CC: clang
       CXX: clang++
